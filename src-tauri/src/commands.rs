@@ -143,6 +143,41 @@ fn node_ip(node_name: &str) -> String {
         .unwrap_or_default()
 }
 
+/// 随机生成 sk- 开头的实例密钥（无外部随机库，用时间种子+LCG）
+fn gen_sk_key() -> String {
+    let seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u128)
+        .unwrap_or(0)
+        ^ ((std::process::id() as u128) << 64);
+    let mut s = seed;
+    let mut out = String::from("sk-");
+    const CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+    for _ in 0..16 {
+        s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        out.push(CHARS[((s >> 40) % 36) as usize] as char);
+    }
+    out
+}
+
+/// 停止全部运行中的实例（应用退出时调用）
+pub fn stop_all_instances(state: &tauri::State<'_, AppState>) {
+    let Ok(mut mgr) = state.manager.lock() else { return };
+    let _ = mgr.load();
+    let names: Vec<String> = mgr
+        .list_instances()
+        .iter()
+        .filter(|i| {
+            i.status == crate::instance::InstanceStatus::Running
+                || i.status == crate::instance::InstanceStatus::Starting
+        })
+        .map(|i| i.name.clone())
+        .collect();
+    for n in names {
+        let _ = mgr.stop_instance(&n);
+    }
+}
+
 // ======================== 实例 CRUD ========================
 
 #[tauri::command]
@@ -191,7 +226,13 @@ pub fn add_instance(
     } else {
         name.trim().to_string()
     };
-    mgr.add_instance(final_name.clone(), port, node.trim().to_string(), password.trim().to_string(), ip)
+    // 密钥为空时自动生成 sk-xxx
+    let sk = if password.trim().is_empty() {
+        gen_sk_key()
+    } else {
+        password.trim().to_string()
+    };
+    mgr.add_instance(final_name.clone(), port, node.trim().to_string(), sk, ip)
         .map_err(|e| e.to_string())?;
     Ok(mgr
         .list_instances()
@@ -278,7 +319,6 @@ fn sanitize_instance_name(node: &str) -> String {
 pub fn batch_add(
     state: tauri::State<'_, AppState>,
     nodes: Vec<BatchAddItem>,
-    password: String,
     base_port: Option<u16>,
     use_node_name: Option<bool>,
     name_prefix: Option<String>,
@@ -338,7 +378,8 @@ pub fn batch_add(
         }
 
         let ip = node_ip(node);
-        match mgr.add_instance(final_name.clone(), final_port, node.to_string(), password.trim().to_string(), ip) {
+        let sk = gen_sk_key();
+        match mgr.add_instance(final_name.clone(), final_port, node.to_string(), sk, ip) {
             Ok(()) => {
                 added.push(json!({
                     "name": final_name,

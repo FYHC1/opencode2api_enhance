@@ -121,10 +121,9 @@ export const api = {
   startInstance: (name: string) => invoke<void>('start_instance', { name }),
   stopInstance: (name: string) => invoke<void>('stop_instance', { name }),
   testInstance: (name: string) => invoke<TestResult>('test_instance', { name }),
-  batchAdd: (nodes: BatchAddItem[], password: string, basePort?: number, useNodeName?: boolean, namePrefix?: string) =>
+  batchAdd: (nodes: BatchAddItem[], basePort?: number, useNodeName?: boolean, namePrefix?: string) =>
     invoke<BatchAddResult>('batch_add', {
       nodes,
-      password,
       basePort: basePort ?? null,
       useNodeName: useNodeName ?? null,
       namePrefix: namePrefix ?? null,

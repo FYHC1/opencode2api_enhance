@@ -13,12 +13,15 @@ export default function NodesPage({
   const [scanning, setScanning] = useState(false)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [instanceNodes, setInstanceNodes] = useState<Set<string>>(new Set())
   const [addOpen, setAddOpen] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
 
   const loadNodes = useCallback(async () => {
     try {
-      setNodes(await api.listNodes())
+      const [ns, insts] = await Promise.all([api.listNodes(), api.listInstances()])
+      setNodes(ns)
+      setInstanceNodes(new Set(insts.map((i) => i.node)))
     } catch (e) {
       toast(String(e), false)
     }
@@ -223,10 +226,13 @@ export default function NodesPage({
                       const r = resultsMap.get(n.name)
                       return (
                         <div key={n.name} className="flex items-center gap-2 px-4 py-2.5 pl-9">
-                          <input type="checkbox" checked={selected.has(n.name)} onChange={() => toggleNode(n.name)} className="accent-zinc-900" />
+                          <input type="checkbox" checked={selected.has(n.name)} onChange={() => toggleNode(n.name)} disabled={instanceNodes.has(n.name)} className="accent-zinc-900 disabled:opacity-30" />
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2">
                               <span className="text-[13px] text-zinc-800 truncate">{n.name}</span>
+                              {instanceNodes.has(n.name) && (
+                                <span className="inline-block px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-zinc-100 text-zinc-400">已添加</span>
+                              )}
                               <span className="text-[11px] text-zinc-400">{n.node_type}</span>
                               <span className="text-[11px] text-zinc-300 font-mono">{n.server}:{n.port}</span>
                             </div>
@@ -300,7 +306,6 @@ function AddModal({
   onAdded: () => void
 }) {
   const [ports, setPorts] = useState<Record<string, string>>({})
-  const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
@@ -310,7 +315,6 @@ function AddModal({
         init[n.name] = String(18100 + i)
       })
       setPorts(init)
-      setPassword('')
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
@@ -323,13 +327,9 @@ function AddModal({
       alert('存在无效端口（需 >= 1024）')
       return
     }
-    if (!password.trim()) {
-      alert('请填写实例密钥（sk-xxx）')
-      return
-    }
     setLoading(true)
     try {
-      const r = await api.batchAdd(items, password.trim(), 18100, true)
+      const r = await api.batchAdd(items, 18100, true)
       onAdded()
       alert(`成功添加 ${r.added_count} 个` + (r.error_count ? `，失败 ${r.error_count}` : ''))
     } catch (e) {
@@ -346,15 +346,7 @@ function AddModal({
         onClick={(e) => e.stopPropagation()}
       >
         <h3 className="text-[15px] font-semibold text-zinc-900">添加选中为实例</h3>
-        <label className="block space-y-1">
-          <span className="text-[12px] text-zinc-500">密钥（所有新实例共用此密钥）</span>
-          <input
-            className="w-full px-3 py-2 rounded-lg text-[13px]"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="sk-xxx"
-          />
-        </label>
+
         <div className="max-h-72 overflow-y-auto space-y-2">
           {nodes.map((n) => (
             <div key={n.name} className="flex items-center gap-2">

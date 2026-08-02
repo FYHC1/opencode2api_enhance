@@ -212,7 +212,10 @@ export default function InstancesPage({
                     <td className="py-2.5 pl-4">
                       <input type="checkbox" checked={selected.has(i.name)} onChange={() => toggle(i.name)} className="accent-zinc-900" />
                     </td>
-                    <td className="py-2.5 pl-2 font-medium text-zinc-800">{i.name}</td>
+                    <td className="py-2.5 pl-2">
+                      <div className="font-medium text-zinc-800">{i.node}</div>
+                      <div className="text-[11px] text-zinc-400">{i.ip || '—'}</div>
+                    </td>
                     <td className="py-2.5 pl-2 text-zinc-500">
                       {i.ip ? (
                         <button onClick={() => void copyText(i.ip, '节点 IP')} className="flex items-center gap-1 text-zinc-600 hover:underline" title="点击复制">
@@ -312,7 +315,6 @@ function AddModal({
   const [name, setName] = useState('')
   const [node, setNode] = useState('')
   const [port, setPort] = useState('')
-  const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
 
   if (!open) return null
@@ -327,13 +329,9 @@ function AddModal({
       alert('端口需 >= 1024')
       return
     }
-    if (!password.trim()) {
-      alert('请填写实例密钥')
-      return
-    }
     setLoading(true)
     try {
-      const inst = await api.addInstance(name.trim(), p, node.trim(), password.trim())
+      const inst = await api.addInstance(name.trim(), p, node.trim(), '')
       onAdded(inst.name)
     } catch (e) {
       alert(String(e))
@@ -361,10 +359,7 @@ function AddModal({
           <span className="text-[12px] text-zinc-500">端口</span>
           <input className="w-full px-3 py-2 rounded-lg text-[13px]" value={port} onChange={(e) => setPort(e.target.value)} placeholder="如 18100" />
         </label>
-        <label className="block space-y-1">
-          <span className="text-[12px] text-zinc-500">密钥（每个实例独立）</span>
-          <input className="w-full px-3 py-2 rounded-lg text-[13px]" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="sk-xxx" />
-        </label>
+
         <div className="flex items-center justify-end gap-2 pt-2">
           <button onClick={onClose} className="px-4 py-1.5 rounded-lg text-[13px] text-zinc-600 bg-zinc-100 hover:bg-zinc-200">
             取消

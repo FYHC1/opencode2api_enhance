@@ -85,7 +85,7 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
         </div>
 
         <div className="space-y-2">
-          <label className="block text-sm font-medium text-zinc-700">Token 密码</label>
+          <label className="block text-sm font-medium text-zinc-700">访问密钥</label>
           <input
             type="password"
             placeholder={config.has_clash_token ? '留空则不修改' : ''}

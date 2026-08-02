@@ -8,6 +8,7 @@ pub mod probe;
 pub mod singbox;
 
 use std::sync::{Arc, Mutex};
+use tauri::Manager;
 
 /// 全局共享状态（与 Windsurf Account Manager 的 AppState 模式一致）
 pub struct AppState {
@@ -108,6 +109,14 @@ pub fn run() {
                 let _ = window.hide();
             }
         })
-        .run(tauri::generate_context!("tauri.conf.json"))
-        .expect("桌面启动失败");
+        .build(tauri::generate_context!("tauri.conf.json"))
+        .expect("桌面构建失败")
+        .run(|app, event| {
+            // 应用退出（托盘"退出"/quit）时停止全部运行中的实例
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                if let Some(state) = app.try_state::<AppState>() {
+                    commands::stop_all_instances(&state);
+                }
+            }
+        });
 }
