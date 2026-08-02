@@ -14,6 +14,7 @@
 - git：`origin` 远程改为 `upstream`（https://github.com/6Kmfi6HP/opencode2api.git，只拉取不推送）；新代码提交到当前仓库。
 - 前端界面全中文；视觉风格必须参照 `windsurf-account-manager/source/src/index.css` 的设计 token（浅色 `#f4f4f5` 底、白卡片、teal `#0f766e` accent、Plus Jakarta Sans 字体、16px/12px 圆角）。
 - 纯桌面：**不启动任何 HTTP 监听端口**（不保留 axum、不监听 9099）；子进程 opencode2api.exe 自身端口是代理服务端口，属正常功能。
+- **纯 Tauri 桌面架构（与 Windsurf Account Manager 一致）**：`main.rs` 仅薄壳调用 lib 的 `run()`；**无 CLI 子命令、无 clap 依赖**；所有前端交互走 `#[tauri::command]` invoke。
 - 二进制内嵌：`bin/opencode2api.exe`（9.9MB，从 enhance 复制）与 `bin/sing-box.exe`（43.3MB，从 enhance 复制）通过 `include_bytes!` 内嵌，运行时由 `embed::ensure_binaries` 释放到主程序旁的 `bin/` 目录。
 - 实例模型：singbox_port = port + 10000；数据存 `%APPDATA%/opencode2api-manager/instances.json`；运行时目录 `%APPDATA%/opencode2api-manager/runtime/`。
 - 删除文件：`.github/`、`deploy/`、`docker/`、`Dockerfile`、`.dockerignore`；保留 Go 源码（main.go 及各 _test.go、protocol go 文件、go.mod），仅作为被调用的子进程源码留档。
@@ -315,78 +316,23 @@ pub fn run() {
 }
 ```
 
-- [ ] **Step 3: 调整 Cargo.toml（移除 Web 依赖，加 clap）**
+- [ ] **Step 3: 调整 Cargo.toml（移除 Web/CLI 依赖）**
 
-`opencode2api/src-tauri/Cargo.toml` `[dependencies]` 中**删除**：`axum`、`tower-http`、`reqwest`、`tauri-plugin-shell`（纯桌面不再需要 HTTP 服务与 shell 插件，子进程用 `std::process::Command` 直接拉起）；**添加**：
+`opencode2api/src-tauri/Cargo.toml` `[dependencies]` 中**删除**：`axum`、`tower-http`、`reqwest`、`tauri-plugin-shell`（纯桌面不再需要 HTTP 服务与 shell 插件，子进程用 `std::process::Command` 直接拉起）；**不添加 clap**（无 CLI）。`[profile.release]` 保留。
 
-```toml
-clap = { version = "4", features = ["derive"] }
-```
+- [ ] **Step 4: 重写 main.rs 为薄壳**
 
-若 `src-tauri/src/main.rs` 的 `tauri_plugin_shell::init()` 不再被引用，同时删除 `.plugin(tauri_plugin_shell::init())`（Step 4 重写 main.rs 时一并处理）。
-
-- [ ] **Step 4: 重写 main.rs（CLI + 桌面双入口）**
-
-`main.rs` 覆盖为（lib crate 名为 `opencode2api`，见 Cargo.toml package name）：
+`main.rs` 整体覆盖为（lib crate 名为 `opencode2api`，见 Cargo.toml package name；与 Windsurf Account Manager 的 main.rs 结构一致）：
 
 ```rust
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use clap::{Parser, Subcommand};
-
-#[derive(Parser)]
-#[command(name = "opencode2api-manager", about = "opencode2api 多实例桌面管理器", version)]
-struct Cli {
-    #[command(subcommand)]
-    command: Option<Commands>,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    /// 管理实例
-    Instance { #[command(subcommand)] action: InstanceAction },
-    /// 配置
-    Config { #[command(subcommand)] action: ConfigAction },
-    /// 代理节点
-    Node { #[command(subcommand)] action: NodeAction },
-}
-
-#[derive(Subcommand)]
-enum InstanceAction {
-    Add { #[arg(long)] name: String, #[arg(long)] port: u16, #[arg(long)] node: String },
-    Start { #[arg(long)] name: String },
-    Stop { #[arg(long)] name: String },
-    Remove { #[arg(long)] name: String },
-    Test { #[arg(long)] name: String },
-    List,
-}
-
-#[derive(Subcommand)]
-enum ConfigAction {
-    Set { key: String, value: String },
-    Get { key: String },
-}
-
-#[derive(Subcommand)]
-enum NodeAction {
-    List,
-    Scan {
-        #[arg(long)] node: Vec<String>,
-        #[arg(long, default_value_t = 19090)] api_port: u16,
-        #[arg(long, default_value_t = 29090)] socks_port: u16,
-        #[arg(long, default_value_t = 12)] timeout: u64,
-    },
-}
-
 fn main() {
-    match Cli::try_parse() {
-        Ok(cli) => opencode2api::run_cli(cli),
-        Err(_) => opencode2api::run(),
-    }
+    opencode2api::run()
 }
 ```
 
-CLI 的**实现逻辑**放在 `lib.rs` 的 `pub fn run_cli(cli: Cli)` 中：`Instance/Config/Node` 各子命令分支照抄 enhance `cli_main` 的对应段（add/start/stop/remove/test/list、config set/get、node list/scan），**删除 Serve 子命令**（axum 已移除）。注意 `Cli/Commands/InstanceAction/...` 结构体定义放在 main.rs，`run_cli` 签名要能接收它——若类型定义需在 lib 与 bin 间共享，则将类型也移入 lib.rs（`pub struct Cli`），main.rs 仅 `use opencode2api::{run, run_cli, Cli}`。
+所有逻辑（AppState、command 注册、托盘、窗口事件、CLI 不存在）集中在 `lib.rs`。
 
 - [ ] **Step 5: 编译并跑单测**
 

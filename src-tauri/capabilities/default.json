@@ -1,1 +1,23 @@
-{"$schema":"../node_modules/@tauri-apps/cli/capability.schema.json","description":"Default capability for the application","identifier":"default","permissions":["core:default","core:window:allow-start-dragging","core:window:allow-maximize","core:window:allow-minimize","core:window:allow-close","core:window:allow-hide","core:window:allow-show","core:window:allow-is-maximized","core:window:allow-set-focus","core:window:allow-unmaximize","core:window:allow-unminimize","core:app:allow-hide","core:app:allow-show","core:app:allow-exit","shell:allow-execute","shell:allow-open"],"windows":["main"]}
+{
+  "$schema": "../node_modules/@tauri-apps/cli/capability.schema.json",
+  "description": "Default capability for the application",
+  "identifier": "default",
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-maximize",
+    "core:window:allow-minimize",
+    "core:window:allow-close",
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:window:allow-is-maximized",
+    "core:window:allow-set-focus",
+    "core:window:allow-unmaximize",
+    "core:window:allow-unminimize",
+    "core:app:allow-app-hide",
+    "core:app:allow-app-show",
+    "shell:allow-execute",
+    "shell:allow-open"
+  ],
+  "windows": ["main"]
+}
