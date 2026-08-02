@@ -537,6 +537,13 @@ func TestListModelsHandlerReplacesMappedModelIDsWithAliases(t *testing.T) {
 }
 
 func TestExtractUpstreamAuthKeyValidation(t *testing.T) {
+	// 本次修复核心：本地门禁密钥（adminPassword）不得作为上游付费 key 透传，
+	// 应识别为 public（底层免费通道）。
+	const localKey = "sk-localgate0123456789"
+	old := adminPassword
+	adminPassword = localKey
+	t.Cleanup(func() { adminPassword = old })
+
 	tests := []struct {
 		name       string
 		authHeader string
@@ -548,9 +555,12 @@ func TestExtractUpstreamAuthKeyValidation(t *testing.T) {
 		{"bearer public", "Bearer public", AuthRoutePublic, ""},
 		{"bearer no-key-required placeholder", "Bearer no-key-required", AuthRoutePublic, ""},
 		{"bearer random non-key", "Bearer abc123xyz", AuthRoutePublic, ""},
-		{"valid sk key", "Bearer sk-validkey0123456789abcdef", AuthRouteAuto, "sk-validkey0123456789abcdef"},
-		{"go prefix with sk key", "Bearer go:sk-gokey0123456789abcdef", AuthRouteGo, "sk-gokey0123456789abcdef"},
-		{"zen prefix with sk key", "Bearer zen:sk-zenkey0123456789abcdef", AuthRouteZen, "sk-zenkey0123456789abcdef"},
+		{"LOCAL GATE KEY must be public(free)", "Bearer " + localKey, AuthRoutePublic, ""},
+		{"go prefix with LOCAL gate key must be public", "Bearer go:" + localKey, AuthRoutePublic, ""},
+		{"zen prefix with LOCAL gate key must be public", "Bearer zen:" + localKey, AuthRoutePublic, ""},
+		{"valid external sk key", "Bearer sk-validkey0123456789abcdef", AuthRouteAuto, "sk-validkey0123456789abcdef"},
+		{"go prefix with external sk key", "Bearer go:sk-gokey0123456789abcdef", AuthRouteGo, "sk-gokey0123456789abcdef"},
+		{"zen prefix with external sk key", "Bearer zen:sk-zenkey0123456789abcdef", AuthRouteZen, "sk-zenkey0123456789abcdef"},
 		{"go prefix with placeholder falls to public", "Bearer go:no-key-required", AuthRoutePublic, ""},
 		{"bare sk- with no suffix is invalid", "Bearer sk-", AuthRoutePublic, ""},
 	}
