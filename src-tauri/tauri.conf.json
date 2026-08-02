@@ -1,6 +1,6 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "opencode2api 管理器",
+"productName": "opencode2api",
   "version": "0.1.0",
   "identifier": "com.opencode2api.manager",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "opencode2api 管理器",
+"title": "opencode2api",
         "width": 980,
         "height": 680,
         "minWidth": 820,
@@ -28,7 +28,15 @@
       "csp": null
     }
   },
-  "bundle": {
-    "active": false
+"bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
   }
 }

@@ -28,23 +28,26 @@ export default function NodesPage({
   }, [toast])
 
   // 加载节点 + 轮询扫描进度
+// 加载节点 + 轮询扫描进度（注意：这里是链式 setTimeout，卸载时清理）
   useEffect(() => {
     loadNodes()
-    let t: number | undefined
+    let alive = true
     const poll = async () => {
+      if (!alive) return
       try {
         const p = await api.scanStatus()
+        if (!alive) return
         setScan(p)
         setScanning(p.status === 'running' || p.status === 'stopping')
       } catch {
         /* ignore */
-      } finally {
-        if (!t) t = window.setTimeout(poll, 800)
       }
+      // 无论成功失败都继续轮询
+      if (alive) setTimeout(poll, 800)
     }
-    t = window.setTimeout(poll, 500)
+    setTimeout(poll, 500)
     return () => {
-      if (t) clearTimeout(t)
+      alive = false
     }
   }, [loadNodes])
 
@@ -204,22 +207,24 @@ export default function NodesPage({
         </div>
       </div>
 
-      {/* 进度条：仅扫描中显示，停止即隐藏 */}
-      {scanning && scan && (
+{/* 扫描进度条：扫描中实时显示，完成后短暂保留结果 */}
+      {scan && (scan.status === 'running' || scan.status === 'stopping' || scan.status === 'done') && (
         <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm p-4 space-y-2">
           <div className="flex items-center justify-between text-[12px] text-zinc-500">
             <span>
-              {scan.current_node
-                ? `扫描中：${scan.current}/${scan.total} · ${scan.current_node}`
-                : `扫描中：${scan.current}/${scan.total}`}
+              {scan.status === 'running' || scan.status === 'stopping'
+                ? scan.current_node
+                  ? `扫描中：${scan.current}/${scan.total} · ${scan.current_node}`
+                  : `扫描中：${scan.current}/${scan.total}`
+                : `扫描完成：${scan.results.filter((r) => r.ok).length}/${scan.total} 个可用`}
             </span>
             <span>{scan.total ? `${Math.round((scan.current / scan.total) * 100)}%` : ''}</span>
           </div>
           <div className="h-2 bg-zinc-100 rounded-full overflow-hidden">
             <div
               className="h-full bg-zinc-900 rounded-full transition-all"
-              style={{ width: scan.total ? `${(scan.current / scan.total) * 100}%` : '0%' }}
-            />
+              style={{ width: scan.total ? `${Math.min((scan.current / scan.total) * 100, 100)}%` : '0%' }}
+/>
           </div>
         </div>
       )}
