@@ -14,8 +14,8 @@ export default function NodesPage({
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [instanceNodes, setInstanceNodes] = useState<Set<string>>(new Set())
-  const [addOpen, setAddOpen] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
+  const [adding, setAdding] = useState(false)
 
   const loadNodes = useCallback(async () => {
     try {
@@ -134,6 +134,30 @@ export default function NodesPage({
 
   const scanBtnDisabled = selected.size === 0 || scanning
 
+  // 一键添加选中为实例：端口后端自动分配、密钥随机生成（sk- 开头），无需用户填写
+  const doAddSelected = async () => {
+    const items = [...selected].map((node) => ({ node }))
+    if (items.length === 0) {
+      toast('请先勾选要添加的节点', false)
+      return
+    }
+    setAdding(true)
+    try {
+      const r = await api.batchAdd(items, 18100, true)
+      toast(
+        `成功添加 ${r.added_count} 个实例` + (r.error_count ? `，失败 ${r.error_count}` : ''),
+        r.error_count === 0,
+      )
+      setSelected(new Set())
+      await loadNodes()
+    } catch (e) {
+      toast(String(e), false)
+    } finally {
+      setAdding(false)
+    }
+  }
+
+
   return (
     <div className="p-6 space-y-4">
       {/* 工具条 */}
@@ -170,11 +194,12 @@ export default function NodesPage({
             </button>
           )}
           <button
-            onClick={() => setAddOpen(true)}
-            disabled={selected.size === 0 || scanning}
+            onClick={() => void doAddSelected()}
+            disabled={selected.size === 0 || scanning || adding}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-white bg-green-600 hover:bg-green-700 disabled:opacity-40"
           >
-            <Plus size={14} /> 添加选中为实例（{selected.size}）
+            <Plus size={14} className={adding ? 'animate-spin' : ''} />
+            {adding ? '添加中…' : `添加选中为实例（${selected.size}）`}
           </button>
         </div>
       </div>
@@ -225,13 +250,13 @@ export default function NodesPage({
                     {list.map((n) => {
                       const r = resultsMap.get(n.name)
                       return (
-                        <div key={n.name} className="flex items-center gap-2 px-4 py-2.5 pl-9">
+                        <div key={n.name} className={clsx('flex items-center gap-2 px-4 py-2.5 pl-9', instanceNodes.has(n.name) && 'bg-zinc-50/70')}>
                           <input type="checkbox" checked={selected.has(n.name)} onChange={() => toggleNode(n.name)} disabled={instanceNodes.has(n.name)} className="accent-zinc-900 disabled:opacity-30" />
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2">
                               <span className="text-[13px] text-zinc-800 truncate">{n.name}</span>
                               {instanceNodes.has(n.name) && (
-                                <span className="inline-block px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-zinc-100 text-zinc-400">已添加</span>
+                                <span className="inline-block px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-green-50 text-green-600 border border-green-100">✓ 已添加实例</span>
                               )}
                               <span className="text-[11px] text-zinc-400">{n.node_type}</span>
                               <span className="text-[11px] text-zinc-300 font-mono">{n.server}:{n.port}</span>
@@ -258,18 +283,6 @@ export default function NodesPage({
         </div>
       )}
 
-      {/* 批量添加 Modal（带密码） */}
-      <AddModal
-        open={addOpen}
-        onClose={() => setAddOpen(false)}
-        nodes={nodes.filter((n) => selected.has(n.name))}
-        onAdded={() => {
-          toast('批量添加完成')
-          setAddOpen(false)
-          setSelected(new Set())
-          void loadNodes()
-        }}
-      />
     </div>
   )
 }
@@ -291,86 +304,5 @@ function badgeNode(r?: ProbeResult) {
       {label}
       {r.latency_ms > 0 ? ` ${r.latency_ms}ms` : ''}
     </span>
-  )
-}
-
-function AddModal({
-  open,
-  onClose,
-  nodes,
-  onAdded,
-}: {
-  open: boolean
-  onClose: () => void
-  nodes: NodeView[]
-  onAdded: () => void
-}) {
-  const [ports, setPorts] = useState<Record<string, string>>({})
-  const [loading, setLoading] = useState(false)
-
-  useEffect(() => {
-    if (open) {
-      const init: Record<string, string> = {}
-      nodes.forEach((n, i) => {
-        init[n.name] = String(18100 + i)
-      })
-      setPorts(init)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open])
-
-  if (!open) return null
-
-  const submit = async () => {
-    const items = nodes.map((n) => ({ node: n.name, port: Number(ports[n.name] || 18100) }))
-    if (items.some((it) => !it.port || it.port < 1024)) {
-      alert('存在无效端口（需 >= 1024）')
-      return
-    }
-    setLoading(true)
-    try {
-      const r = await api.batchAdd(items, 18100, true)
-      onAdded()
-      alert(`成功添加 ${r.added_count} 个` + (r.error_count ? `，失败 ${r.error_count}` : ''))
-    } catch (e) {
-      alert(String(e))
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/25" onClick={onClose}>
-      <div
-        className="w-[480px] bg-white rounded-2xl shadow-xl p-5 space-y-3"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h3 className="text-[15px] font-semibold text-zinc-900">添加选中为实例</h3>
-
-        <div className="max-h-72 overflow-y-auto space-y-2">
-          {nodes.map((n) => (
-            <div key={n.name} className="flex items-center gap-2">
-              <span className="flex-1 text-[13px] text-zinc-700 truncate" title={n.name}>
-                {n.name}
-              </span>
-              <span className="text-[11px] text-zinc-400">端口</span>
-              <input
-                className="w-28 px-2 py-1 rounded-lg text-[13px]"
-                value={ports[n.name] || ''}
-                onChange={(e) => setPorts((prev) => ({ ...prev, [n.name]: e.target.value }))}
-              />
-            </div>
-          ))}
-        </div>
-        <div className="flex items-center justify-end gap-2 pt-2">
-          <button onClick={onClose} className="px-4 py-1.5 rounded-lg text-[13px] text-zinc-600 bg-zinc-100 hover:bg-zinc-200">
-            取消
-          </button>
-          <button onClick={() => void submit()} disabled={loading} className="px-4 py-1.5 rounded-lg text-[13px] text-white bg-zinc-900 hover:bg-zinc-700 disabled:opacity-50">
-            {loading ? '添加中…' : '确定'}
-          </button>
-        </div>
-      </div>
-    </div>
   )
 }

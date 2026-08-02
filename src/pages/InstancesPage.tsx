@@ -195,8 +195,7 @@ export default function InstancesPage({
                 <th className="py-3 pl-4 w-8">
                   <input type="checkbox" checked={selectedAll} onChange={toggleAll} className="accent-zinc-900" />
                 </th>
-                <th className="py-3 pl-2">名称</th>
-                <th className="py-3 pl-2">节点 IP</th>
+                <th className="py-3 pl-2">名称 / 节点 IP</th>
                 <th className="py-3 pl-2">端口</th>
                 <th className="py-3 pl-2">API 地址</th>
                 <th className="py-3 pl-2">密钥</th>
@@ -214,17 +213,20 @@ export default function InstancesPage({
                     </td>
                     <td className="py-2.5 pl-2">
                       <div className="font-medium text-zinc-800">{i.node}</div>
-                      <div className="text-[11px] text-zinc-400">{i.ip || '—'}</div>
-                    </td>
-                    <td className="py-2.5 pl-2 text-zinc-500">
-                      {i.ip ? (
-                        <button onClick={() => void copyText(i.ip, '节点 IP')} className="flex items-center gap-1 text-zinc-600 hover:underline" title="点击复制">
-                          <code className="text-[12px]">{i.ip}</code>
-                          <Copy size={11} />
-                        </button>
-                      ) : (
-                        <span className="text-zinc-300">—</span>
-                      )}
+                      <div className="text-[11px] text-zinc-400">
+                        {i.ip ? (
+                          <button
+                            onClick={() => void copyText(i.ip, '节点 IP')}
+                            className="flex items-center gap-1 text-zinc-400 hover:text-zinc-600 hover:underline"
+                            title="点击复制"
+                          >
+                            <code className="text-[12px]">{i.ip}</code>
+                            <Copy size={10} />
+                          </button>
+                        ) : (
+                          '—'
+                        )}
+                      </div>
                     </td>
                     <td className="py-2.5 pl-2 text-zinc-500">{i.port}</td>
                     <td className="py-2.5 pl-2">
