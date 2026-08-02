@@ -64,20 +64,27 @@ pub fn run() {
             commands::toggle_maximize,
             commands::quit_app
         ])
-        .setup(|app| {
+.setup(|app| {
             use tauri::Manager;
+
+            // 托盘菜单：右键显示「显示主窗口 / 退出」
             let show_i =
                 tauri::menu::MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
-            let quit_i = tauri::menu::MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+            let quit_i =
+                tauri::menu::MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
             let menu = tauri::menu::Menu::with_items(app, &[&show_i, &quit_i])?;
+
+// 图标：取 built-in 窗口图标（由 tauri.conf bundle.icon 提供，打包后必有）
             let tray_icon = app.default_window_icon().cloned();
+
             let mut tray = tauri::tray::TrayIconBuilder::with_id("main-tray")
                 .tooltip("opencode2api 管理器")
                 .menu(&menu)
-                .show_menu_on_left_click(false);
+                .show_menu_on_left_click(true); // 左键单击也显示菜单（含退出），便于发现
             if let Some(icon) = tray_icon {
                 tray = tray.icon(icon);
             }
+
             tray.on_menu_event(|app, event| match event.id().as_ref() {
                 "show" => {
                     if let Some(w) = app.get_webview_window("main") {
@@ -86,11 +93,22 @@ pub fn run() {
                         let _ = w.set_focus();
                     }
                 }
-                "quit" => app.exit(0),
+                "quit" => {
+                    // 先停全部实例，再退出（与 before-quit 同理）
+                    if let Some(state) = app.try_state::<AppState>() {
+                        commands::stop_all_instances(&state);
+                    }
+                    app.exit(0);
+                }
                 _ => {}
             })
             .on_tray_icon_event(|tray, event| {
-                if let tauri::tray::TrayIconEvent::Click { .. } = event {
+                // 左键单击显示窗口；右键由系统自动弹菜单（无需手动处理）
+                if let tauri::tray::TrayIconEvent::Click {
+button: tauri::tray::MouseButton::Left,
+                    ..
+                } = event
+                {
                     let app = tray.app_handle();
                     if let Some(w) = app.get_webview_window("main") {
                         let _ = w.show();
