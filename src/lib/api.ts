@@ -13,6 +13,8 @@ export type Instance = {
   name: string
   port: number
   node: string
+  password: string
+  ip: string
   singbox_port: number
   pid: number | null
   singbox_pid: number | null
@@ -113,15 +115,16 @@ export const api = {
 
   // 实例
   listInstances: () => invoke<Instance[]>('list_instances'),
-  addInstance: (name: string, port: number, node: string) =>
-    invoke<Instance>('add_instance', { name, port, node }),
+  addInstance: (name: string, port: number, node: string, password: string) =>
+    invoke<Instance>('add_instance', { name, port, node, password }),
   removeInstance: (name: string) => invoke<void>('remove_instance', { name }),
   startInstance: (name: string) => invoke<void>('start_instance', { name }),
   stopInstance: (name: string) => invoke<void>('stop_instance', { name }),
   testInstance: (name: string) => invoke<TestResult>('test_instance', { name }),
-  batchAdd: (nodes: BatchAddItem[], basePort?: number, useNodeName?: boolean, namePrefix?: string) =>
+  batchAdd: (nodes: BatchAddItem[], password: string, basePort?: number, useNodeName?: boolean, namePrefix?: string) =>
     invoke<BatchAddResult>('batch_add', {
       nodes,
+      password,
       basePort: basePort ?? null,
       useNodeName: useNodeName ?? null,
       namePrefix: namePrefix ?? null,

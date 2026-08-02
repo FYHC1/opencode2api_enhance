@@ -11,8 +11,6 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
   const [clashUrl, setClashUrl] = useState('')
   const [clashToken, setClashToken] = useState('')
 
-  // 实例默认密码表单
-  const [defaultPassword, setDefaultPassword] = useState('')
 
   useEffect(() => {
     const loadData = async () => {
@@ -26,7 +24,6 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
         setAutostart(as)
         setBinariesInfo(bin)
         setClashUrl(cfg.clash_external_url)
-        setDefaultPassword('')
       } catch (e) {
         console.error('加载设置失败', e)
         toast('加载设置失败', false)
@@ -46,23 +43,6 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
       const cfg = await api.configGet()
       setConfig(cfg)
       setClashToken('')
-    } catch (e) {
-      console.error('保存失败', e)
-      toast('保存失败', false)
-    }
-  }
-
-  const handleSavePassword = async () => {
-    try {
-      if (defaultPassword.trim()) {
-        await api.configSet('default_password', defaultPassword)
-        toast('已保存', true)
-        const cfg = await api.configGet()
-        setConfig(cfg)
-        setDefaultPassword('')
-      } else {
-        toast('请输入密码', false)
-      }
     } catch (e) {
       console.error('保存失败', e)
       toast('保存失败', false)
@@ -121,32 +101,6 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
 
         <button
           onClick={handleSaveClash}
-          className="bg-zinc-900 text-white rounded-lg px-4 py-2 hover:bg-zinc-700"
-        >
-          保存
-        </button>
-      </div>
-
-      {/* 实例默认密码 */}
-      <div className="bg-white rounded-2xl border p-5 space-y-4">
-        <h2 className="text-lg font-medium text-zinc-900">实例默认密码</h2>
-        
-        <div className="space-y-2">
-          <label className="block text-sm font-medium text-zinc-700">密码</label>
-          <input
-            type="password"
-            placeholder={config.has_password ? '已设置，留空不修改' : ''}
-            value={defaultPassword}
-            onChange={(e) => setDefaultPassword(e.target.value)}
-            className="w-full px-3 py-2 border rounded-lg"
-          />
-          {config.has_password && (
-            <p className="text-zinc-500 text-xs">已设置，留空不修改</p>
-          )}
-        </div>
-
-        <button
-          onClick={handleSavePassword}
           className="bg-zinc-900 text-white rounded-lg px-4 py-2 hover:bg-zinc-700"
         >
           保存

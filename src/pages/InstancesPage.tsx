@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
 import { Plus, RefreshCw, Play, Square, Trash2, TestTube2, Copy } from 'lucide-react'
-import { api, type Instance, type NodeView } from '../lib/api'
+import { api, type Instance } from '../lib/api'
 
 function statusBadge(st: Instance['status']): [string, string] {
   if (st === 'Running') return ['bg-green-50 text-green-700', '运行中']
@@ -17,24 +17,31 @@ export default function InstancesPage({
   toast: (msg: string, ok?: boolean) => void
 }) {
   const [instances, setInstances] = useState<Instance[]>([])
-  const [nodes, setNodes] = useState<NodeView[]>([])
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [addOpen, setAddOpen] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (silent = true) => {
     try {
       setInstances(await api.listInstances())
     } catch (e) {
-      toast(String(e), false)
+      if (!silent) toast(String(e), false)
     }
   }, [toast])
 
-  // 轮询刷新状态
+  // 自动轮询（静默）
   useEffect(() => {
     load()
-    const t = setInterval(load, 2500)
+    const t = setInterval(() => void load(true), 3000)
     return () => clearInterval(t)
   }, [load])
+
+  // 手动刷新（带 loading）
+  const doRefresh = async () => {
+    setRefreshing(true)
+    await load(false)
+    setRefreshing(false)
+  }
 
   const toggle = (name: string) => {
     setSelected((prev) => {
@@ -123,14 +130,10 @@ export default function InstancesPage({
     }
   }
 
-  const copyApi = async (port: number) => {
-    await copyAddr(port)
-  }
-
-  const copyAddr = async (port: number) => {
+  const copyText = async (text: string, label: string) => {
     try {
-      await navigator.clipboard.writeText(`http://127.0.0.1:${port}/v1`)
-      toast('已复制 API 地址')
+      await navigator.clipboard.writeText(text)
+      toast(`已复制${label}`)
     } catch {
       /* ignore */
     }
@@ -148,10 +151,11 @@ export default function InstancesPage({
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => void load()}
+            onClick={() => void doRefresh()}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-zinc-700 bg-white border border-zinc-200 hover:bg-zinc-50"
           >
-            <RefreshCw size={14} /> 刷新
+            <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
+            {refreshing ? '刷新中…' : '刷新'}
           </button>
           <button
             onClick={() => setAddOpen(true)}
@@ -192,9 +196,10 @@ export default function InstancesPage({
                   <input type="checkbox" checked={selectedAll} onChange={toggleAll} className="accent-zinc-900" />
                 </th>
                 <th className="py-3 pl-2">名称</th>
+                <th className="py-3 pl-2">节点 IP</th>
                 <th className="py-3 pl-2">端口</th>
                 <th className="py-3 pl-2">API 地址</th>
-                <th className="py-3 pl-2">节点</th>
+                <th className="py-3 pl-2">密钥</th>
                 <th className="py-3 pl-2">状态</th>
                 <th className="py-3 pl-2 pr-4 text-right">操作</th>
               </tr>
@@ -208,14 +213,37 @@ export default function InstancesPage({
                       <input type="checkbox" checked={selected.has(i.name)} onChange={() => toggle(i.name)} className="accent-zinc-900" />
                     </td>
                     <td className="py-2.5 pl-2 font-medium text-zinc-800">{i.name}</td>
+                    <td className="py-2.5 pl-2 text-zinc-500">
+                      {i.ip ? (
+                        <button onClick={() => void copyText(i.ip, '节点 IP')} className="flex items-center gap-1 text-zinc-600 hover:underline" title="点击复制">
+                          <code className="text-[12px]">{i.ip}</code>
+                          <Copy size={11} />
+                        </button>
+                      ) : (
+                        <span className="text-zinc-300">—</span>
+                      )}
+                    </td>
                     <td className="py-2.5 pl-2 text-zinc-500">{i.port}</td>
                     <td className="py-2.5 pl-2">
-                      <button onClick={() => void copyApi(i.port)} className="flex items-center gap-1 text-teal-700 hover:underline" title="点击复制">
+                      <button
+                        onClick={() => void copyText(`http://127.0.0.1:${i.port}/v1`, 'API 地址')}
+                        className="flex items-center gap-1 text-teal-700 hover:underline"
+                        title="点击复制"
+                      >
                         <code className="text-[12px]">127.0.0.1:{i.port}/v1</code>
-                        <Copy size={12} />
+                        <Copy size={11} />
                       </button>
                     </td>
-                    <td className="py-2.5 pl-2 text-zinc-500 max-w-[180px] truncate">{i.node}</td>
+                    <td className="py-2.5 pl-2">
+                      <button
+                        onClick={() => void copyText(i.password || '', '密钥')}
+                        className="flex items-center gap-1 text-zinc-600 hover:underline"
+                        title="点击复制"
+                      >
+                        <code className="text-[12px] text-zinc-400">{maskKey(i.password)}</code>
+                        <Copy size={11} />
+                      </button>
+                    </td>
                     <td className="py-2.5 pl-2">
                       <span className={clsx('inline-block px-2 py-0.5 rounded-full text-xs font-medium', cls)}>{label}</span>
                     </td>
@@ -246,26 +274,16 @@ export default function InstancesPage({
         </div>
       )}
 
-
       {instances.length === 0 && (
         <div className="flex flex-col items-center justify-center py-24 text-zinc-400">
           <p className="text-base mb-2">暂无实例</p>
-          <p className="text-[13px]">点击「添加实例」或在「节点扫描」页勾选节点批量添加</p>
+          <p className="text-[13px]">在「节点扫描」页勾选节点批量添加，或点击「添加实例」</p>
         </div>
       )}
 
-      {/* 添加实例 Modal */}
       <AddModal
         open={addOpen}
         onClose={() => setAddOpen(false)}
-        nodes={nodes}
-        loadNodes={async () => {
-          try {
-            setNodes(await api.listNodes())
-          } catch {
-            /* ignore */
-          }
-        }}
         onAdded={(name) => {
           toast(`已添加实例 ${name}`)
           setAddOpen(false)
@@ -276,74 +294,46 @@ export default function InstancesPage({
   )
 }
 
+function maskKey(k: string) {
+  if (!k) return '未设置'
+  if (k.length <= 8) return k
+  return `${k.slice(0, 3)}…${k.slice(-4)}`
+}
+
 function AddModal({
   open,
   onClose,
-  nodes,
-  loadNodes,
   onAdded,
 }: {
   open: boolean
   onClose: () => void
-  nodes: NodeView[]
-  loadNodes: () => Promise<void>
   onAdded: (name: string) => void
 }) {
   const [name, setName] = useState('')
-  const [port, setPort] = useState('')
   const [node, setNode] = useState('')
-  const [portState, setPortState] = useState<{ ok: boolean; reason: string } | null>(null)
+  const [port, setPort] = useState('')
+  const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
-
-  useEffect(() => {
-    if (open) {
-      setName('')
-      setNode('')
-      setPortState(null)
-      void loadNodes()
-      void (async () => {
-        try {
-          setPort(String(await api.portSuggest()))
-        } catch {
-          setPort('')
-        }
-      })()
-    }
-  }, [open, loadNodes])
-
-  // 端口校验（debounce）
-  useEffect(() => {
-    if (!open || !port || !/^\d+$/.test(port)) {
-      setPortState(null)
-      return
-    }
-    const n = Number(port)
-    const t = setTimeout(async () => {
-      try {
-        const r = await api.portCheck(n)
-        setPortState({ ok: r.available, reason: r.reason })
-      } catch (e) {
-        setPortState({ ok: false, reason: String(e) })
-      }
-    }, 400)
-    return () => clearTimeout(t)
-  }, [port, open])
 
   if (!open) return null
 
   const submit = async () => {
     const p = Number(port)
-    if (!node) {
-      alert('请选择一个节点')
+    if (!node.trim()) {
+      alert('请填写节点名称')
       return
     }
     if (!p || p < 1024) {
       alert('端口需 >= 1024')
       return
     }
+    if (!password.trim()) {
+      alert('请填写实例密钥')
+      return
+    }
     setLoading(true)
     try {
-      const inst = await api.addInstance(name.trim(), p, node)
+      const inst = await api.addInstance(name.trim(), p, node.trim(), password.trim())
       onAdded(inst.name)
     } catch (e) {
       alert(String(e))
@@ -351,8 +341,6 @@ function AddModal({
       setLoading(false)
     }
   }
-
-  const groups = Array.from(new Set(nodes.map((n) => n.group || '其他')))
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/25" onClick={onClose}>
@@ -363,66 +351,25 @@ function AddModal({
         <h3 className="text-[15px] font-semibold text-zinc-900">添加实例</h3>
         <label className="block space-y-1">
           <span className="text-[12px] text-zinc-500">名称（留空自动命名）</span>
-          <input
-            className="w-full px-3 py-2 rounded-lg text-[13px]"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="留空则自动命名"
-          />
+          <input className="w-full px-3 py-2 rounded-lg text-[13px]" value={name} onChange={(e) => setName(e.target.value)} placeholder="留空则自动命名" />
+        </label>
+        <label className="block space-y-1">
+          <span className="text-[12px] text-zinc-500">节点名称</span>
+          <input className="w-full px-3 py-2 rounded-lg text-[13px]" value={node} onChange={(e) => setNode(e.target.value)} placeholder="如 CF移动优选1" />
         </label>
         <label className="block space-y-1">
           <span className="text-[12px] text-zinc-500">端口</span>
-          <div className="relative">
-            <input
-              className="w-full px-3 py-2 rounded-lg text-[13px] pr-10"
-              value={port}
-              onChange={(e) => setPort(e.target.value)}
-            />
-            {portState && (
-              <span
-                className={clsx(
-                  'absolute right-3 top-1/2 -translate-y-1/2 text-[11px]',
-                  portState.ok ? 'text-green-600' : 'text-red-500',
-                )}
-              >
-                {portState.ok ? '✓ 可用' : `✗ ${portState.reason}`}
-              </span>
-            )}
-          </div>
+          <input className="w-full px-3 py-2 rounded-lg text-[13px]" value={port} onChange={(e) => setPort(e.target.value)} placeholder="如 18100" />
         </label>
         <label className="block space-y-1">
-          <span className="text-[12px] text-zinc-500">节点</span>
-          <select
-            className="w-full px-3 py-2 rounded-lg text-[13px] bg-white"
-            value={node}
-            onChange={(e) => setNode(e.target.value)}
-          >
-            <option value="">请选择节点</option>
-            {groups.map((g) => (
-              <optgroup key={g} label={g}>
-                {nodes
-                  .filter((n) => (n.group || '其他') === g)
-                  .map((n) => (
-                    <option key={n.name} value={n.name}>
-                      {n.name}
-                    </option>
-                  ))}
-              </optgroup>
-            ))}
-          </select>
+          <span className="text-[12px] text-zinc-500">密钥（每个实例独立）</span>
+          <input className="w-full px-3 py-2 rounded-lg text-[13px]" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="sk-xxx" />
         </label>
         <div className="flex items-center justify-end gap-2 pt-2">
-          <button
-            onClick={onClose}
-            className="px-4 py-1.5 rounded-lg text-[13px] text-zinc-600 bg-zinc-100 hover:bg-zinc-200"
-          >
+          <button onClick={onClose} className="px-4 py-1.5 rounded-lg text-[13px] text-zinc-600 bg-zinc-100 hover:bg-zinc-200">
             取消
           </button>
-          <button
-            onClick={() => void submit()}
-            disabled={loading}
-            className="px-4 py-1.5 rounded-lg text-[13px] text-white bg-zinc-900 hover:bg-zinc-700 disabled:opacity-50"
-          >
+          <button onClick={() => void submit()} disabled={loading} className="px-4 py-1.5 rounded-lg text-[13px] text-white bg-zinc-900 hover:bg-zinc-700 disabled:opacity-50">
             {loading ? '添加中…' : '确定'}
           </button>
         </div>

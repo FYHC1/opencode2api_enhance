@@ -130,6 +130,19 @@ pub fn list_nodes() -> Result<Vec<NodeView>, String> {
     }
 }
 
+
+/// 查询节点在 Clash 配置中的地址（server:port），供实例 IP 列展示
+fn node_ip(node_name: &str) -> String {
+    clash_yaml::list_nodes_with_group()
+        .ok()
+        .and_then(|ns| {
+            ns.iter()
+                .find(|n| n.name == node_name)
+                .map(|n| format!("{}:{}", n.server, n.port))
+        })
+        .unwrap_or_default()
+}
+
 // ======================== 实例 CRUD ========================
 
 #[tauri::command]
@@ -162,6 +175,7 @@ pub fn add_instance(
     name: String,
     port: u16,
     node: String,
+    password: String,
 ) -> Result<Instance, String> {
     if node.trim().is_empty() {
         return Err("节点不能为空".to_string());
@@ -169,6 +183,7 @@ pub fn add_instance(
     if port < 1024 {
         return Err("端口需 >= 1024".to_string());
     }
+    let ip = node_ip(&node.trim());
     let mut mgr = lock_manager(&state)?;
     let _ = mgr.load();
     let final_name = if name.trim().is_empty() {
@@ -176,7 +191,7 @@ pub fn add_instance(
     } else {
         name.trim().to_string()
     };
-    mgr.add_instance(final_name.clone(), port, node.trim().to_string())
+    mgr.add_instance(final_name.clone(), port, node.trim().to_string(), password.trim().to_string(), ip)
         .map_err(|e| e.to_string())?;
     Ok(mgr
         .list_instances()
@@ -197,12 +212,11 @@ pub fn remove_instance(state: tauri::State<'_, AppState>, name: String) -> Resul
 
 #[tauri::command]
 pub async fn start_instance(state: tauri::State<'_, AppState>, name: String) -> Result<(), String> {
-    let password = default_password();
     let manager = Arc::clone(&state.manager);
     tauri::async_runtime::spawn_blocking(move || {
         let mut mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
         let _ = mgr.load();
-        mgr.start_instance(&name, &password).map_err(|e| e.to_string())
+        mgr.start_instance(&name).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -264,6 +278,7 @@ fn sanitize_instance_name(node: &str) -> String {
 pub fn batch_add(
     state: tauri::State<'_, AppState>,
     nodes: Vec<BatchAddItem>,
+    password: String,
     base_port: Option<u16>,
     use_node_name: Option<bool>,
     name_prefix: Option<String>,
@@ -322,7 +337,8 @@ pub fn batch_add(
             }
         }
 
-        match mgr.add_instance(final_name.clone(), final_port, node.to_string()) {
+        let ip = node_ip(node);
+        match mgr.add_instance(final_name.clone(), final_port, node.to_string(), password.trim().to_string(), ip) {
             Ok(()) => {
                 added.push(json!({
                     "name": final_name,
@@ -374,13 +390,12 @@ pub async fn batch_start(
     state: tauri::State<'_, AppState>,
     names: Vec<String>,
 ) -> Result<BatchOpResult, String> {
-    let password = default_password();
     let manager = Arc::clone(&state.manager);
     tauri::async_runtime::spawn_blocking(move || {
         let mut mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
         let _ = mgr.load();
         Ok(batch_op_response(names, |name| {
-            mgr.start_instance(name, &password)
+            mgr.start_instance(name)
         }))
     })
     .await

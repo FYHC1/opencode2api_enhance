@@ -16,6 +16,10 @@ pub struct Instance {
     pub name: String,
     pub port: u16,
     pub node: String,
+    #[serde(default)]
+    pub password: String,
+    #[serde(default)]
+    pub ip: String,
     pub singbox_port: u16,
     pub pid: Option<u32>,
     pub singbox_pid: Option<u32>,
@@ -51,7 +55,14 @@ impl InstanceManager {
         }
     }
 
-    pub fn add_instance(&mut self, name: String, port: u16, node: String) -> Result<()> {
+    pub fn add_instance(
+        &mut self,
+        name: String,
+        port: u16,
+        node: String,
+        password: String,
+        ip: String,
+    ) -> Result<()> {
         if self.instances.iter().any(|i| i.name == name) {
             bail!("实例 '{}' 已存在", name);
         }
@@ -62,6 +73,8 @@ impl InstanceManager {
             name,
             port,
             node,
+            password,
+            ip,
             singbox_port: port + 10000,
             pid: None,
             singbox_pid: None,
@@ -88,7 +101,7 @@ impl InstanceManager {
         Ok(())
     }
 
-    pub fn start_instance(&mut self, name: &str, password: &str) -> Result<()> {
+    pub fn start_instance(&mut self, name: &str) -> Result<()> {
         let idx = self
             .instances
             .iter()
@@ -98,6 +111,8 @@ impl InstanceManager {
         if self.instances[idx].status == InstanceStatus::Running {
             bail!("实例 '{}' 已在运行", name);
         }
+
+        let password = self.instances[idx].password.clone();
 
         // 1. 根据节点名查找 Clash 节点
         let nodes = clash_yaml::list_nodes_with_group()
@@ -474,7 +489,7 @@ mod tests {
     fn test_add_instance() {
         let mut manager = new_manager("add");
         manager
-            .add_instance("user1".to_string(), 8088, "新加坡 G1".to_string())
+            .add_instance("user1".to_string(), 8088, "新加坡 G1".to_string(), "".to_string(), "".to_string())
             .unwrap();
         assert_eq!(manager.instances.len(), 1);
         assert_eq!(manager.instances[0].name, "user1");
@@ -486,8 +501,8 @@ mod tests {
     #[test]
     fn test_add_duplicate() {
         let mut manager = new_manager("dup");
-        manager.add_instance("a".to_string(), 8088, "n".to_string()).unwrap();
-        let r = manager.add_instance("a".to_string(), 8089, "n".to_string());
+        manager.add_instance("a".to_string(), 8088, "n".to_string(), "".to_string(), "".to_string()).unwrap();
+        let r = manager.add_instance("a".to_string(), 8089, "n".to_string(), "".to_string(), "".to_string());
         assert!(r.is_err());
         fs::remove_dir_all(temp_dir("dup")).ok();
     }
@@ -495,8 +510,8 @@ mod tests {
     #[test]
     fn test_add_duplicate_port() {
         let mut manager = new_manager("dupport");
-        manager.add_instance("a".to_string(), 8088, "n".to_string()).unwrap();
-        let r = manager.add_instance("b".to_string(), 8088, "n".to_string());
+        manager.add_instance("a".to_string(), 8088, "n".to_string(), "".to_string(), "".to_string()).unwrap();
+        let r = manager.add_instance("b".to_string(), 8088, "n".to_string(), "".to_string(), "".to_string());
         assert!(r.is_err());
         fs::remove_dir_all(temp_dir("dupport")).ok();
     }
@@ -504,7 +519,7 @@ mod tests {
     #[test]
     fn test_start_not_found() {
         let mut manager = new_manager("startnf");
-        let r = manager.start_instance("nobody", "pwd");
+        let r = manager.start_instance("nobody");
         assert!(r.is_err());
         fs::remove_dir_all(temp_dir("startnf")).ok();
     }

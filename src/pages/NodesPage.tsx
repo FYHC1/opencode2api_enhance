@@ -14,6 +14,7 @@ export default function NodesPage({
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [addOpen, setAddOpen] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
 
   const loadNodes = useCallback(async () => {
     try {
@@ -60,12 +61,24 @@ export default function NodesPage({
     return Array.from(g.entries())
   }, [nodes])
 
+  const doRefresh = async () => {
+    setRefreshing(true)
+    await loadNodes()
+    setRefreshing(false)
+  }
+
+  // 只扫描选中的节点
   const startScan = async () => {
+    const names = [...selected]
+    if (names.length === 0) {
+      toast('请先勾选要扫描的节点', false)
+      return
+    }
     setScanning(true)
     try {
-      const p = await api.scanStart({ timeout: 12 })
+      const p = await api.scanStart({ nodes: names, timeout: 12 })
       setScan(p)
-      toast('开始节点扫描…')
+      toast(`开始扫描 ${names.length} 个节点…`)
     } catch (e) {
       setScanning(false)
       toast(String(e), false)
@@ -75,13 +88,14 @@ export default function NodesPage({
   const stopScan = async () => {
     try {
       await api.scanStop()
-      toast('已请求停止扫描')
+      toast('已停止扫描')
     } catch (e) {
       toast(String(e), false)
+    } finally {
+      setScanning(false)
+      setScan(null) // 停止后关闭进度条
     }
   }
-
-  const okNodes = nodes.filter((n) => resultsMap.get(n.name)?.ok)
 
   const toggleGroup = (g: string) => {
     setCollapsed((prev) => {
@@ -115,10 +129,7 @@ export default function NodesPage({
     })
   }
 
-  const selectOk = () => {
-    setSelected(new Set(okNodes.map((n) => n.name)))
-    toast(`已勾选 ${okNodes.length} 个可用节点`)
-  }
+  const scanBtnDisabled = selected.size === 0 || scanning
 
   return (
     <div className="p-6 space-y-4">
@@ -132,10 +143,11 @@ export default function NodesPage({
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => void loadNodes()}
+            onClick={() => void doRefresh()}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-zinc-700 bg-white border border-zinc-200 hover:bg-zinc-50"
           >
-            <RefreshCw size={14} /> 刷新
+            <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
+            {refreshing ? '刷新中…' : '刷新'}
           </button>
           {scanning ? (
             <button
@@ -147,17 +159,13 @@ export default function NodesPage({
           ) : (
             <button
               onClick={() => void startScan()}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-white bg-zinc-900 hover:bg-zinc-700"
+              disabled={scanBtnDisabled}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-white bg-zinc-900 hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed"
+              title={selected.size === 0 ? '请先勾选节点' : ''}
             >
-              <Radar size={14} /> 一键扫描全部
+              <Radar size={14} /> 扫描选中节点（{selected.size}）
             </button>
           )}
-          <button
-            onClick={selectOk}
-            className="px-3 py-1.5 rounded-lg text-[13px] text-teal-700 bg-teal-50 hover:bg-teal-100"
-          >
-            全选可用
-          </button>
           <button
             onClick={() => setAddOpen(true)}
             disabled={selected.size === 0 || scanning}
@@ -168,18 +176,14 @@ export default function NodesPage({
         </div>
       </div>
 
-      {/* 进度条 */}
-      {scan && (scan.total > 0 || scanning) && (
+      {/* 进度条：仅扫描中显示，停止即隐藏 */}
+      {scanning && scan && (
         <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm p-4 space-y-2">
           <div className="flex items-center justify-between text-[12px] text-zinc-500">
             <span>
-              {scanning
-                ? `扫描中：${scan.current}/${scan.total}${scan.current_node ? ` · ${scan.current_node}` : ''}`
-                : scan.status === 'done'
-                  ? '扫描完成'
-                  : scan.status === 'error'
-                    ? `扫描出错：${scan.error}`
-                    : '扫描已停止'}
+              {scan.current_node
+                ? `扫描中：${scan.current}/${scan.total} · ${scan.current_node}`
+                : `扫描中：${scan.current}/${scan.total}`}
             </span>
             <span>{scan.total ? `${Math.round((scan.current / scan.total) * 100)}%` : ''}</span>
           </div>
@@ -207,17 +211,9 @@ export default function NodesPage({
             return (
               <div key={g}>
                 <div className="flex items-center gap-3 px-4 py-2.5 bg-zinc-50/50">
-                  <input
-                    type="checkbox"
-                    checked={all}
-                    onChange={() => toggleGroupSel(list)}
-                    className="accent-zinc-900"
-                  />
-                  <button
-                    onClick={() => toggleGroup(g)}
-                    className="flex-1 text-left text-[13px] font-semibold text-zinc-700"
-                  >
-                    {g} <span className="text-zinc-400 font-normal">({list.length}，已选 {checkedCount})</span>
+                  <input type="checkbox" checked={all} onChange={() => toggleGroupSel(list)} className="accent-zinc-900" />
+                  <button onClick={() => toggleGroup(g)} className="flex-1 text-left text-[13px] font-semibold text-zinc-700">
+                    {g} <span className="text-zinc-400 font-normal">（{list.length}，已选 {checkedCount}）</span>
                   </button>
                   <span className="text-[11px] text-zinc-400">{isCollapsed ? '展开' : '收起'}</span>
                 </div>
@@ -227,20 +223,14 @@ export default function NodesPage({
                       const r = resultsMap.get(n.name)
                       return (
                         <div key={n.name} className="flex items-center gap-2 px-4 py-2.5 pl-9">
-                          <input
-                            type="checkbox"
-                            checked={selected.has(n.name)}
-                            onChange={() => toggleNode(n.name)}
-                            className="accent-zinc-900"
-                          />
+                          <input type="checkbox" checked={selected.has(n.name)} onChange={() => toggleNode(n.name)} className="accent-zinc-900" />
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2">
                               <span className="text-[13px] text-zinc-800 truncate">{n.name}</span>
                               <span className="text-[11px] text-zinc-400">{n.node_type}</span>
+                              <span className="text-[11px] text-zinc-300 font-mono">{n.server}:{n.port}</span>
                             </div>
-                            <div className="text-[11px] text-zinc-400">
-                              {n.server}:{n.port} · {n.group}
-                            </div>
+                            <div className="text-[11px] text-zinc-400">{n.group}</div>
                           </div>
                           <span className={clsx('text-xs', n.has_cred ? 'text-green-600' : 'text-gray-300')}>
                             {n.has_cred ? '✓凭据' : '✗无凭据'}
@@ -262,7 +252,7 @@ export default function NodesPage({
         </div>
       )}
 
-      {/* 添加实例 Modal */}
+      {/* 批量添加 Modal（带密码） */}
       <AddModal
         open={addOpen}
         onClose={() => setAddOpen(false)}
@@ -310,7 +300,7 @@ function AddModal({
   onAdded: () => void
 }) {
   const [ports, setPorts] = useState<Record<string, string>>({})
-  const [portState, setPortState] = useState<Record<string, { ok: boolean; reason: string }>>({})
+  const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
@@ -320,27 +310,12 @@ function AddModal({
         init[n.name] = String(18100 + i)
       })
       setPorts(init)
-      setPortState({})
+      setPassword('')
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
   if (!open) return null
-
-  const onPortChange = async (name: string, value: string) => {
-    setPorts((prev) => ({ ...prev, [name]: value }))
-    const n = Number(value)
-    if (!n || n < 1024) {
-      setPortState((prev) => ({ ...prev, [name]: { ok: false, reason: '端口需 >= 1024' } }))
-      return
-    }
-    try {
-      const r = await api.portCheck(n)
-      setPortState((prev) => ({ ...prev, [name]: { ok: r.available, reason: r.reason } }))
-    } catch (e) {
-      setPortState((prev) => ({ ...prev, [name]: { ok: false, reason: String(e) } }))
-    }
-  }
 
   const submit = async () => {
     const items = nodes.map((n) => ({ node: n.name, port: Number(ports[n.name] || 18100) }))
@@ -348,13 +323,13 @@ function AddModal({
       alert('存在无效端口（需 >= 1024）')
       return
     }
-    if (items.some((it) => portState[it.node] && !portState[it.node]?.ok)) {
-      alert('存在被占用的端口，请修改')
+    if (!password.trim()) {
+      alert('请填写实例密钥（sk-xxx）')
       return
     }
     setLoading(true)
     try {
-      const r = await api.batchAdd(items, 18100, true)
+      const r = await api.batchAdd(items, password.trim(), 18100, true)
       onAdded()
       alert(`成功添加 ${r.added_count} 个` + (r.error_count ? `，失败 ${r.error_count}` : ''))
     } catch (e) {
@@ -371,41 +346,35 @@ function AddModal({
         onClick={(e) => e.stopPropagation()}
       >
         <h3 className="text-[15px] font-semibold text-zinc-900">添加选中为实例</h3>
+        <label className="block space-y-1">
+          <span className="text-[12px] text-zinc-500">密钥（所有新实例共用此密钥）</span>
+          <input
+            className="w-full px-3 py-2 rounded-lg text-[13px]"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="sk-xxx"
+          />
+        </label>
         <div className="max-h-72 overflow-y-auto space-y-2">
-          {nodes.map((n) => {
-            const st = portState[n.name]
-            return (
-              <div key={n.name} className="flex items-center gap-2">
-                <span className="flex-1 text-[13px] text-zinc-700 truncate" title={n.name}>
-                  {n.name}
-                </span>
-                <span className="text-[11px] text-zinc-400">端口</span>
-                <input
-                  className="w-28 px-2 py-1 rounded-lg text-[13px]"
-                  value={ports[n.name] || ''}
-                  onChange={(e) => void onPortChange(n.name, e.target.value)}
-                />
-                {st && (
-                  <span className={clsx('text-[11px] w-24', st.ok ? 'text-green-600' : 'text-red-500')}>
-                    {st.ok ? '✓ 可用' : `✗ ${st.reason}`}
-                  </span>
-                )}
-              </div>
-            )
-          })}
+          {nodes.map((n) => (
+            <div key={n.name} className="flex items-center gap-2">
+              <span className="flex-1 text-[13px] text-zinc-700 truncate" title={n.name}>
+                {n.name}
+              </span>
+              <span className="text-[11px] text-zinc-400">端口</span>
+              <input
+                className="w-28 px-2 py-1 rounded-lg text-[13px]"
+                value={ports[n.name] || ''}
+                onChange={(e) => setPorts((prev) => ({ ...prev, [n.name]: e.target.value }))}
+              />
+            </div>
+          ))}
         </div>
         <div className="flex items-center justify-end gap-2 pt-2">
-          <button
-            onClick={onClose}
-            className="px-4 py-1.5 rounded-lg text-[13px] text-zinc-600 bg-zinc-100 hover:bg-zinc-200"
-          >
+          <button onClick={onClose} className="px-4 py-1.5 rounded-lg text-[13px] text-zinc-600 bg-zinc-100 hover:bg-zinc-200">
             取消
           </button>
-          <button
-            onClick={() => void submit()}
-            disabled={loading}
-            className="px-4 py-1.5 rounded-lg text-[13px] text-white bg-zinc-900 hover:bg-zinc-700 disabled:opacity-50"
-          >
+          <button onClick={() => void submit()} disabled={loading} className="px-4 py-1.5 rounded-lg text-[13px] text-white bg-zinc-900 hover:bg-zinc-700 disabled:opacity-50">
             {loading ? '添加中…' : '确定'}
           </button>
         </div>
