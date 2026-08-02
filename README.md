@@ -1,5 +1,10 @@
 # opencode2api 管理器
 
+# opencode2api 管理器
+
+> ⚠️ **仅供学习参考，非授权禁止商用 / 禁止再分发**
+> 本项目仅用于个人学习、研究与技术交流，**不得用于任何商业用途**，未经授权**不得再分发、转售或二次发布**。详见 [LICENSE](LICENSE)。使用即视为同意许可条款。
+
 本地**多实例代理管理器**桌面应用（Windows exe）。每个"实例" = 一个 opencode2api 代理进程 + 一个 sing-box 出口，绑定不同代理节点，把 OpenAI / Anthropic / Responses 风格的请求转发到 OpenCode 上游，并可通过多实例 × 多节点分散请求、绕过按 IP 的频率限制。
 
 UI 参照 Windsurf Account Manager 的浅色官网风格：Tauri 2 无边框窗口 + 自定义标题栏 + 侧边栏三页（实例 / 节点扫描 / 设置），关闭窗口最小化到托盘、实例继续运行。

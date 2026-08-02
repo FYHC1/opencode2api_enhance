@@ -1,8 +1,18 @@
-Copyright (c) 2026 6Kmfi6HP
+Copyright (c) 2026 Userluckytian
 
-All rights reserved.
+保留所有权利（All rights reserved）。
 
-No license is granted to copy, modify, distribute, sublicense, or use this
-software except as permitted by the copyright holder in writing. Replace this
-file with an open-source license such as MIT or Apache-2.0 if you decide to
-publish the project under an open-source license.
+本软件（含源码、二进制产物、文档及相关材料，下称"软件"）仅供个人学习、研究、技术交流参考使用。
+
+除版权持有人以书面形式另行明确授权外，任何个人或组织**不得**：
+
+1. 将本软件用于任何商业用途，包括但不限于：有偿提供服务、用于盈利性产品或系统、商业部署、打包转售、作为任何商业项目的组成部分；
+2. 对本软件进行再分发、传播、销售或出让，无论是否附带修改；
+3. 修改后二次发布、对外提供下载，或以任何形式形成衍生作品后对外公开再分发；
+4. 移除或篡改本版权声明、作者信息与许可条款。
+
+本软件按"原样"（AS-IS）提供，不附带任何明示或默示的担保。作者对因使用本软件所产生的任何直接或间接损失及法律风险不承担责任。
+
+下载、克隆、编译或使用本项目，即视为已阅读并同意本许可的全部条款。如需任何形式的商业授权或再分发授权，请联系版权持有人。
+
+未尽事宜，由版权持有人保留最终解释权。
