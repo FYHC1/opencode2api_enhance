@@ -1,0 +1,93 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+@import "tailwindcss";
+
+:root {
+  /* Windsurf / Devin Desktop marketing aesthetic — light, airy, editorial */
+  --bg: #f4f4f5;
+  --bg-elev: #ffffff;
+  --bg-soft: #ececee;
+  --bg-card: #ffffff;
+  --border: #e4e4e7;
+  --border-strong: #d4d4d8;
+  --text: #18181b;
+  --text-secondary: #3f3f46;
+  --muted: #71717a;
+  --muted-2: #a1a1aa;
+  --primary: #18181b;
+  --primary-hover: #27272a;
+  --accent: #0f766e;
+  --accent-soft: #ccfbf1;
+  --accent-text: #0f766e;
+  --danger: #dc2626;
+  --danger-soft: #fee2e2;
+  --ok: #16a34a;
+  --ok-soft: #dcfce7;
+  --warn: #d97706;
+  --warn-soft: #fef3c7;
+  --shadow: 0 1px 2px rgba(24, 24, 27, 0.04), 0 8px 24px rgba(24, 24, 27, 0.06);
+  --shadow-lg: 0 4px 12px rgba(24, 24, 27, 0.06), 0 20px 40px rgba(24, 24, 27, 0.08);
+  --radius: 16px;
+  --radius-sm: 12px;
+  --ring: #18181b;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  font-family: "Plus Jakarta Sans", ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* subtle page wash + frameless outer edge */
+body {
+  border: 1px solid rgba(24, 24, 27, 0.08);
+  background-image:
+    radial-gradient(900px 420px at 0% 0%, rgba(15, 118, 110, 0.06), transparent 55%),
+    radial-gradient(700px 360px at 100% 0%, rgba(24, 24, 27, 0.04), transparent 50%),
+    linear-gradient(180deg, #fafafa 0%, var(--bg) 40%);
+  background-attachment: fixed;
+}
+
+button, a, [role="button"] { cursor: pointer; }
+button:disabled { cursor: not-allowed; opacity: 0.5; }
+
+input[type="text"],
+input[type="number"],
+input[type="password"],
+textarea {
+  font: inherit;
+  color: var(--text);
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+input:focus, textarea:focus {
+  outline: none;
+  border-color: #a1a1aa;
+  box-shadow: 0 0 0 3px rgba(24, 24, 27, 0.08);
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: #d4d4d8;
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background: #a1a1aa; background-clip: padding-box; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
