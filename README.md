@@ -9,6 +9,10 @@ UI 参照 Windsurf Account Manager 的浅色官网风格：Tauri 2 无边框窗�
 
 > 本项目不是 OpenAI、Anthropic 或 OpenCode 的官方项目。请遵守上游服务条款，并只在你有权限的环境中使用。
 
+## 效果图
+
+![opencode2api 管理器界面](docs/images/screenshot.png)
+
 ## 功能
 
 - **实例管理**：增/删/启/停/测试，批量操作；API 地址一键复制
