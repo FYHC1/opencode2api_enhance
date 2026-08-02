@@ -1,6 +1,6 @@
 name: build-and-release
 
-# 触发：push 到 main 且提交信息包含「编译」二字时自动打包
+# 触发：push 到 main / feat/desktop-app，且提交信息含「编译」时自动打包
 on:
   push:
     branches:
@@ -10,7 +10,6 @@ on:
 jobs:
   build:
     runs-on: windows-latest
-    # 仅当提交信息含「编译」时执行
     if: contains(github.event.head_commit.message, '编译')
     steps:
       - uses: actions/checkout@v4
@@ -23,21 +22,41 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
 
+      # 准备内嵌二进制：embed.rs 用 include_bytes! 把 bin/ 下两个 exe 编译进主程序，
+      # 但 bin/ 被 .gitignore 忽略，故 CI 需自行生成/下载到 bin/。
+      - name: Build opencode2api.exe (from Go source)
+        run: |
+          mkdir -p bin
+          go build -trimpath -ldflags "-s -w" -o bin/opencode2api.exe .
+
+      - name: Download sing-box (1.13.15)
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path bin | Out-Null
+          Invoke-WebRequest -Uri "https://github.com/SagerNet/sing-box/releases/download/v1.13.15/sing-box-1.13.15-windows-amd64.zip" -OutFile singbox.zip
+          Expand-Archive -Path singbox.zip -DestinationPath singbox-extracted -Force
+          Copy-Item -Path "singbox-extracted/sing-box-1.13.15-windows-amd64/sing-box.exe" -Destination "bin/sing-box.exe" -Force
+
       - name: Install frontend dependencies
         run: npm install
 
-      - name: Build app (Tauri NSIS)
+      - name: Build & release (Tauri NSIS)
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: app-v__VERSION__   # 发布 Tag，__VERSION__ 由 tauri-action 替换为版本号
+          tagName: app-v__VERSION__
           releaseName: "opencode2api v__VERSION__"
-          releaseBody: "自动打包（由含「编译」的提交触发）"
+          releaseBody: "自动打包（由包含「编译」的提交触发）"
           releaseDraft: false
           prerelease: false
