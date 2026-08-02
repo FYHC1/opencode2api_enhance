@@ -23,3 +23,15 @@ node_modules/
 # Vite emit (tsc -b)
 vite.config.d.ts
 vite.config.js
+
+# Dev/design workspace files (not source)
+重构.md
+
+# Legacy source archive — ignore tooling states & build artifacts kept inside it
+legacy/opencode2api_enhance/.tokeny/
+legacy/opencode2api_enhance/.opencode/
+legacy/opencode2api_enhance/gen/
+legacy/opencode2api_enhance/.github/
+legacy/opencode2api_enhance/.dockerignore
+legacy/opencode2api_enhance/.gitignore
+legacy/opencode2api_enhance/进度.md
