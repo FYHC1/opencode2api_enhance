@@ -10,6 +10,9 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    # 授予 GITHUB_TOKEN 创建 Release / 上传资产的权限（默认只读，需显式放开）
+    permissions:
+      contents: write
     if: contains(github.event.head_commit.message, '编译')
     steps:
       - uses: actions/checkout@v4
