@@ -1,0 +1,43 @@
+name: build-and-release
+
+# 触发：push 到 main 且提交信息包含「编译」二字时自动打包
+on:
+  push:
+    branches:
+      - main
+      - feat/desktop-app
+
+jobs:
+  build:
+    runs-on: windows-latest
+    # 仅当提交信息含「编译」时执行
+    if: contains(github.event.head_commit.message, '编译')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: Build app (Tauri NSIS)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: app-v__VERSION__   # 发布 Tag，__VERSION__ 由 tauri-action 替换为版本号
+          releaseName: "opencode2api v__VERSION__"
+          releaseBody: "自动打包（由含「编译」的提交触发）"
+          releaseDraft: false
+          prerelease: false
