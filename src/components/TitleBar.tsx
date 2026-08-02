@@ -2,12 +2,11 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { Minus, Square, X } from 'lucide-react'
 import clsx from 'clsx'
-import { api } from '../lib/api'
 
 /**
  * Frameless window chrome. Drag region + min/max/close.
  * Matches light Windsurf marketing aesthetic.
- * When settings.closeToTray is on, close hides the window (tray keeps app alive).
+ * 关闭按钮：最小化到托盘（后端 CloseRequested 已拦截，实例继续运行）。
  */
 export function TitleBar() {
   const [maximized, setMaximized] = useState(false)
@@ -57,20 +56,8 @@ export function TitleBar() {
 
   const close = async () => {
     try {
-      // Prefer hide-to-tray when enabled (backend also intercepts CloseRequested).
-      let closeToTray = false
-      try {
-        const s = await api.getSettings()
-        closeToTray = Boolean(s.closeToTray)
-      } catch {
-        /* ignore */
-      }
-      const win = getCurrentWindow()
-      if (closeToTray) {
-        await win.hide()
-      } else {
-        await win.close()
-      }
+      // 关闭 = 隐藏到托盘（后端 on_window_event 拦截 CloseRequested）
+      await getCurrentWindow().hide()
     } catch {
       /* ignore */
     }

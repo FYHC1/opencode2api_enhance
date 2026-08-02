@@ -1,192 +1,163 @@
 import { invoke } from '@tauri-apps/api/core'
 
-/**
- * API 响应基础类型
- */
-export interface ApiResponse<T = unknown> {
-  success: boolean
-  data?: T
-  error?: string
-}
+// ─── 类型定义（与 Rust 端 serde 结构一一对应） ───────────────────────
 
-/**
- * 设置配置
- */
-export interface Settings {
-  closeToTray?: boolean
-  port?: number
-  host?: string
-  apiKey?: string
-  // 其他设置项可以根据需要添加
-}
+export type InstanceStatus =
+  | 'Stopped'
+  | 'Starting'
+  | 'Running'
+  | 'Stopping'
+  | { Error: string }
 
-/**
- * 实例信息
- */
-export interface Instance {
-  id: string
+export type Instance = {
   name: string
-  status: 'running' | 'stopped' | 'error'
   port: number
-  createdAt: string
-  updatedAt: string
+  node: string
+  singbox_port: number
+  pid: number | null
+  singbox_pid: number | null
+  status: InstanceStatus
 }
 
-/**
- * 节点信息
- */
-export interface Node {
-  id: string
+export type NodeView = {
   name: string
-  endpoint: string
-  status: 'active' | 'inactive' | 'error'
-  lastCheck: string
+  node_type: string
+  server: string
+  port: number
+  has_cred: boolean
+  group: string
 }
 
-/**
- * API 封装类
- */
+export type TestResult = {
+  name: string
+  port: number
+  ok: boolean
+  status_code: number | null
+  model_count: number | null
+  message: string
+  latency_ms: number
+}
+
+export type BatchAddItem = {
+  node: string
+  name?: string | null
+  port?: number | null
+}
+
+export type BatchAddResult = {
+  added: { name: string; port: number; node: string }[]
+  errors: { node: string; error: string }[]
+  added_count: number
+  error_count: number
+}
+
+export type BatchOpResult = {
+  success: string[]
+  errors: Record<string, string>
+  success_count: number
+  error_count: number
+}
+
+export type PortCheckResult = {
+  available: boolean
+  reason: string
+}
+
+export type ScanStatus = 'idle' | 'running' | 'stopping' | 'done' | 'error'
+
+export type ProbeResult = {
+  node: string
+  node_type: string
+  server: string
+  port: number
+  ok: boolean
+  category: string
+  status_code: number | null
+  model_count: number | null
+  message: string
+  latency_ms: number
+}
+
+export type ScanProgress = {
+  status: ScanStatus
+  total: number
+  current: number
+  current_node: string | null
+  results: ProbeResult[]
+  error: string | null
+  api_port: number
+  socks_port: number
+  started_ms: number | null
+  finished_ms: number | null
+}
+
+export type ConfigView = {
+  base_url: string
+  default_password: string
+  has_password: boolean
+  clash_external_url: string
+  has_clash_token: boolean
+}
+
+export type BinariesInfo = {
+  bin_dir: string
+  oc_exists: boolean
+  sb_exists: boolean
+}
+
+// ─── Tauri command 封装 ─────────────────────────────────────────────
+
 export const api = {
-  /**
-   * 获取设置
-   */
-  async getSettings(): Promise<Settings> {
-    try {
-      const result = await invoke<ApiResponse<Settings>>('get_settings')
-      return result.data || {}
-    } catch (error) {
-      console.error('Failed to get settings:', error)
-      return {}
-    }
-  },
+  // 节点
+  listNodes: () => invoke<NodeView[]>('list_nodes'),
 
-  /**
-   * 保存设置
-   */
-  async saveSettings(settings: Settings): Promise<boolean> {
-    try {
-      const result = await invoke<ApiResponse<boolean>>('save_settings', { settings })
-      return result.success && result.data === true
-    } catch (error) {
-      console.error('Failed to save settings:', error)
-      return false
-    }
-  },
+  // 实例
+  listInstances: () => invoke<Instance[]>('list_instances'),
+  addInstance: (name: string, port: number, node: string) =>
+    invoke<Instance>('add_instance', { name, port, node }),
+  removeInstance: (name: string) => invoke<void>('remove_instance', { name }),
+  startInstance: (name: string) => invoke<void>('start_instance', { name }),
+  stopInstance: (name: string) => invoke<void>('stop_instance', { name }),
+  testInstance: (name: string) => invoke<TestResult>('test_instance', { name }),
+  batchAdd: (nodes: BatchAddItem[], basePort?: number, useNodeName?: boolean, namePrefix?: string) =>
+    invoke<BatchAddResult>('batch_add', {
+      nodes,
+      basePort: basePort ?? null,
+      useNodeName: useNodeName ?? null,
+      namePrefix: namePrefix ?? null,
+    }),
+  batchStart: (names: string[]) => invoke<BatchOpResult>('batch_start', { names }),
+  batchStop: (names: string[]) => invoke<BatchOpResult>('batch_stop', { names }),
+  batchDelete: (names: string[]) => invoke<BatchOpResult>('batch_delete', { names }),
 
-  /**
-   * 获取实例列表
-   */
-  async getInstances(): Promise<Instance[]> {
-    try {
-      const result = await invoke<ApiResponse<Instance[]>>('get_instances')
-      return result.data || []
-    } catch (error) {
-      console.error('Failed to get instances:', error)
-      return []
-    }
-  },
+  // 端口
+  portSuggest: () => invoke<number>('port_suggest'),
+  portCheck: (port: number) => invoke<PortCheckResult>('port_check', { port }),
 
-  /**
-   * 创建实例
-   */
-  async createInstance(name: string, port: number): Promise<Instance | null> {
-    try {
-      const result = await invoke<ApiResponse<Instance>>('create_instance', { name, port })
-      return result.data || null
-    } catch (error) {
-      console.error('Failed to create instance:', error)
-      return null
-    }
-  },
+  // 扫描
+  scanStart: (opts?: {
+    nodes?: string[]
+    apiPort?: number
+    socksPort?: number
+    timeout?: number
+  }) =>
+    invoke<ScanProgress>('scan_start', {
+      nodes: opts?.nodes ?? null,
+      apiPort: opts?.apiPort ?? null,
+      socksPort: opts?.socksPort ?? null,
+      timeout: opts?.timeout ?? null,
+    }),
+  scanStatus: () => invoke<ScanProgress>('scan_status'),
+  scanStop: () => invoke<ScanProgress>('scan_stop'),
 
-  /**
-   * 删除实例
-   */
-  async deleteInstance(id: string): Promise<boolean> {
-    try {
-      const result = await invoke<ApiResponse<boolean>>('delete_instance', { id })
-      return result.success && result.data === true
-    } catch (error) {
-      console.error('Failed to delete instance:', error)
-      return false
-    }
-  },
+  // 配置
+  configGet: () => invoke<ConfigView>('config_get'),
+  configSet: (key: string, value: string) => invoke<void>('config_set', { key, value }),
 
-  /**
-   * 启动实例
-   */
-  async startInstance(id: string): Promise<boolean> {
-    try {
-      const result = await invoke<ApiResponse<boolean>>('start_instance', { id })
-      return result.success && result.data === true
-    } catch (error) {
-      console.error('Failed to start instance:', error)
-      return false
-    }
-  },
+  // 开机自启
+  autostartGet: () => invoke<boolean>('autostart_get'),
+  autostartSet: (enabled: boolean) => invoke<void>('autostart_set', { enabled }),
 
-  /**
-   * 停止实例
-   */
-  async stopInstance(id: string): Promise<boolean> {
-    try {
-      const result = await invoke<ApiResponse<boolean>>('stop_instance', { id })
-      return result.success && result.data === true
-    } catch (error) {
-      console.error('Failed to stop instance:', error)
-      return false
-    }
-  },
-
-  /**
-   * 获取节点列表
-   */
-  async getNodes(): Promise<Node[]> {
-    try {
-      const result = await invoke<ApiResponse<Node[]>>('get_nodes')
-      return result.data || []
-    } catch (error) {
-      console.error('Failed to get nodes:', error)
-      return []
-    }
-  },
-
-  /**
-   * 添加节点
-   */
-  async addNode(name: string, endpoint: string): Promise<Node | null> {
-    try {
-      const result = await invoke<ApiResponse<Node>>('add_node', { name, endpoint })
-      return result.data || null
-    } catch (error) {
-      console.error('Failed to add node:', error)
-      return null
-    }
-  },
-
-  /**
-   * 删除节点
-   */
-  async deleteNode(id: string): Promise<boolean> {
-    try {
-      const result = await invoke<ApiResponse<boolean>>('delete_node', { id })
-      return result.success && result.data === true
-    } catch (error) {
-      console.error('Failed to delete node:', error)
-      return false
-    }
-  },
-
-  /**
-   * 测试节点连接
-   */
-  async testNode(id: string): Promise<boolean> {
-    try {
-      const result = await invoke<ApiResponse<boolean>>('test_node', { id })
-      return result.success && result.data === true
-    } catch (error) {
-      console.error('Failed to test node:', error)
-      return false
-    }
-  },
+  // 二进制信息
+  getBinariesInfo: () => invoke<BinariesInfo>('get_binaries_info'),
 }

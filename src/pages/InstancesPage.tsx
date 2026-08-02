@@ -1,0 +1,432 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
+import clsx from 'clsx'
+import { Plus, RefreshCw, Play, Square, Trash2, TestTube2, Copy } from 'lucide-react'
+import { api, type Instance, type NodeView } from '../lib/api'
+
+function statusBadge(st: Instance['status']): [string, string] {
+  if (st === 'Running') return ['bg-green-50 text-green-700', '运行中']
+  if (st === 'Stopped') return ['bg-zinc-100 text-zinc-500', '已停止']
+  if (st === 'Starting' || st === 'Stopping') return ['bg-amber-50 text-amber-700', st === 'Starting' ? '启动中' : '停止中']
+  if (st && typeof st === 'object' && 'Error' in st) return ['bg-red-50 text-red-600', `错误:${(st as { Error: string }).Error}`]
+  return ['bg-zinc-100 text-zinc-500', '未知']
+}
+
+export default function InstancesPage({
+  toast,
+}: {
+  toast: (msg: string, ok?: boolean) => void
+}) {
+  const [instances, setInstances] = useState<Instance[]>([])
+  const [nodes, setNodes] = useState<NodeView[]>([])
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [addOpen, setAddOpen] = useState(false)
+
+  const load = useCallback(async () => {
+    try {
+      setInstances(await api.listInstances())
+    } catch (e) {
+      toast(String(e), false)
+    }
+  }, [toast])
+
+  // 轮询刷新状态
+  useEffect(() => {
+    load()
+    const t = setInterval(load, 2500)
+    return () => clearInterval(t)
+  }, [load])
+
+  const toggle = (name: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(name)) next.delete(name)
+      else next.add(name)
+      return next
+    })
+  }
+
+  const selectedAll = instances.length > 0 && instances.every((i) => selected.has(i.name))
+
+  const toggleAll = () => {
+    if (selectedAll) setSelected(new Set())
+    else setSelected(new Set(instances.map((i) => i.name)))
+  }
+
+  const busy = useRef<Set<string>>(new Set())
+
+  const doStart = async (name: string) => {
+    try {
+      await api.startInstance(name)
+      toast(`已启动实例 ${name}`)
+      await load()
+    } catch (e) {
+      toast(String(e), false)
+    }
+  }
+
+  const doStop = async (name: string) => {
+    try {
+      await api.stopInstance(name)
+      toast(`已停止实例 ${name}`)
+      await load()
+    } catch (e) {
+      toast(String(e), false)
+    }
+  }
+
+  const doRemove = async (name: string) => {
+    if (!confirm(`确定删除实例 ${name}？`)) return
+    try {
+      await api.removeInstance(name)
+      toast(`已删除实例 ${name}`)
+      setSelected((prev) => {
+        const next = new Set(prev)
+        next.delete(name)
+        return next
+      })
+      await load()
+    } catch (e) {
+      toast(String(e), false)
+    }
+  }
+
+  const doTest = async (name: string) => {
+    try {
+      const r = await api.testInstance(name)
+      if (r.ok) toast(`「${name}」测试通过：${r.message}（${r.latency_ms}ms）`)
+      else toast(`「${name}」测试失败：${r.message}`, false)
+    } catch (e) {
+      toast(String(e), false)
+    }
+  }
+
+  const batch = async (kind: 'start' | 'stop' | 'delete') => {
+    const names = [...selected]
+    if (names.length === 0) {
+      toast('请先勾选实例')
+      return
+    }
+    if (kind === 'delete' && !confirm(`确定删除选中的 ${names.length} 个实例？`)) return
+    try {
+      const fn =
+        kind === 'start' ? api.batchStart : kind === 'stop' ? api.batchStop : api.batchDelete
+      const r = await fn(names)
+      toast(
+        `${kind === 'start' ? '启动' : kind === 'stop' ? '停止' : '删除'}成功 ${r.success_count} 个` +
+          (r.error_count ? `，失败 ${r.error_count}` : ''),
+        r.error_count === 0,
+      )
+      if (kind === 'delete') setSelected(new Set())
+      await load()
+    } catch (e) {
+      toast(String(e), false)
+    }
+  }
+
+  const copyApi = async (port: number) => {
+    await copyAddr(port)
+  }
+
+  const copyAddr = async (port: number) => {
+    try {
+      await navigator.clipboard.writeText(`http://127.0.0.1:${port}/v1`)
+      toast('已复制 API 地址')
+    } catch {
+      /* ignore */
+    }
+  }
+
+  return (
+    <div className="p-6 space-y-4">
+      {/* 工具条 */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <h2 className="text-lg font-semibold text-zinc-900">实例管理</h2>
+          <span className="px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-500 text-xs font-medium">
+            {instances.length} 个
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => void load()}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-zinc-700 bg-white border border-zinc-200 hover:bg-zinc-50"
+          >
+            <RefreshCw size={14} /> 刷新
+          </button>
+          <button
+            onClick={() => setAddOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-white bg-zinc-900 hover:bg-zinc-700"
+          >
+            <Plus size={14} /> 添加实例
+          </button>
+          <button
+            onClick={() => void batch('start')}
+            disabled={selected.size === 0}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-white bg-green-600 hover:bg-green-700 disabled:opacity-40"
+          >
+            <Play size={14} /> 批量启动
+          </button>
+          <button
+            onClick={() => void batch('stop')}
+            disabled={selected.size === 0}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-zinc-700 bg-white border border-zinc-200 hover:bg-zinc-50 disabled:opacity-40"
+          >
+            <Square size={14} /> 批量停止
+          </button>
+          <button
+            onClick={() => void batch('delete')}
+            disabled={selected.size === 0}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-red-600 bg-red-50 hover:bg-red-100 disabled:opacity-40"
+          >
+            <Trash2 size={14} /> 批量删除
+          </button>
+        </div>
+      </div>
+
+      {instances.length > 0 && (
+        <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm overflow-hidden">
+          <table className="w-full text-[13px]">
+            <thead>
+              <tr className="text-left text-zinc-400 border-b border-zinc-100">
+                <th className="py-3 pl-4 w-8">
+                  <input type="checkbox" checked={selectedAll} onChange={toggleAll} className="accent-zinc-900" />
+                </th>
+                <th className="py-3 pl-2">名称</th>
+                <th className="py-3 pl-2">端口</th>
+                <th className="py-3 pl-2">API 地址</th>
+                <th className="py-3 pl-2">节点</th>
+                <th className="py-3 pl-2">状态</th>
+                <th className="py-3 pl-2 pr-4 text-right">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {instances.map((i) => {
+                const [cls, label] = statusBadge(i.status)
+                return (
+                  <tr key={i.name} className="border-b border-zinc-50 hover:bg-zinc-50/50">
+                    <td className="py-2.5 pl-4">
+                      <input type="checkbox" checked={selected.has(i.name)} onChange={() => toggle(i.name)} className="accent-zinc-900" />
+                    </td>
+                    <td className="py-2.5 pl-2 font-medium text-zinc-800">{i.name}</td>
+                    <td className="py-2.5 pl-2 text-zinc-500">{i.port}</td>
+                    <td className="py-2.5 pl-2">
+                      <button onClick={() => void copyApi(i.port)} className="flex items-center gap-1 text-teal-700 hover:underline" title="点击复制">
+                        <code className="text-[12px]">127.0.0.1:{i.port}/v1</code>
+                        <Copy size={12} />
+                      </button>
+                    </td>
+                    <td className="py-2.5 pl-2 text-zinc-500 max-w-[180px] truncate">{i.node}</td>
+                    <td className="py-2.5 pl-2">
+                      <span className={clsx('inline-block px-2 py-0.5 rounded-full text-xs font-medium', cls)}>{label}</span>
+                    </td>
+                    <td className="py-2.5 pl-2 pr-4">
+                      <div className="flex items-center justify-end gap-1.5">
+                        {i.status === 'Running' ? (
+                          <button onClick={() => void doStop(i.name)} disabled={busy.current.has(i.name)} className="px-2.5 py-1 rounded-md text-[12px] text-zinc-700 bg-zinc-100 hover:bg-zinc-200">
+                            停止
+                          </button>
+                        ) : (
+                          <button onClick={() => void doStart(i.name)} disabled={busy.current.has(i.name)} className="px-2.5 py-1 rounded-md text-[12px] text-white bg-green-600 hover:bg-green-700">
+                            启动
+                          </button>
+                        )}
+                        <button onClick={() => void doTest(i.name)} className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[12px] text-teal-700 bg-teal-50 hover:bg-teal-100">
+                          <TestTube2 size={12} /> 测试
+                        </button>
+                        <button onClick={() => void doRemove(i.name)} className="px-2.5 py-1 rounded-lg text-[12px] text-red-600 bg-red-50 hover:bg-red-100">
+                          删除
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+
+      {instances.length === 0 && (
+        <div className="flex flex-col items-center justify-center py-24 text-zinc-400">
+          <p className="text-base mb-2">暂无实例</p>
+          <p className="text-[13px]">点击「添加实例」或在「节点扫描」页勾选节点批量添加</p>
+        </div>
+      )}
+
+      {/* 添加实例 Modal */}
+      <AddModal
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        nodes={nodes}
+        loadNodes={async () => {
+          try {
+            setNodes(await api.listNodes())
+          } catch {
+            /* ignore */
+          }
+        }}
+        onAdded={(name) => {
+          toast(`已添加实例 ${name}`)
+          setAddOpen(false)
+          void load()
+        }}
+      />
+    </div>
+  )
+}
+
+function AddModal({
+  open,
+  onClose,
+  nodes,
+  loadNodes,
+  onAdded,
+}: {
+  open: boolean
+  onClose: () => void
+  nodes: NodeView[]
+  loadNodes: () => Promise<void>
+  onAdded: (name: string) => void
+}) {
+  const [name, setName] = useState('')
+  const [port, setPort] = useState('')
+  const [node, setNode] = useState('')
+  const [portState, setPortState] = useState<{ ok: boolean; reason: string } | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    if (open) {
+      setName('')
+      setNode('')
+      setPortState(null)
+      void loadNodes()
+      void (async () => {
+        try {
+          setPort(String(await api.portSuggest()))
+        } catch {
+          setPort('')
+        }
+      })()
+    }
+  }, [open, loadNodes])
+
+  // 端口校验（debounce）
+  useEffect(() => {
+    if (!open || !port || !/^\d+$/.test(port)) {
+      setPortState(null)
+      return
+    }
+    const n = Number(port)
+    const t = setTimeout(async () => {
+      try {
+        const r = await api.portCheck(n)
+        setPortState({ ok: r.available, reason: r.reason })
+      } catch (e) {
+        setPortState({ ok: false, reason: String(e) })
+      }
+    }, 400)
+    return () => clearTimeout(t)
+  }, [port, open])
+
+  if (!open) return null
+
+  const submit = async () => {
+    const p = Number(port)
+    if (!node) {
+      alert('请选择一个节点')
+      return
+    }
+    if (!p || p < 1024) {
+      alert('端口需 >= 1024')
+      return
+    }
+    setLoading(true)
+    try {
+      const inst = await api.addInstance(name.trim(), p, node)
+      onAdded(inst.name)
+    } catch (e) {
+      alert(String(e))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const groups = Array.from(new Set(nodes.map((n) => n.group || '其他')))
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/25" onClick={onClose}>
+      <div
+        className="w-[420px] bg-white rounded-2xl shadow-xl p-5 space-y-4"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="text-[15px] font-semibold text-zinc-900">添加实例</h3>
+        <label className="block space-y-1">
+          <span className="text-[12px] text-zinc-500">名称（留空自动命名）</span>
+          <input
+            className="w-full px-3 py-2 rounded-lg text-[13px]"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="留空则自动命名"
+          />
+        </label>
+        <label className="block space-y-1">
+          <span className="text-[12px] text-zinc-500">端口</span>
+          <div className="relative">
+            <input
+              className="w-full px-3 py-2 rounded-lg text-[13px] pr-10"
+              value={port}
+              onChange={(e) => setPort(e.target.value)}
+            />
+            {portState && (
+              <span
+                className={clsx(
+                  'absolute right-3 top-1/2 -translate-y-1/2 text-[11px]',
+                  portState.ok ? 'text-green-600' : 'text-red-500',
+                )}
+              >
+                {portState.ok ? '✓ 可用' : `✗ ${portState.reason}`}
+              </span>
+            )}
+          </div>
+        </label>
+        <label className="block space-y-1">
+          <span className="text-[12px] text-zinc-500">节点</span>
+          <select
+            className="w-full px-3 py-2 rounded-lg text-[13px] bg-white"
+            value={node}
+            onChange={(e) => setNode(e.target.value)}
+          >
+            <option value="">请选择节点</option>
+            {groups.map((g) => (
+              <optgroup key={g} label={g}>
+                {nodes
+                  .filter((n) => (n.group || '其他') === g)
+                  .map((n) => (
+                    <option key={n.name} value={n.name}>
+                      {n.name}
+                    </option>
+                  ))}
+              </optgroup>
+            ))}
+          </select>
+        </label>
+        <div className="flex items-center justify-end gap-2 pt-2">
+          <button
+            onClick={onClose}
+            className="px-4 py-1.5 rounded-lg text-[13px] text-zinc-600 bg-zinc-100 hover:bg-zinc-200"
+          >
+            取消
+          </button>
+          <button
+            onClick={() => void submit()}
+            disabled={loading}
+            className="px-4 py-1.5 rounded-lg text-[13px] text-white bg-zinc-900 hover:bg-zinc-700 disabled:opacity-50"
+          >
+            {loading ? '添加中…' : '确定'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
