@@ -13,10 +13,10 @@
     "windows": [
       {
         "title": "opencode2api 管理器",
-        "width": 600,
-        "height": 700,
-        "minWidth": 500,
-        "minHeight": 600,
+        "width": 980,
+        "height": 680,
+        "minWidth": 820,
+        "minHeight": 560,
         "resizable": true,
         "fullscreen": false,
         "decorations": false,
