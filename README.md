@@ -1,152 +1,100 @@
-# opencode2api
+# opencode2api 管理器
 
-`opencode2api` 是一个本地 HTTP 代理，把 OpenAI Chat Completions、OpenAI Responses 和 Anthropic Messages 风格的请求转发到 OpenCode 上游接口，并提供模型别名、reasoning/thinking 兼容、SOCKS5 代理和一个轻量管理面板。
+本地**多实例代理管理器**桌面应用（Windows exe）。每个"实例" = 一个 opencode2api 代理进程 + 一个 sing-box 出口，绑定不同代理节点，把 OpenAI / Anthropic / Responses 风格的请求转发到 OpenCode 上游，并可通过多实例 × 多节点分散请求、绕过按 IP 的频率限制。
 
-> 这个项目不是 OpenAI、Anthropic 或 OpenCode 的官方项目。请遵守上游服务条款，并只在你有权限的环境中使用。
+UI 参照 Windsurf Account Manager 的浅色官网风格：Tauri 2 无边框窗口 + 自定义标题栏 + 侧边栏三页（实例 / 节点扫描 / 设置），关闭窗口最小化到托盘、实例继续运行。
+
+> 本项目不是 OpenAI、Anthropic 或 OpenCode 的官方项目。请遵守上游服务条款，并只在你有权限的环境中使用。
 
 ## 功能
 
-- OpenAI 兼容接口：`/v1/chat/completions`、`/v1/models`
-- OpenAI Responses 兼容接口：`/v1/responses`
-- Anthropic Messages 兼容接口：`/v1/messages`
-- 流式 SSE 转换和 token 用量统计
-- 模型别名、reasoning effort 映射、强制禁用 thinking
-- SOCKS5 直连、指定代理和轮询代理
-- Web 管理面板：配置、统计、刷新上游会话
-- GitHub Actions 自动构建 Linux、macOS、Windows、FreeBSD 多平台 release
-- GitHub Actions 自动发布 Docker 镜像到 GHCR
+- **实例管理**：增/删/启/停/测试，批量操作；API 地址一键复制
+- **节点扫描**：一键扫描全部节点（经 Clash 外部控制 + 本地 Verge profiles），按分组展示，结果分类（ok / config / socks / tls / upstream / timeout / other）与延迟；勾选可用节点批量添加为实例
+- **多代理节点**：每实例自动生成 sing-box 配置走所选节点（trojan / vless / vmess / shadowsocks / ws），opencode2api 的 SOCKS5 指向 sing-box
+- **Clash 集成**：配置 Clash 外部控制地址与密钥即可拉取节点；也可读取 Clash Verge 本地 profiles 目录
+- **触摸保活**：系统托盘常驻，关闭窗口实例继续代理
+- **设置**：Clash 外部控制、实例默认密码、开机自启、二进制状态
 
-## 快速开始
+## 用法
 
-```bash
-git clone https://github.com/6Kmfi6HP/opencode2api.git
-cd opencode2api
-cp config.example.json config.json
-go run . -port 8000 -config config.json -password "change-me"
-```
+1. 启动 `opencode2api-manager.exe`（首次运行自动在 exe 旁生成 `bin/` 目录，内含 opencode2api 与 sing-box 子程序）
+2. **设置**页填 Clash 外部控制地址（默认 `http://127.0.0.1:9097`）与密钥
+3. **节点扫描**页 →「一键扫描全部」→ 勾选可用 →「添加选中为实例」
+4. **实例**页 →「启动」→ 用 `http://127.0.0.1:{实例端口}/v1` 作为 API 地址
 
-健康检查：
+## 构建与打包
+
+依赖：Node.js ≥ 18、Rust（stable-x86_64-pc-windows-msvc）、Windows 需要 MSVC Build Tools + Windows SDK，以及 `bin/` 下的 `opencode2api.exe` 与 `sing-box.exe`（内嵌源，可从 `opencode2api_enhance/bin` 复制或独立构建）。
 
 ```bash
-curl http://127.0.0.1:8000/health
+npm install
+npm run tauri:build -- --no-bundle   # 产出 src-tauri/target/release/opencode2api.exe（含内嵌子程序）
+bash scripts/make-portable.sh        # 组装 dist/opencode2api-manager-<ver>-portable.zip
 ```
 
-查看模型：
+开发热更：
 
 ```bash
-curl http://127.0.0.1:8000/v1/models
+npm install
+npm run tauri:dev
 ```
 
-认证模式：
+## 数据目录
 
-- 不带 `Authorization`，或使用 `Bearer public`：走 OpenCode public，只可稳定访问 `-free` 结尾的免费 Zen 模型。
-- 使用 `Bearer <api-key>`：默认走 Zen；如果请求的是仅存在于 Go 目录中的模型，会自动切到 Go。
-- 使用 `Bearer zen:<api-key>`：强制走 Zen，适合你明确要用 Zen 按量计费目录时。
-- 使用 `Bearer go:<api-key>`：优先走 Go 订阅目录；共享模型也会按 Go 路径请求。
-- 无效或占位 key（如 `no-key-required`）会自动回退到 public 模式。
+运行时数据（配置文件、实例清单、日志）存 `%APPDATA%\opencode2api-manager\`：
 
-Chat Completions 示例：
+| 路径 | 说明 |
+|---|---|
+| `config.json` | 应用配置（Clash 外部控制、默认密码） |
+| `instances.json` | 实例清单 |
+| `runtime\` | 各实例的运行目录与日志 |
+| （exe 旁）`bin\` | 释放的 opencode2api.exe / sing-box.exe |
 
-```bash
-curl http://127.0.0.1:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gpt-4o-mini",
-    "messages": [{"role": "user", "content": "hello"}],
-    "stream": false
-  }'
+## 架构
+
+```
+┌─────────────────────────────────────────────┐
+│  Tauri 2 前端（React + Tailwind）            │
+│  实例 / 节点扫描 / 设置（invoke → command）    │
+└──────────────────┬──────────────────────────┘
+                   │ #[tauri::command]
+┌──────────────────▼──────────────────────────┐
+│  Rust 管理器（src-tauri/src）                 │
+│  clash_yaml·singbox·opencode_cfg·instance·   │
+│  probe·embed·commands                        │
+└──────────────────┬──────────────────────────┘
+                   │ 子进程管理
+┌──────────────────▼──────────────────────────┐
+│  实例 = opencode2api.exe (Go) + sing-box.exe │
+│  用户 → :端口/v1 → opencode2api → sing-box → 节点│
+└─────────────────────────────────────────────┘
 ```
 
-Go 订阅示例：
+- Rust 侧采用 Windsurf Account Manager 的架构：`main.rs` 薄壳 + `lib.rs`（AppState / command 注册 / 托盘）+ 功能域模块
+- Go 代理核心（OpenAI/Anthropic/Responses 协议转换）与 sing-box 均为独立子进程，由 Rust 拉起管理
+- 内嵌二进制经 `embed.rs` 的 `include_bytes!` 打包，运行时释放到 exe 旁 `bin/` 目录
 
-```bash
-curl http://127.0.0.1:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer go:YOUR_OPENCODE_KEY" \
-  -d '{
-    "model": "glm-5.2",
-    "messages": [{"role": "user", "content": "hello"}],
-    "stream": false
-  }'
+## 目录结构
+
+```
+src/                      # React 前端（TitleBar + 侧边栏 + 三页）
+src-tauri/src/            # Rust 后端
+  clash_yaml.rs           # Clash 配置/外部控制节点解析
+  singbox.rs              # sing-box 配置生成
+  opencode_cfg.rs         # opencode2api 子进程配置生成
+  instance.rs             # 实例生命周期（子进程启停/探测）
+  probe.rs                # 节点扫描探针
+  config.rs               # 应用配置（%APPDATA%）
+  commands.rs             # Tauri command 层
+  embed.rs                # 内嵌二进制释放
+  lib.rs / main.rs        # Tauri 入口与状态
+bin/                      # 内嵌子程序源（opencode2api.exe / sing-box.exe）
+portable/                 # 便携包使用说明
+scripts/                  # make-portable.sh 打包脚本
 ```
 
-## 命令行参数
+## 上游与致谢
 
-```text
--port string
-    服务端口，默认 8000
--config string
-    配置文件路径，默认 config.json
--password string
-    管理面板密码，默认 123456；留空表示不启用登录验证
--debug
-    输出调试日志
--version
-    显示构建版本
-```
-
-第一次部署请务必修改 `-password`。如果把服务暴露到公网，建议只通过反向代理、访问控制或 VPN 暴露管理面板。
-
-## 本地构建
-
-```bash
-make test
-make vet
-make build
-./bin/opencode2api -version
-```
-
-生成本地多平台 release 包：
-
-```bash
-make release-snapshot VERSION=v0.1.0
-ls dist/
-```
-
-## 自动 Release
-
-推送 `v*` tag 后，GitHub Actions 会先运行一次格式、测试和 vet 检查，然后用 matrix 并发构建以下目标：
-
-- `linux/amd64`
-- `linux/arm64`
-- `linux/arm/v7`
-- `darwin/amd64`
-- `darwin/arm64`
-- `windows/amd64`
-- `windows/arm64`
-- `freebsd/amd64`
-- `freebsd/arm64`
-
-发布命令：
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-Release 会包含每个平台的 `.tar.gz` 包和统一生成的 `checksums.txt`。
-
-## Docker Compose 部署
-
-项目提供单独运行、Tor 代理、WARP 代理三套 compose 模版：
-
-```bash
-export OPENCODE2API_PASSWORD="change-me"
-docker compose -f deploy/compose/compose.yml up -d
-```
-
-代理部署见 [Docker Compose 部署模版](deploy/compose/README.md)。
-
-## 文档
-
-- [API 兼容说明](docs/API.md)
-- [配置说明](docs/CONFIGURATION.md)
-- [部署说明](docs/DEPLOYMENT.md)
-- [发布流程](docs/RELEASE.md)
-- [Docker Compose 部署模版](deploy/compose/README.md)
-- [贡献指南](CONTRIBUTING.md)
-- [安全说明](SECURITY.md)
-
-## 许可证
-
-当前仓库默认保留全部权利，避免在未确认授权策略前自动开源。需要公开开源时，可将 `LICENSE` 替换为 MIT、Apache-2.0 或其他许可证。
+- 功能迁移自 `opencode2api_enhance`（多实例管理器思路）
+- Go 代理核心源于 [`6Kmfi6HP/opencode2api`](https://github.com/6Kmfi6HP/opencode2api)（upstream，只拉取不推送）
+- 前端设计样式参考 Windsurf Account Manager
