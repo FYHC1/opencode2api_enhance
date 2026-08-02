@@ -15,3 +15,11 @@ opencode2api.exe
 .vscode/
 *.swp
 .env
+
+# Node
+node_modules/
+*.tsbuildinfo
+
+# Vite emit (tsc -b)
+vite.config.d.ts
+vite.config.js
