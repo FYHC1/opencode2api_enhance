@@ -3,7 +3,7 @@
 
 use crate::clash_yaml;
 use crate::config::Config;
-use crate::instance::{Instance, InstanceManager};
+use crate::instance::{no_window, Instance, InstanceManager};
 use crate::probe::{DEFAULT_PROBE_API_PORT, DEFAULT_PROBE_SOCKS_PORT};
 use crate::AppState;
 use serde::{Deserialize, Serialize};
@@ -282,14 +282,18 @@ pub async fn test_instance(
 ) -> Result<crate::instance::TestResult, String> {
     let manager = Arc::clone(&state.manager);
     tauri::async_runtime::spawn_blocking(move || {
-        let mut mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
+let mut mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
         let _ = mgr.load();
         let name_owned = name.clone();
         let port = mgr
             .prepare_test(&name_owned)
             .map_err(|e| e.to_string())?;
+        // 启用 401 门禁后，自检需带实例密钥
+        let auth = mgr
+            .find_instance(&name_owned)
+            .map(|i| i.password.clone());
         drop(mgr); // 探测在锁外进行，避免长阻塞
-        Ok(crate::instance::probe_models(&name_owned, port))
+        Ok(crate::instance::probe_models(&name_owned, port, auth.as_deref()))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -617,7 +621,7 @@ const RUN_NAME: &str = "opencode2api-manager";
 
 #[cfg(windows)]
 fn autostart_status() -> anyhow::Result<bool> {
-    let out = std::process::Command::new("reg")
+let out = no_window(&mut std::process::Command::new("reg"))
         .args(["query", RUN_KEY, "/v", RUN_NAME])
         .output()?;
     Ok(out.status.success())
@@ -633,12 +637,12 @@ fn set_autostart(enabled: bool) -> anyhow::Result<()> {
     if enabled {
         let exe = std::env::current_exe().unwrap_or_default();
         let val = format!("\"{}\"", exe.display());
-        std::process::Command::new("reg")
+no_window(&mut std::process::Command::new("reg"))
             .args(["add", RUN_KEY, "/v", RUN_NAME, "/t", "REG_SZ", "/d", &val, "/f"])
             .output()?;
     } else {
         // 幂等：值不存在时删除失败也可接受
-        let _ = std::process::Command::new("reg")
+let _ = no_window(&mut std::process::Command::new("reg"))
             .args(["delete", RUN_KEY, "/v", RUN_NAME, "/f"])
             .output();
     }

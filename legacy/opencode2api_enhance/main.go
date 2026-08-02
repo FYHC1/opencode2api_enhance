@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"flag"
@@ -615,50 +614,6 @@ func requireAuth(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
-}
-
-// ======================== API 密钥校验 ========================
-// 实例密钥（即 -password 传入的 adminPassword）同时作为 /v1/* 的访问门禁：
-// 请求必须携带 Authorization: Bearer <实例密钥>（支持 go:/zen: 前缀），否则 401。
-// adminPassword 为空时跳过校验（保持"未启用认证"语义）。
-
-func apiKeyAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if adminPassword == "" {
-			next(w, r)
-			return
-		}
-		if !validAPIKey(r) {
-			writeAuthError(w)
-			return
-		}
-		next(w, r)
-	}
-}
-
-// validAPIKey 检查 Authorization 头是否为 Bearer <adminPassword>（支持 go:/zen: 前缀路由）。
-func validAPIKey(r *http.Request) bool {
-	auth := r.Header.Get("Authorization")
-	if !strings.HasPrefix(auth, "Bearer ") {
-		return false
-	}
-	token := strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
-	if token == "" {
-		return false
-	}
-	// go:/zen: 前缀仅用于上游路由，去掉后再与密钥比对
-	if rest, ok := strings.CutPrefix(token, "go:"); ok {
-		token = rest
-	} else if rest, ok := strings.CutPrefix(token, "zen:"); ok {
-		token = rest
-	}
-	return subtle.ConstantTimeCompare([]byte(token), []byte(adminPassword)) == 1
-}
-
-func writeAuthError(w http.ResponseWriter) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusUnauthorized)
-	fmt.Fprintf(w, `{"error":{"message":"invalid api key","type":"invalid_request_error","code":"invalid_api_key"}}`)
 }
 
 func generateToken() (string, error) {
@@ -4858,10 +4813,10 @@ func main() {
 	} else {
 		slog.Info("admin panel disabled (no password)")
 	}
-	http.HandleFunc("/v1/chat/completions", loggingMiddleware(apiKeyAuthMiddleware(chatCompletionsHandler)))
-	http.HandleFunc("/v1/responses", loggingMiddleware(apiKeyAuthMiddleware(responsesHandler)))
-	http.HandleFunc("/v1/messages", loggingMiddleware(apiKeyAuthMiddleware(claudeMessagesHandler)))
-	http.HandleFunc("/v1/models", loggingMiddleware(apiKeyAuthMiddleware(listModelsHandler)))
+	http.HandleFunc("/v1/chat/completions", loggingMiddleware(chatCompletionsHandler))
+	http.HandleFunc("/v1/responses", loggingMiddleware(responsesHandler))
+	http.HandleFunc("/v1/messages", loggingMiddleware(claudeMessagesHandler))
+	http.HandleFunc("/v1/models", loggingMiddleware(listModelsHandler))
 	http.HandleFunc("/login", loggingMiddleware(loginHandler))
 	http.HandleFunc("/logout", loggingMiddleware(logoutHandler))
 	http.HandleFunc("/api/config", loggingMiddleware(requireAuth(adminConfigHandler)))

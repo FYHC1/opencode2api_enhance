@@ -1,22 +1,25 @@
 {
   "model_alias": {
     "deepseek-v4-flash": "deepseek-v4-flash-free",
-    "laguna-s-2.1": "laguna-s-2.1-free",
-    "ling-3.0-flash": "ling-3.0-flash-free",
     "mimo-v2.5": "mimo-v2.5-free",
+    "ling-3.0-flash": "ling-3.0-flash-free",
     "nemotron-3-ultra": "nemotron-3-ultra-free",
-    "north-mini-code": "north-mini-code-free"
+    "north-mini-code": "north-mini-code-free",
+    "laguna-s-2.1": "laguna-s-2.1-free"
   },
   "reasoning_effort_map": {
-    "high": "high",
+    "minimal": "low",
     "medium": "medium",
-    "minimal": "low"
+    "high": "high"
   },
   "force_disable_thinking": false,
   "socks5_proxies": [
     {
+      "name": "local",
       "addr": "127.0.0.1:1080",
-      "name": "local"
+      "username": "",
+      "password": ""
     }
-  ]
+  ],
+  "active_socks5": ""
 }

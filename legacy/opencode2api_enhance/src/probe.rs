@@ -1,7 +1,7 @@
 //! 节点探针：固定一套 sing-box + opencode2api，串行切换节点并测 `/v1/models`。
 
 use crate::clash_yaml::{self, ClashNode};
-use crate::instance::{self, kill_process, no_window};
+use crate::instance::{self, kill_process};
 use crate::opencode_cfg;
 use crate::singbox;
 use anyhow::{bail, Context, Result};
@@ -314,7 +314,7 @@ fn run_scan_loop(
     // 先起 opencode2api（等 sing-box 起来后再测；启动时端口可能短暂失败）
     let oc_out = fs::File::create(log_dir.join("opencode2api.out.log"))?;
     let oc_err = fs::File::create(log_dir.join("opencode2api.err.log"))?;
-let oc_child = no_window(&mut Command::new(&oc_bin))
+    let oc_child = Command::new(&oc_bin)
         .arg("-port")
         .arg(api_port.to_string())
         .arg("-config")
@@ -342,7 +342,7 @@ let oc_child = no_window(&mut Command::new(&oc_bin))
             g.current_node = Some(node.name.clone());
         }
 
-let result = probe_one_node(
+        let result = probe_one_node(
             &mut procs,
             node,
             &singbox_bin,
@@ -351,7 +351,6 @@ let result = probe_one_node(
             api_port,
             socks_port,
             per_node_timeout,
-            Some(password),
         );
 
         if let Ok(mut g) = progress.lock() {
@@ -372,7 +371,6 @@ fn probe_one_node(
     api_port: u16,
     socks_port: u16,
     per_node_timeout: Duration,
-    auth_token: Option<&str>,
 ) -> ProbeResult {
     let start = Instant::now();
     let base = |ok: bool, category: &str, message: String, status: Option<u16>, models: Option<usize>| {
@@ -414,7 +412,7 @@ fn probe_one_node(
         Err(e) => return base(false, "other", format!("日志文件失败: {}", e), None, None),
     };
 
-let child = match no_window(&mut Command::new(singbox_bin))
+    let child = match Command::new(singbox_bin)
         .args(["run", "-c"])
         .arg(&cfg_path)
         .stdout(Stdio::from(sb_out))
@@ -465,7 +463,7 @@ let child = match no_window(&mut Command::new(singbox_bin))
     let remain = per_node_timeout.saturating_sub(start.elapsed());
     let http_timeout = remain.max(Duration::from_secs(2)).min(Duration::from_secs(12));
 
-match instance::http_get_json(api_port, "/v1/models", http_timeout, auth_token) {
+    match instance::http_get_json(api_port, "/v1/models", http_timeout) {
         Ok((status, body)) => {
             if (200..300).contains(&status) {
                 let model_count = count_models(&body);
@@ -574,13 +572,13 @@ pub fn scan_nodes_sync(
 
     let oc_out = fs::File::create(log_dir.join("opencode2api.out.log"))?;
     let oc_err = fs::File::create(log_dir.join("opencode2api.err.log"))?;
-let oc_child = no_window(&mut Command::new(&oc_bin))
+    let oc_child = Command::new(&oc_bin)
         .arg("-port")
         .arg(api_port.to_string())
         .arg("-config")
         .arg(&oc_cfg_path)
-.arg("-password")
-        .arg(&password)
+        .arg("-password")
+        .arg(password)
         .stdout(Stdio::from(oc_out))
         .stderr(Stdio::from(oc_err))
         .spawn()
@@ -603,7 +601,7 @@ let oc_child = no_window(&mut Command::new(&oc_bin))
             on_progress(&g.snapshot());
         }
 
-let result = probe_one_node(
+        let result = probe_one_node(
             &mut procs,
             node,
             &singbox_bin,
@@ -612,7 +610,6 @@ let result = probe_one_node(
             api_port,
             socks_port,
             timeout,
-            Some(&password),
         );
 
         {

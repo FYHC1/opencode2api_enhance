@@ -10,27 +10,12 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
-/// 设置子进程在 Windows 下**不创建控制台窗口**（CREATE_NO_WINDOW = 0x08000000）。
-/// 否则每次 spawn/调用子进程（sing-box、opencode2api、taskkill 等）都会弹出一个 cmd 窗口。
-/// 非 Windows 平台原样返回。
-pub(crate) fn no_window(cmd: &mut Command) -> &mut Command {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000);
-    }
-    cmd
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Instance {
     pub name: String,
     pub port: u16,
     pub node: String,
-    #[serde(default)]
-    pub password: String,
-    #[serde(default)]
-    pub ip: String,
     pub singbox_port: u16,
     pub pid: Option<u32>,
     pub singbox_pid: Option<u32>,
@@ -66,14 +51,7 @@ impl InstanceManager {
         }
     }
 
-    pub fn add_instance(
-        &mut self,
-        name: String,
-        port: u16,
-        node: String,
-        password: String,
-        ip: String,
-    ) -> Result<()> {
+    pub fn add_instance(&mut self, name: String, port: u16, node: String) -> Result<()> {
         if self.instances.iter().any(|i| i.name == name) {
             bail!("实例 '{}' 已存在", name);
         }
@@ -84,8 +62,6 @@ impl InstanceManager {
             name,
             port,
             node,
-            password,
-            ip,
             singbox_port: port + 10000,
             pid: None,
             singbox_pid: None,
@@ -112,7 +88,7 @@ impl InstanceManager {
         Ok(())
     }
 
-    pub fn start_instance(&mut self, name: &str) -> Result<()> {
+    pub fn start_instance(&mut self, name: &str, password: &str) -> Result<()> {
         let idx = self
             .instances
             .iter()
@@ -122,8 +98,6 @@ impl InstanceManager {
         if self.instances[idx].status == InstanceStatus::Running {
             bail!("实例 '{}' 已在运行", name);
         }
-
-        let password = self.instances[idx].password.clone();
 
         // 1. 根据节点名查找 Clash 节点
         let nodes = clash_yaml::list_nodes_with_group()
@@ -166,7 +140,7 @@ impl InstanceManager {
         let singbox_stderr = fs::File::create(log_dir.join("singbox.err.log"))
             .context("创建 sing-box 错误日志失败")?;
 
-let singbox_child = no_window(&mut Command::new(&singbox_bin))
+        let singbox_child = Command::new(&singbox_bin)
             .args(["run", "-c"])
             .arg(&singbox_cfg_path)
             .stdout(Stdio::from(singbox_stdout))
@@ -209,7 +183,7 @@ let singbox_child = no_window(&mut Command::new(&singbox_bin))
         let oc_stderr = fs::File::create(log_dir.join("opencode2api.err.log"))
             .context("创建 opencode2api 错误日志失败")?;
 
-let oc_child = no_window(&mut Command::new(&oc_bin))
+        let oc_child = Command::new(&oc_bin)
             .arg("-port")
             .arg(self.instances[idx].port.to_string())
             .arg("-config")
@@ -283,12 +257,10 @@ let oc_child = no_window(&mut Command::new(&oc_bin))
         Ok(inst.port)
     }
 
-/// 对运行中的实例请求 `GET /v1/models`，快速验活。
-    /// 启用 401 门禁后需带实例密钥（Authorization: Bearer <密码>），否则自检会 401。
+    /// 对运行中的实例请求 `GET /v1/models`，快速验活。
     pub fn test_instance(&self, name: &str) -> Result<TestResult> {
         let port = self.prepare_test(name)?;
-        let auth = self.find_instance(name).map(|i| i.password.clone());
-        Ok(probe_models(name, port, auth.as_deref()))
+        Ok(probe_models(name, port))
     }
 
     #[allow(dead_code)]
@@ -332,9 +304,9 @@ pub struct TestResult {
 }
 
 /// 对指定端口探测 `GET /v1/models`（可在锁外 / spawn_blocking 中调用）。
-pub fn probe_models(name: &str, port: u16, auth_token: Option<&str>) -> TestResult {
+pub fn probe_models(name: &str, port: u16) -> TestResult {
     let start = Instant::now();
-    match http_get_json(port, "/v1/models", Duration::from_secs(10), auth_token) {
+    match http_get_json(port, "/v1/models", Duration::from_secs(10)) {
         Ok((status, body)) => {
             let latency_ms = start.elapsed().as_millis() as u64;
             if !(200..300).contains(&status) {
@@ -397,13 +369,7 @@ fn count_models_in_body(body: &str) -> Option<usize> {
 }
 
 /// 向本机实例发简单 HTTP/1.1 GET，返回 (status, body)。
-/// `auth_token` 非空时附带 `Authorization: Bearer <token>`（用于启用 401 门禁后的自检）。
-pub(crate) fn http_get_json(
-    port: u16,
-    path: &str,
-    timeout: Duration,
-    auth_token: Option<&str>,
-) -> Result<(u16, String)> {
+pub(crate) fn http_get_json(port: u16, path: &str, timeout: Duration) -> Result<(u16, String)> {
     let addr = format!("127.0.0.1:{}", port);
     let mut stream =
         TcpStream::connect(&addr).with_context(|| format!("无法连接 {}", addr))?;
@@ -414,13 +380,8 @@ pub(crate) fn http_get_json(
         .set_write_timeout(Some(Duration::from_secs(5)))
         .context("设置写超时失败")?;
 
-    let auth_line = match auth_token.filter(|t| !t.is_empty()) {
-        Some(t) => format!("\r\nAuthorization: Bearer {}", t),
-        None => String::new(),
-    };
     let req = format!(
-        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\nAccept: application/json\r\nUser-Agent: opencode2api-manager/0.1{}\r\n\r\n",
-        auth_line
+        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\nAccept: application/json\r\nUser-Agent: opencode2api-manager/0.1\r\n\r\n"
     );
     stream
         .write_all(req.as_bytes())
@@ -465,7 +426,7 @@ pub(crate) fn wait_for_port(port: u16, timeout: Duration) -> bool {
 pub fn kill_process(pid: u32) -> Result<()> {
     #[cfg(windows)]
     {
-let output = no_window(&mut Command::new("taskkill"))
+        let output = Command::new("taskkill")
             .args(["/PID", &pid.to_string(), "/F"])
             .output()
             .context("执行 taskkill 失败")?;
@@ -513,7 +474,7 @@ mod tests {
     fn test_add_instance() {
         let mut manager = new_manager("add");
         manager
-            .add_instance("user1".to_string(), 8088, "新加坡 G1".to_string(), "".to_string(), "".to_string())
+            .add_instance("user1".to_string(), 8088, "新加坡 G1".to_string())
             .unwrap();
         assert_eq!(manager.instances.len(), 1);
         assert_eq!(manager.instances[0].name, "user1");
@@ -525,8 +486,8 @@ mod tests {
     #[test]
     fn test_add_duplicate() {
         let mut manager = new_manager("dup");
-        manager.add_instance("a".to_string(), 8088, "n".to_string(), "".to_string(), "".to_string()).unwrap();
-        let r = manager.add_instance("a".to_string(), 8089, "n".to_string(), "".to_string(), "".to_string());
+        manager.add_instance("a".to_string(), 8088, "n".to_string()).unwrap();
+        let r = manager.add_instance("a".to_string(), 8089, "n".to_string());
         assert!(r.is_err());
         fs::remove_dir_all(temp_dir("dup")).ok();
     }
@@ -534,8 +495,8 @@ mod tests {
     #[test]
     fn test_add_duplicate_port() {
         let mut manager = new_manager("dupport");
-        manager.add_instance("a".to_string(), 8088, "n".to_string(), "".to_string(), "".to_string()).unwrap();
-        let r = manager.add_instance("b".to_string(), 8088, "n".to_string(), "".to_string(), "".to_string());
+        manager.add_instance("a".to_string(), 8088, "n".to_string()).unwrap();
+        let r = manager.add_instance("b".to_string(), 8088, "n".to_string());
         assert!(r.is_err());
         fs::remove_dir_all(temp_dir("dupport")).ok();
     }
@@ -543,7 +504,7 @@ mod tests {
     #[test]
     fn test_start_not_found() {
         let mut manager = new_manager("startnf");
-        let r = manager.start_instance("nobody");
+        let r = manager.start_instance("nobody", "pwd");
         assert!(r.is_err());
         fs::remove_dir_all(temp_dir("startnf")).ok();
     }

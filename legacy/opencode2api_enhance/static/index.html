@@ -1,0 +1,1158 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>opencode2api 管理器</title>
+  <style>
+    :root {
+      --bg: #f5f5f7;
+      --card: rgba(255,255,255,.74);
+      --card-solid: #ffffff;
+      --border: rgba(0,0,0,.09);
+      --border-strong: rgba(0,0,0,.15);
+      --text: #1d1d1f;
+      --muted: #86868b;
+      --accent: #0071e3;
+      --accent-hover: #0077ed;
+      --ok: #34c759;
+      --warn: #ff9500;
+      --err: #ff3b30;
+      --shadow: 0 4px 24px rgba(0,0,0,.08);
+      --hover: rgba(0,0,0,.05);
+      --radius: 14px;
+      --font: -apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+      --mono: "SF Mono", "Cascadia Code", Consolas, "Courier New", monospace;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #1c1c1e;
+        --card: rgba(44,44,46,.75);
+        --card-solid: #2c2c2e;
+        --border: rgba(255,255,255,.1);
+        --border-strong: rgba(255,255,255,.2);
+        --text: #f5f5f7;
+        --muted: #98989d;
+        --accent: #0a84ff;
+        --accent-hover: #409cff;
+        --shadow: 0 4px 24px rgba(0,0,0,.5);
+        --hover: rgba(255,255,255,.07);
+      }
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: var(--font);
+      color: var(--text);
+      min-height: 100vh;
+      line-height: 1.45;
+      background:
+        radial-gradient(900px 480px at 15% -10%, rgba(10,132,255,.10), transparent 60%),
+        radial-gradient(700px 420px at 110% 15%, rgba(175,82,222,.09), transparent 55%),
+        var(--bg);
+      background-attachment: fixed;
+      padding: 24px 12px 40px;
+    }
+
+    /* ===== macOS 窗口（600px） ===== */
+    .window {
+      max-width: 600px;
+      margin: 0 auto;
+      background: var(--card);
+      -webkit-backdrop-filter: blur(28px) saturate(1.7);
+      backdrop-filter: blur(28px) saturate(1.7);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .titlebar {
+      display: flex;
+      align-items: center;
+      padding: 13px 18px;
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(to bottom, rgba(255,255,255,.28), rgba(255,255,255,.06));
+      position: relative;
+    }
+    @media (prefers-color-scheme: dark) {
+      .titlebar { background: linear-gradient(to bottom, rgba(255,255,255,.07), rgba(255,255,255,.02)); }
+    }
+    .traffic { display: flex; gap: 8px; }
+    .traffic i { width: 12px; height: 12px; border-radius: 50%; display: block; }
+    .t-red { background: #ff5f57; }
+    .t-yellow { background: #febc2e; }
+    .t-green { background: #28c840; }
+    .title {
+      position: absolute; left: 50%; transform: translateX(-50%);
+      font-size: 13px; font-weight: 600; letter-spacing: -.01em;
+      white-space: nowrap;
+    }
+    .titlebar-right { margin-left: auto; }
+
+    /* ===== Tab ===== */
+    .tabs {
+      display: flex;
+      gap: 4px;
+      padding: 10px 18px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .tab {
+      padding: 6px 16px;
+      border: none; background: transparent;
+      font-size: 13px; font-weight: 600;
+      color: var(--muted);
+      border-radius: 999px; cursor: pointer;
+      font-family: var(--font);
+      transition: all .15s;
+    }
+    .tab:hover { background: var(--hover); }
+    .tab.active { background: var(--hover); color: var(--text); }
+    .content { padding: 14px 18px 22px; }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    /* ===== 卡片 ===== */
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px 16px;
+      margin-bottom: 12px;
+    }
+    .card h2 {
+      font-size: 11px; font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      margin-bottom: 10px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+    .toolbar {
+      display: flex; flex-wrap: wrap; gap: 6px;
+      align-items: center; margin-bottom: 10px;
+    }
+    .toolbar .spacer { flex: 1; }
+    .muted { color: var(--muted); font-size: 12px; }
+    .mono { font-family: var(--mono); font-size: 11px; }
+
+    /* ===== 按钮（紧凑胶囊） ===== */
+    .btn {
+      padding: 5px 12px;
+      border-radius: 999px;
+      border: 1px solid transparent;
+      font-size: 12px; font-weight: 500;
+      cursor: pointer;
+      font-family: var(--font);
+      background: var(--hover);
+      color: var(--text);
+      white-space: nowrap;
+      transition: all .15s;
+    }
+    .btn:hover:not(:disabled) { background: rgba(0,0,0,.09); }
+    @media (prefers-color-scheme: dark) {
+      .btn:hover:not(:disabled) { background: rgba(255,255,255,.12); }
+    }
+    .btn:disabled { opacity: .4; cursor: not-allowed; }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+    .btn-ok { background: var(--ok); color: #fff; }
+    .btn-ok:hover:not(:disabled) { filter: brightness(1.08); }
+    .btn-warn { background: var(--warn); color: #fff; }
+    .btn-warn:hover:not(:disabled) { filter: brightness(1.08); }
+    .btn-danger { background: var(--err); color: #fff; }
+    .btn-danger:hover:not(:disabled) { filter: brightness(1.08); }
+    .btn-test { background: rgba(10,132,255,.14); color: var(--accent); }
+    .btn-test:hover:not(:disabled) { background: var(--accent); color: #fff; }
+    .btn-sm { padding: 3px 9px; font-size: 11px; }
+    .btn-link {
+      background: transparent; color: var(--muted);
+      padding: 3px 6px; font-size: 11px;
+    }
+    .btn-link:hover:not(:disabled) { color: var(--accent); background: transparent; }
+
+    /* ===== 表格（紧凑） ===== */
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th {
+      text-align: left; font-size: 10px;
+      color: var(--muted); font-weight: 600;
+      padding: 6px 8px;
+      border-bottom: 1px solid var(--border-strong);
+      white-space: nowrap;
+    }
+    td {
+      padding: 7px 8px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: middle;
+    }
+    tr:last-child td { border-bottom: none; }
+    tbody tr { transition: background .12s; }
+    tbody tr:hover { background: var(--hover); }
+    .chk { width: 14px; height: 14px; accent-color: var(--accent); cursor: pointer; }
+    .cell-main { font-size: 12px; font-weight: 600; line-height: 1.3; }
+    .cell-sub {
+      font-size: 10.5px; color: var(--muted);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      max-width: 200px;
+    }
+    .actions { display: flex; gap: 2px; justify-content: flex-end; white-space: nowrap; }
+
+    /* ===== 状态点 ===== */
+    .st { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; white-space: nowrap; }
+    .st i { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+    .st-ok i { background: var(--ok); box-shadow: 0 0 0 2.5px rgba(52,199,89,.18); }
+    .st-fail i { background: var(--err); box-shadow: 0 0 0 2.5px rgba(255,59,48,.16); }
+    .st-idle i { background: var(--muted); opacity: .55; }
+    .st-busy i { background: var(--warn); animation: pulse 1s ease-in-out infinite; }
+    .st-ok, .st-busy, .st-fail, .st-idle { color: var(--text); }
+    @keyframes pulse { 50% { opacity: .35; } }
+
+    /* ===== 进度 ===== */
+    .progress-bar {
+      height: 4px; background: var(--hover);
+      border-radius: 999px; overflow: hidden;
+      margin: 8px 0 4px;
+    }
+    .progress-bar > i {
+      display: block; height: 100%;
+      background: linear-gradient(90deg, var(--accent), var(--ok));
+      width: 0%; transition: width .25s;
+    }
+    .scan-meta { font-size: 11px; color: var(--muted); margin-bottom: 6px; }
+    .empty { text-align: center; padding: 20px; color: var(--muted); font-size: 12px; }
+
+    /* ===== 开关 ===== */
+    .setting-row {
+      display: flex; align-items: center; gap: 12px;
+      padding: 6px 0;
+    }
+    .setting-label { font-size: 13px; font-weight: 500; }
+    .setting-sub { font-size: 11px; color: var(--muted); margin-top: 1px; }
+    .switch { position: relative; display: inline-block; width: 40px; height: 24px; flex: none; margin-left: auto; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider {
+      position: absolute; inset: 0; cursor: pointer;
+      background: var(--border-strong);
+      border-radius: 999px;
+      transition: background .2s;
+    }
+    .slider::before {
+      content: ""; position: absolute; top: 2px; left: 2px;
+      width: 20px; height: 20px; border-radius: 50%;
+      background: #fff;
+      box-shadow: 0 1px 3px rgba(0,0,0,.3);
+      transition: transform .2s;
+    }
+    .switch input:checked + .slider { background: var(--ok); }
+    .switch input:checked + .slider::before { transform: translateX(16px); }
+
+    /* ===== 表单字段 ===== */
+    .field { margin-bottom: 10px; }
+    .field label { display: block; font-size: 11px; font-weight: 600; color: var(--muted); margin-bottom: 4px; }
+    .field input {
+      width: 100%;
+      padding: 7px 10px;
+      border: 1px solid var(--border-strong);
+      border-radius: 8px;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 12px;
+      font-family: var(--mono);
+      outline: none;
+      box-sizing: border-box;
+    }
+    .field input:focus { border-color: var(--accent); }
+    .field .muted { font-size: 11px; display: block; margin-top: 4px; }
+
+    /* ===== 节点分组（手风琴） ===== */
+    .ngroup {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      margin-bottom: 8px;
+      overflow: hidden;
+      background: var(--bg);
+    }
+    .ngroup-head {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 12px;
+      cursor: pointer; user-select: none;
+    }
+    .gchk { display: flex; align-items: center; cursor: pointer; }
+    .ngroup-head:hover { background: var(--hover); }
+    .ngroup-name { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ngroup-count { font-size: 11px; color: var(--muted); flex: none; }
+    .ngroup-actions { display: flex; gap: 4px; flex: none; }
+    .chevron {
+      margin-left: auto; flex: none;
+      font-size: 11px; color: var(--muted);
+      transition: transform .15s;
+    }
+    .ngroup.collapsed .chevron { transform: rotate(-90deg); }
+    .ngroup-body { border-top: 1px solid var(--border); }
+    .ngroup.collapsed .ngroup-body { display: none; }
+    .ngroup table { border: none; }
+    .ngroup thead th { background: var(--hover); }
+
+    /* ===== 弹窗 ===== */
+    .modal-mask {
+      position: fixed; inset: 0; z-index: 100;
+      background: rgba(0,0,0,.35);
+      -webkit-backdrop-filter: blur(4px);
+      backdrop-filter: blur(4px);
+      display: none;
+      align-items: center; justify-content: center;
+      padding: 20px;
+    }
+    .modal-mask.show { display: flex; }
+    .modal {
+      width: 100%; max-width: 440px;
+      max-height: calc(100vh - 40px);
+      display: flex; flex-direction: column;
+      background: var(--card-solid);
+      border-radius: 16px;
+      border: 1px solid var(--border-strong);
+      box-shadow: 0 20px 60px rgba(0,0,0,.3);
+      padding: 18px;
+      animation: pop .18s ease;
+    }
+    @keyframes pop {
+      from { transform: scale(.96); opacity: 0; }
+      to { transform: scale(1); opacity: 1; }
+    }
+    .modal h3 {
+      font-size: 14px; font-weight: 700; margin-bottom: 12px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      flex: none;
+    }
+    #modalBody { overflow-y: auto; min-height: 0; }
+    .modal-row {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .modal-row:last-of-type { border-bottom: none; }
+    .modal-row .node-name {
+      flex: 1; min-width: 0;
+      font-size: 12px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .modal-row input { width: 96px; flex: none; padding: 6px 10px; }
+    .modal-actions {
+      display: flex; justify-content: flex-end; gap: 8px;
+      margin-top: 14px;
+      flex: none;
+    }
+    .port-state { font-size: 11px; width: 56px; flex: none; text-align: center; }
+
+    /* ===== Toast ===== */
+    .toast {
+      position: fixed; top: 16px; right: 16px;
+      padding: 10px 16px;
+      border-radius: 12px;
+      background: var(--card-solid);
+      border: 1px solid var(--border-strong);
+      box-shadow: var(--shadow);
+      color: var(--text);
+      font-size: 12px;
+      opacity: 0;
+      transform: translateY(-10px);
+      transition: all .25s;
+      z-index: 99;
+      max-width: 340px;
+      pointer-events: none;
+    }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    .toast.ok { border-color: rgba(52,199,89,.45); }
+    .toast.err { border-color: rgba(255,59,48,.45); }
+
+    @media (max-width: 640px) {
+      .title { display: none; }
+      body { padding: 12px 6px 32px; }
+      .window { max-width: 100%; }
+    }
+
+    /* ===== Tauri 桌面模式：假窗口变真窗口 ===== */
+    body.tauri { padding: 0; background: var(--bg); }
+    body.tauri .window {
+      max-width: none; margin: 0; border: none; border-radius: 0;
+      box-shadow: none; height: 100vh; display: flex; flex-direction: column;
+    }
+    body.tauri .titlebar { -webkit-app-region: drag; flex: none; }
+    body.tauri .traffic, body.tauri .tab, body.tauri .btn, body.tauri .titlebar-right { -webkit-app-region: no-drag; }
+    body.tauri .content { flex: 1; overflow-y: auto; }
+    body.tauri .traffic i { position: relative; cursor: pointer; }
+    body.tauri .traffic i::after {
+      content: ""; position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 10px; font-weight: 700; color: rgba(0,0,0,.55);
+      opacity: 0;
+    }
+    body.tauri .traffic i:hover::after { opacity: 1; }
+    body.tauri .t-red::after { content: "×"; }
+    body.tauri .t-yellow::after { content: "−"; }
+    body.tauri .t-green::after { content: "+"; }
+    body.tauri .t-red:active { background: #e0443e; }
+    body.tauri .t-yellow:active { background: #d9a021; }
+    body.tauri .t-green:active { background: #1fa832; }
+  </style>
+</head>
+<body>
+  <div class="window">
+    <div class="titlebar" id="titlebarEl">
+      <div class="traffic">
+        <i class="t-red" id="btnWinClose" title="退出"></i>
+        <i class="t-yellow" id="btnWinMin" title="最小化"></i>
+        <i class="t-green" id="btnWinMax" title="最大化"></i>
+      </div>
+      <div class="title">opencode2api 管理器</div>
+      <div class="titlebar-right">
+        <button class="btn btn-sm" type="button" id="btnRefresh">刷新</button>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <button class="tab active" type="button" data-tab="instances">实例管理</button>
+      <button class="tab" type="button" data-tab="nodes">添加实例</button>
+      <button class="tab" type="button" data-tab="settings">设置</button>
+    </div>
+
+    <div class="content">
+      <!-- ===== Tab 1：实例管理 ===== -->
+      <section class="tab-panel active" id="tab-instances">
+        <div class="card">
+          <div class="toolbar">
+            <span class="muted" id="instCount"></span>
+            <span class="spacer"></span>
+            <button class="btn btn-ok btn-sm" type="button" id="btnBStart">批量启动</button>
+            <button class="btn btn-warn btn-sm" type="button" id="btnBStop">批量停止</button>
+            <button class="btn btn-danger btn-sm" type="button" id="btnBDel">批量删除</button>
+          </div>
+          <div id="instTable">
+            <div class="empty">加载中…</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== Tab 2：添加实例 ===== -->
+      <section class="tab-panel" id="tab-nodes">
+        <div class="card">
+          <div class="toolbar">
+            <button class="btn btn-warn btn-sm" type="button" id="btnScanStop" style="display:none">停止</button>
+            <span class="spacer"></span>
+            <span class="muted" id="nodeCount"></span>
+          </div>
+          <div class="progress-bar" id="scanBarWrap" style="display:none"><i id="scanBar"></i></div>
+          <div class="scan-meta" id="scanMeta"></div>
+          <div id="nodeTable">
+            <div class="empty">点击「加载节点」列出全部节点</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== Tab 3：设置 ===== -->
+      <section class="tab-panel" id="tab-settings">
+        <div class="card">
+          <h2><span class="dot" style="background:var(--muted)"></span>常规</h2>
+          <div class="setting-row">
+            <div>
+              <div class="setting-label">开机自启</div>
+              <div class="setting-sub">登录 Windows 后自动启动管理器</div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="autostartToggle" />
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2><span class="dot" style="background:var(--accent)"></span>外部控制（Clash）</h2>
+          <div class="setting-sub" style="padding-bottom:8px">填写地址与授权码后，节点将优先从 Clash 外部控制 API 拉取，失败时回退本地配置文件</div>
+          <div class="field">
+            <label>控制地址</label>
+            <input type="text" id="clashUrlInput" placeholder="http://127.0.0.1:9097" spellcheck="false" />
+          </div>
+          <div class="field">
+            <label>授权码（Secret）</label>
+            <input type="password" id="clashTokenInput" placeholder="留空则不修改" autocomplete="off" />
+            <span class="muted" id="tokenHint"></span>
+          </div>
+          <div class="toolbar" style="margin-bottom:0">
+            <span class="spacer"></span>
+            <button class="btn btn-ok btn-sm" type="button" id="btnSaveClash">保存</button>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <!-- 添加到实例弹窗 -->
+  <div class="modal-mask" id="modalMask">
+    <div class="modal">
+      <h3 id="modalTitle">添加到实例</h3>
+      <div id="modalBody"></div>
+      <div class="modal-actions">
+        <button class="btn" type="button" id="btnModalCancel">取消</button>
+        <button class="btn btn-primary" type="button" id="btnModalOk">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 退出确认弹窗 -->
+  <div class="modal-mask" id="quitMask">
+    <div class="modal">
+      <h3>退出应用</h3>
+      <div class="setting-sub" style="padding:2px 0 4px">确定要退出 opencode2api 管理器吗？</div>
+      <div class="setting-sub" style="padding-bottom:10px">已添加的实例与后台组件将停止运行。</div>
+      <div class="modal-actions">
+        <button class="btn" type="button" id="btnQuitCancel">取消</button>
+        <button class="btn btn-danger" type="button" id="btnQuitOk">退出</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    // ===== 运行环境 =====
+    const IS_TAURI = !!(window.__TAURI__);
+    if (IS_TAURI) document.body.classList.add("tauri");
+    const API_BASE = IS_TAURI ? "http://127.0.0.1:9099" : "";
+
+    /* ===== 窗口控制（Tauri 桌面模式） ===== */
+    if (IS_TAURI) {
+      const invoke = window.__TAURI__.core.invoke;
+      const showQuit = () => $("quitMask").classList.add("show");
+      const closeQuit = () => $("quitMask").classList.remove("show");
+      $("btnWinClose").addEventListener("click", showQuit);
+      $("btnWinMin").addEventListener("click", () => invoke("hide_to_tray").catch(() => {}));
+      $("btnWinMax").addEventListener("click", () => invoke("toggle_maximize").catch(() => {}));
+      $("titlebarEl").addEventListener("dblclick", () => invoke("toggle_maximize").catch(() => {}));
+      $("btnQuitCancel").addEventListener("click", closeQuit);
+      $("quitMask").addEventListener("click", (e) => { if (e.target === $("quitMask")) closeQuit(); });
+      $("btnQuitOk").addEventListener("click", () => {
+        closeQuit();
+        invoke("quit_app").catch(() => {});
+      });
+    }
+
+    // ===== 状态 =====
+    let nodes = [];
+    let nodeSelected = new Set();
+    let busy = new Set();
+    let instSelected = new Set();
+    let scanResults = [];
+    let scanPollTimer = null;
+    let modalTargets = [];
+    let collapsedGroups = new Set();
+
+    /* ===== 工具 ===== */
+    function toast(msg, ok) {
+      const el = $("toast");
+      el.textContent = msg;
+      el.className = "toast show " + (ok ? "ok" : "err");
+      clearTimeout(el._t);
+      el._t = setTimeout(() => el.classList.remove("show"), 3200);
+    }
+    async function api(path, opts = {}) {
+      const res = await fetch(API_BASE + path, {
+        headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
+        ...opts,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.ok === false) {
+        throw new Error(data.error || res.statusText || "请求失败");
+      }
+      return data.data;
+    }
+    function esc(s) {
+      return String(s ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/"/g, "&quot;");
+    }
+    function isRunning(st) {
+      return st === "Running" || st === "Starting";
+    }
+    function instStatus(st) {
+      if (typeof st === "object" && st.Error) {
+        return `<span class="st st-fail" title="${esc(st.Error)}"><i></i>错误</span>`;
+      }
+      const s = String(st);
+      if (s === "Running") return `<span class="st st-ok"><i></i>运行中</span>`;
+      if (s === "Starting" || s === "Stopping") return `<span class="st st-busy"><i></i>${s === "Starting" ? "启动中" : "停止中"}</span>`;
+      return `<span class="st st-idle"><i></i>已停止</span>`;
+    }
+
+    /* ===== Tab 切换 ===== */
+    document.querySelectorAll(".tab").forEach((tab) => {
+      tab.addEventListener("click", () => {
+        document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
+        document.querySelectorAll(".tab-panel").forEach((p) => p.classList.remove("active"));
+        tab.classList.add("active");
+        $("tab-" + tab.dataset.tab).classList.add("active");
+      });
+    });
+
+    /* ===== Tab1：实例管理 ===== */
+    async function loadInstances() {
+      try {
+        const list = await api("/api/instances");
+        renderInstances(list || []);
+      } catch (e) {
+        $("instTable").innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+      }
+    }
+
+    function renderInstances(list) {
+      const names = new Set(list.map((i) => i.name));
+      for (const n of [...instSelected]) {
+        if (!names.has(n)) instSelected.delete(n);
+      }
+      $("instCount").textContent = `${list.length} 个实例` + (instSelected.size ? ` · 已选 ${instSelected.size}` : "");
+      if (!list.length) {
+        $("instTable").innerHTML = `<div class="empty">暂无实例，到「添加实例」勾选节点创建</div>`;
+        return;
+      }
+      const allChecked = list.every((i) => instSelected.has(i.name));
+      let html = `<table><thead><tr>
+        <th style="width:26px"><input class="chk" type="checkbox" id="chkAll" ${allChecked ? "checked" : ""} /></th>
+        <th>实例</th><th>端口</th><th>状态</th><th>操作</th>
+      </tr></thead><tbody>`;
+      for (const i of list) {
+        const run = isRunning(i.status);
+        const b = busy.has(i.name);
+        const url = `http://127.0.0.1:${i.port}/v1`;
+        html += `<tr>
+          <td><input class="chk chk-inst" type="checkbox" data-name="${esc(i.name)}" ${instSelected.has(i.name) ? "checked" : ""} /></td>
+          <td>
+            <div class="cell-main">${esc(i.name)}</div>
+            <div class="cell-sub" title="${esc(i.node)}">节点：${esc(i.node)}</div>
+            <div class="cell-sub mono" style="color:var(--accent)">${url}</div>
+          </td>
+          <td class="mono">${i.port}</td>
+          <td>${instStatus(i.status)}</td>
+          <td class="actions">
+            ${run
+              ? `<button class="btn btn-warn btn-sm" data-act="stop" data-name="${esc(i.name)}" ${b ? "disabled" : ""}>停止</button>`
+              : `<button class="btn btn-ok btn-sm" data-act="start" data-name="${esc(i.name)}" ${b ? "disabled" : ""}>启动</button>`}
+            <button class="btn btn-link" data-act="del" data-name="${esc(i.name)}" ${run || b ? "disabled" : ""}>删除</button>
+          </td>
+        </tr>`;
+      }
+      html += `</tbody></table>`;
+      $("instTable").innerHTML = html;
+
+      $("chkAll").addEventListener("change", (e) => {
+        instSelected = e.target.checked ? new Set(list.map((i) => i.name)) : new Set();
+        renderInstances(list);
+      });
+      $("instTable").querySelectorAll(".chk-inst").forEach((el) => {
+        el.addEventListener("change", () => {
+          const n = el.dataset.name;
+          if (el.checked) instSelected.add(n);
+          else instSelected.delete(n);
+          renderInstances(list);
+        });
+      });
+      $("instTable").querySelectorAll("button[data-act]").forEach((btn) => {
+        btn.addEventListener("click", () => onAction(btn.dataset.act, btn.dataset.name));
+      });
+    }
+
+    async function onAction(act, name) {
+      if (busy.has(name)) return;
+      busy.add(name);
+      try {
+        if (act === "start") {
+          toast(`正在启动 ${name}…`, true);
+          await api(`/api/instances/${encodeURIComponent(name)}/start`, { method: "POST" });
+          toast(`实例 ${name} 已启动`, true);
+        } else if (act === "stop") {
+          toast(`正在停止 ${name}…`, true);
+          await api(`/api/instances/${encodeURIComponent(name)}/stop`, { method: "POST" });
+          toast(`实例 ${name} 已停止`, true);
+        } else if (act === "del") {
+          if (!confirm(`删除实例 ${name}？`)) return;
+          await api(`/api/instances/${encodeURIComponent(name)}`, { method: "DELETE" });
+          toast(`已删除 ${name}`, true);
+        }
+      } catch (e) {
+        toast(e.message, false);
+      } finally {
+        busy.delete(name);
+        await loadInstances();
+      }
+    }
+
+    const BATCH_LABEL = { start: "启动", stop: "停止", delete: "删除" };
+    async function batchOp(action) {
+      const names = [...instSelected];
+      if (!names.length) {
+        toast("请先勾选实例", false);
+        return;
+      }
+      if (action === "delete" && !confirm(`确认删除选中的 ${names.length} 个实例？`)) return;
+      try {
+        const res = await api(`/api/instances/batch/${action}`, {
+          method: "POST",
+          body: JSON.stringify({ names }),
+        });
+        const msg = `${BATCH_LABEL[action]}成功 ${res.success_count} 个` + (res.error_count ? `，失败 ${res.error_count}` : "");
+        toast(msg, res.success_count > 0);
+        await loadInstances();
+      } catch (e) {
+        toast(e.message, false);
+      }
+    }
+
+    /* ===== Tab2：节点列表 ===== */
+    async function loadNodes() {
+      try {
+        const raw = await api("/api/nodes");
+        const seen = new Set();
+        const list = [];
+        for (const n of raw) {
+          if (seen.has(n.name)) continue;
+          seen.add(n.name);
+          list.push(n);
+        }
+        nodes = list;
+        const resMap = new Map(scanResults.map((r) => [r.node, r]));
+        for (const n of nodes) {
+          const r = resMap.get(n.name);
+          if (r) {
+            n.status = r.ok ? "ok" : "fail";
+            n.latency = r.latency_ms;
+            n.message = r.message;
+          } else {
+            n.status = "untested";
+            n.latency = null;
+          }
+        }
+        nodeSelected = new Set();
+        $("nodeCount").textContent = `${nodes.length} 个节点`;
+        renderNodes();
+        if (!nodes.length) toast("未找到节点，请确认 Clash Verge 已配置", false);
+        else toast(`已加载 ${nodes.length} 个节点`, true);
+      } catch (e) {
+        toast(e.message, false);
+      }
+    }
+
+    function nodeStatusBadge(n) {
+      if (n.status === "testing") return `<span class="st st-busy"><i></i>测试中</span>`;
+      if (n.status === "ok") return `<span class="st st-ok" title="${esc(n.message || "")}"><i></i>可用 ${n.latency}ms</span>`;
+      if (n.status === "fail") return `<span class="st st-fail" title="${esc(n.message || "")}"><i></i>失败</span>`;
+      return `<span class="st st-idle"><i></i>未测试</span>`;
+    }
+
+    function renderNodes() {
+      if (!nodes.length) {
+        $("nodeTable").innerHTML = `<div class="empty">暂无节点，请确认 Clash 已配置或检查设置中的外部控制</div>`;
+        return;
+      }
+      const groups = new Map();
+      for (const n of nodes) {
+        const g = n.group || "其他";
+        if (!groups.has(g)) groups.set(g, []);
+        groups.get(g).push(n);
+      }
+      let html = "";
+      for (const [gname, gnodes] of groups) {
+        const collapsed = collapsedGroups.has(gname);
+        const groupSelected = gnodes.length > 0 && gnodes.every((n) => nodeSelected.has(n.name));
+        const gsel = gnodes.filter((n) => nodeSelected.has(n.name)).length;
+        const selLabel = gsel ? `(${gsel})` : "";
+        html += `<div class="ngroup${collapsed ? " collapsed" : ""}">
+          <div class="ngroup-head" data-group="${esc(gname)}">
+            <label class="gchk" onclick="event.stopPropagation()"><input class="chk-group" type="checkbox" data-group="${esc(gname)}" ${groupSelected ? "checked" : ""} /></label>
+            <span class="ngroup-name" title="${esc(gname)}">${esc(gname)}</span>
+            <span class="ngroup-count">${gnodes.length}</span>
+            <span class="ngroup-actions" onclick="event.stopPropagation()">
+              <button class="btn btn-test btn-sm" type="button" data-gact="test" data-group="${esc(gname)}" title="测试组内勾选的节点">测试${selLabel}</button>
+              <button class="btn btn-ok btn-sm" type="button" data-gact="add" data-group="${esc(gname)}" title="将组内勾选的节点添加为实例">添加${selLabel}</button>
+            </span>
+            <span class="chevron">▾</span>
+          </div>
+          <div class="ngroup-body"><table><thead><tr>
+            <th>节点名称</th><th>状态</th><th>操作</th>
+          </tr></thead><tbody>`;
+        for (const n of gnodes) {
+          html += `<tr>
+            <td><input class="chk chk-node" type="checkbox" data-name="${esc(n.name)}" ${nodeSelected.has(n.name) ? "checked" : ""} /></td>
+            <td>
+              <div class="cell-main">${esc(n.name)}${n.has_cred ? "" : ' <span class="muted" style="font-size:10px">(无凭据)</span>'}</div>
+              <div class="cell-sub mono">${esc(n.node_type)} · ${esc(n.server)}:${n.port}</div>
+            </td>
+            <td>${nodeStatusBadge(n)}</td>
+            <td class="actions">
+              <button class="btn btn-link" data-nact="remove" data-name="${esc(n.name)}">移除</button>
+              <button class="btn btn-test btn-sm" data-nact="test" data-name="${esc(n.name)}" ${n.status === "testing" ? "disabled" : ""}>测试</button>
+              <button class="btn btn-ok btn-sm" data-nact="add" data-name="${esc(n.name)}">添加</button>
+            </td>
+          </tr>`;
+        }
+        html += `</tbody></table></div></div>`;
+      }
+      $("nodeTable").innerHTML = html;
+
+      $("nodeTable").querySelectorAll(".ngroup-head").forEach((el) => {
+        el.addEventListener("click", () => toggleGroup(el.dataset.group));
+      });
+      $("nodeTable").querySelectorAll(".chk-group").forEach((el) => {
+        el.addEventListener("change", () => {
+          const gnodes = nodes.filter((n) => (n.group || "其他") === el.dataset.group);
+          if (el.checked) gnodes.forEach((n) => nodeSelected.add(n.name));
+          else gnodes.forEach((n) => nodeSelected.delete(n.name));
+          renderNodes();
+        });
+      });
+      $("nodeTable").querySelectorAll("button[data-gact]").forEach((btn) => {
+        btn.addEventListener("click", () => onGroupAction(btn.dataset.gact, btn.dataset.group));
+      });
+      $("nodeTable").querySelectorAll(".chk-node").forEach((el) => {
+        el.addEventListener("change", () => {
+          const n = el.dataset.name;
+          if (el.checked) nodeSelected.add(n);
+          else nodeSelected.delete(n);
+          renderNodes();
+        });
+      });
+      $("nodeTable").querySelectorAll("button[data-nact]").forEach((btn) => {
+        btn.addEventListener("click", () => onNodeAction(btn.dataset.nact, btn.dataset.name));
+      });
+    }
+
+    function toggleGroup(g) {
+      if (collapsedGroups.has(g)) collapsedGroups.delete(g);
+      else collapsedGroups.add(g);
+      renderNodes();
+    }
+
+    async function onGroupAction(act, g) {
+      const sel = nodes.filter((n) => (n.group || "其他") === g && nodeSelected.has(n.name)).map((n) => n.name);
+      if (!sel.length) {
+        toast("请先在组内勾选节点", false);
+        return;
+      }
+      if (act === "test") startNodeTest(sel);
+      if (act === "add") openAddModal(sel);
+    }
+
+    async function onNodeAction(act, name) {
+      if (act === "remove") {
+        const idx = nodes.findIndex((n) => n.name === name);
+        if (idx >= 0) {
+          nodes.splice(idx, 1);
+          nodeSelected.delete(name);
+          renderNodes();
+          $("nodeCount").textContent = `${nodes.length} 个节点`;
+          toast(`已移除 ${name}`, true);
+        }
+        return;
+      }
+      if (act === "test") {
+        startNodeTest([name]);
+        return;
+      }
+      if (act === "add") {
+        openAddModal([name]);
+        return;
+      }
+    }
+
+    /* ===== 测试连通性 ===== */
+    function applyScanResults(results) {
+      scanResults = results;
+      const resMap = new Map(results.map((r) => [r.node, r]));
+      let changed = false;
+      for (const n of nodes) {
+        const r = resMap.get(n.name);
+        if (r) {
+          n.status = r.ok ? "ok" : "fail";
+          n.latency = r.latency_ms;
+          n.message = r.message;
+          changed = true;
+        }
+      }
+      if (changed) renderNodes();
+    }
+
+    function renderScanMeta(progress) {
+      const running = progress.status === "running" || progress.status === "stopping";
+      $("btnScanStop").style.display = running ? "" : "none";
+      $("scanBarWrap").style.display = progress.total ? "block" : "none";
+      const pct = progress.total ? Math.round((progress.current / progress.total) * 100) : 0;
+      $("scanBar").style.width = pct + "%";
+      let meta = progress.total ? `测试中 ${progress.current}/${progress.total}` : "";
+      if (progress.current_node) meta += ` · ${progress.current_node}`;
+      if (progress.error) meta += ` · ${progress.error}`;
+      $("scanMeta").textContent = meta;
+    }
+
+    function stopScanPoll() {
+      if (scanPollTimer) {
+        clearInterval(scanPollTimer);
+        scanPollTimer = null;
+      }
+    }
+
+    function startScanPoll() {
+      stopScanPoll();
+      scanPollTimer = setInterval(async () => {
+        try {
+          const p = await api("/api/nodes/scan/status");
+          renderScanMeta(p);
+          applyScanResults(p.results || []);
+          if (p.status !== "running" && p.status !== "stopping") {
+            stopScanPoll();
+            $("btnScanStop").style.display = "none";
+            const okN = (p.results || []).filter((r) => r.ok).length;
+            if (p.total) toast(`测试结束：可用 ${okN}/${p.total}`, true);
+          }
+        } catch (e) { /* ignore transient */ }
+      }, 800);
+    }
+
+    async function startNodeTest(names) {
+      for (const n of names) {
+        const node = findNode(n);
+        if (node) node.status = "testing";
+      }
+      renderNodes();
+      try {
+        await api("/api/nodes/scan", {
+          method: "POST",
+          body: JSON.stringify({ nodes: names, timeout: 12 }),
+        });
+        startScanPoll();
+      } catch (e) {
+        for (const n of names) {
+          const node = findNode(n);
+          if (node && node.status === "testing") node.status = "untested";
+        }
+        renderNodes();
+        toast(e.message, false);
+      }
+    }
+
+    async function stopScan() {
+      try {
+        const p = await api("/api/nodes/scan/status");
+        if (p.status !== "running" && p.status !== "stopping") {
+          toast("没有正在进行的测试", false);
+          return;
+        }
+        await api("/api/nodes/scan/stop", { method: "POST" });
+        toast("已请求停止测试", true);
+      } catch (e) {
+        toast(e.message, false);
+      }
+    }
+
+    function findNode(name) {
+      return nodes.find((n) => n.name === name);
+    }
+
+    /* ===== 添加到实例弹窗 ===== */
+    async function openAddModal(names) {
+      const targets = [];
+      for (const name of names) {
+        const node = findNode(name);
+        if (node) targets.push(node);
+      }
+      if (!targets.length) {
+        toast("请选择节点", false);
+        return;
+      }
+      modalTargets = targets;
+      $("modalTitle").textContent = targets.length === 1
+        ? `添加到实例：${targets[0].name}`
+        : `添加到实例（${targets.length} 个节点）`;
+      $("modalBody").innerHTML = "";
+      for (const t of targets) {
+        const row = document.createElement("div");
+        row.className = "modal-row";
+        row.innerHTML = `
+          <div class="node-name" title="${esc(t.name)}">${esc(t.name)}</div>
+          <input type="number" min="1024" max="65535" value="0" />
+          <button class="btn btn-test btn-sm" type="button">测试</button>
+          <span class="port-state"></span>
+        `;
+        $("modalBody").appendChild(row);
+      }
+      $("modalMask").classList.add("show");
+
+      const inputs = [...$("modalBody").querySelectorAll("input")];
+      const used = new Set();
+      for (let i = 0; i < inputs.length; i++) {
+        try {
+          const sug = await api("/api/port/suggest");
+          let p = sug.port;
+          while (used.has(p)) p += 1;
+          used.add(p);
+          inputs[i].value = p;
+        } catch (e) { /* 保持 0 */ }
+      }
+      bindModalPortChecks();
+    }
+
+    function bindModalPortChecks() {
+      $("modalBody").querySelectorAll(".modal-row").forEach((row) => {
+        const input = row.querySelector("input");
+        const state = row.querySelector(".port-state");
+        const btn = row.querySelector("button");
+        async function check() {
+          const port = parseInt(input.value, 10);
+          if (!port || port < 1024 || port > 65535) {
+            state.textContent = "";
+            return;
+          }
+          btn.disabled = true;
+          state.textContent = "…";
+          try {
+            const r = await api("/api/port/check", { method: "POST", body: JSON.stringify({ port }) });
+            state.textContent = r.available ? "✓ 可用" : "✗ 占用";
+            state.style.color = r.available ? "var(--ok)" : "var(--err)";
+          } catch (e) {
+            state.textContent = "✗";
+            state.style.color = "var(--err)";
+          } finally {
+            btn.disabled = false;
+          }
+        }
+        btn.addEventListener("click", check);
+        input.addEventListener("change", check);
+      });
+    }
+
+    async function confirmAddModal() {
+      const rows = [...$("modalBody").querySelectorAll(".modal-row")];
+      const items = [];
+      for (let i = 0; i < rows.length; i++) {
+        const input = rows[i].querySelector("input");
+        const port = parseInt(input.value, 10);
+        if (!port || port < 1024 || port > 65535) {
+          toast(`第 ${i + 1} 个端口无效`, false);
+          return;
+        }
+        items.push({ node: modalTargets[i].name, port });
+      }
+      for (const it of items) {
+        try {
+          const r = await api("/api/port/check", { method: "POST", body: JSON.stringify({ port: it.port }) });
+          if (!r.available) {
+            toast(`端口 ${it.port} 已被占用：${r.reason}`, false);
+            return;
+          }
+        } catch (e) {
+          toast(e.message, false);
+          return;
+        }
+      }
+      try {
+        const results = [];
+        for (const it of items) {
+          const r = await api("/api/instances", {
+            method: "POST",
+            body: JSON.stringify({ name: "", port: it.port, node: it.node }),
+          });
+          results.push(r.name);
+        }
+        $("modalMask").classList.remove("show");
+        toast(`已添加实例：${results.join("、")}`, true);
+        await loadInstances();
+      } catch (e) {
+        toast(e.message, false);
+      }
+    }
+
+    function closeModal() {
+      $("modalMask").classList.remove("show");
+    }
+    $("btnModalCancel").addEventListener("click", closeModal);
+    $("btnModalOk").addEventListener("click", confirmAddModal);
+    $("modalMask").addEventListener("click", (e) => {
+      if (e.target === $("modalMask")) closeModal();
+    });
+
+    /* ===== 设置 ===== */
+    async function loadSettings() {
+      try {
+        const [cfg, autostart] = await Promise.all([
+          api("/api/config"),
+          api("/api/autostart"),
+        ]);
+        $("autostartToggle").checked = !!autostart.enabled;
+        $("clashUrlInput").value = cfg.clash_external_url || "";
+        $("tokenHint").textContent = cfg.has_clash_token ? "已设置（留空则不修改）" : "未设置";
+      } catch (e) { /* ignore */ }
+    }
+    $("autostartToggle").addEventListener("change", async (e) => {
+      try {
+        const r = await api("/api/autostart", {
+          method: "POST",
+          body: JSON.stringify({ enabled: e.target.checked }),
+        });
+        toast(r.enabled ? "已开启开机自启" : "已关闭开机自启", true);
+      } catch (err) {
+        e.target.checked = !e.target.checked;
+        toast(err.message, false);
+      }
+    });
+    $("btnSaveClash").addEventListener("click", async () => {
+      const url = $("clashUrlInput").value.trim();
+      const token = $("clashTokenInput").value.trim();
+      if (url && !/^https?:\/\//i.test(url)) {
+        toast("控制地址需以 http:// 或 https:// 开头", false);
+        return;
+      }
+      try {
+        await api("/api/config", {
+          method: "POST",
+          body: JSON.stringify({ key: "clash_external_url", value: url }),
+        });
+        if (token) {
+          await api("/api/config", {
+            method: "POST",
+            body: JSON.stringify({ key: "clash_auth_token", value: token }),
+          });
+        }
+        $("clashTokenInput").value = "";
+        $("tokenHint").textContent = "已设置（留空则不修改）";
+        toast("外部控制已保存", true);
+      } catch (e) {
+        toast(e.message, false);
+      }
+    });
+
+    /* ===== 事件绑定 ===== */
+    $("btnRefresh").addEventListener("click", () => {
+      loadInstances();
+      loadNodes();
+      api("/api/nodes/scan/status").then((p) => {
+        renderScanMeta(p);
+        applyScanResults(p.results || []);
+      }).catch(() => {});
+    });
+    $("btnScanStop").addEventListener("click", stopScan);
+    $("btnBStart").addEventListener("click", () => batchOp("start"));
+    $("btnBStop").addEventListener("click", () => batchOp("stop"));
+    $("btnBDel").addEventListener("click", () => batchOp("delete"));
+
+    /* ===== 初始化 ===== */
+    loadInstances();
+    loadSettings();
+    loadNodes();
+    api("/api/nodes/scan/status").then((p) => {
+      if (p) {
+        applyScanResults(p.results || []);
+        if (p.status === "running" || p.status === "stopping") startScanPoll();
+      }
+    }).catch(() => {});
+    setInterval(loadInstances, 5000);
+  </script>
+</body>
+</html>

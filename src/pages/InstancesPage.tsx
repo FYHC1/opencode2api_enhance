@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import clsx from 'clsx'
-import { Plus, RefreshCw, Play, Square, Trash2, TestTube2, Copy } from 'lucide-react'
+import { Plus, RefreshCw, Play, Square, Trash2, TestTube2, Copy, Loader2 } from 'lucide-react'
 import { api, type Instance } from '../lib/api'
 
 function statusBadge(st: Instance['status']): [string, string] {
@@ -59,25 +59,43 @@ export default function InstancesPage({
     else setSelected(new Set(instances.map((i) => i.name)))
   }
 
-  const busy = useRef<Set<string>>(new Set())
+// 忙态：optimistic —— 变化触发重渲染；key=实例名，值为该实例正在进行的操作
+  const [pending, setPending] = useState<Record<string, 'start' | 'stop'>>({})
+  const [batchBusy, setBatchBusy] = useState(false)
+
+  // 标记/清除某实例的进行中操作
+  const setOp = (name: string, op: 'start' | 'stop' | null) => {
+    setPending((prev) => {
+      const next = { ...prev }
+      if (op) next[name] = op
+      else delete next[name]
+      return next
+    })
+  }
 
   const doStart = async (name: string) => {
+    setOp(name, 'start')
     try {
       await api.startInstance(name)
       toast(`已启动实例 ${name}`)
       await load()
     } catch (e) {
       toast(String(e), false)
+    } finally {
+      setOp(name, null)
     }
   }
 
   const doStop = async (name: string) => {
+    setOp(name, 'stop')
     try {
       await api.stopInstance(name)
       toast(`已停止实例 ${name}`)
       await load()
     } catch (e) {
       toast(String(e), false)
+    } finally {
+      setOp(name, null)
     }
   }
 
@@ -113,7 +131,8 @@ export default function InstancesPage({
       toast('请先勾选实例')
       return
     }
-    if (kind === 'delete' && !confirm(`确定删除选中的 ${names.length} 个实例？`)) return
+if (kind === 'delete' && !confirm(`确定删除选中的 ${names.length} 个实例？`)) return
+    setBatchBusy(true)
     try {
       const fn =
         kind === 'start' ? api.batchStart : kind === 'stop' ? api.batchStop : api.batchDelete
@@ -127,6 +146,8 @@ export default function InstancesPage({
       await load()
     } catch (e) {
       toast(String(e), false)
+    } finally {
+      setBatchBusy(false)
     }
   }
 
@@ -163,17 +184,17 @@ export default function InstancesPage({
           >
             <Plus size={14} /> 添加实例
           </button>
-          <button
+<button
             onClick={() => void batch('start')}
-            disabled={selected.size === 0}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-white bg-green-600 hover:bg-green-700 disabled:opacity-40"
+            disabled={selected.size === 0 || batchBusy}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-white bg-green-600 hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            <Play size={14} /> 批量启动
+            {batchBusy ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />} 批量启动
           </button>
           <button
             onClick={() => void batch('stop')}
-            disabled={selected.size === 0}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-zinc-700 bg-white border border-zinc-200 hover:bg-zinc-50 disabled:opacity-40"
+            disabled={selected.size === 0 || batchBusy}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-zinc-700 bg-white border border-zinc-200 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-40"
           >
             <Square size={14} /> 批量停止
           </button>
@@ -204,8 +225,11 @@ export default function InstancesPage({
               </tr>
             </thead>
             <tbody>
-              {instances.map((i) => {
-                const [cls, label] = statusBadge(i.status)
+{instances.map((i) => {
+                const isPending = pending[i.name]
+                // 乐观状态：操作中直接显示启动中/停止中，覆盖真实状态徽章
+                const displayStatus: Instance['status'] = isPending === 'stop' ? 'Stopping' : isPending === 'start' ? 'Starting' : i.status
+                const [cls, label] = statusBadge(displayStatus)
                 return (
                   <tr key={i.name} className="border-b border-zinc-50 hover:bg-zinc-50/50">
                     <td className="py-2.5 pl-4">
@@ -254,13 +278,23 @@ export default function InstancesPage({
                     </td>
                     <td className="py-2.5 pl-2 pr-4">
                       <div className="flex items-center justify-end gap-1.5">
-                        {i.status === 'Running' ? (
-                          <button onClick={() => void doStop(i.name)} disabled={busy.current.has(i.name)} className="px-2.5 py-1 rounded-md text-[12px] text-zinc-700 bg-zinc-100 hover:bg-zinc-200">
-                            停止
+{i.status === 'Running' ? (
+                          <button
+                            onClick={() => void doStop(i.name)}
+                            disabled={!!pending[i.name]}
+                            className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[12px] text-zinc-700 bg-zinc-100 hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {pending[i.name] === 'stop' ? <Loader2 size={12} className="animate-spin" /> : null}
+                            {pending[i.name] === 'stop' ? '停止中…' : '停止'}
                           </button>
                         ) : (
-                          <button onClick={() => void doStart(i.name)} disabled={busy.current.has(i.name)} className="px-2.5 py-1 rounded-md text-[12px] text-white bg-green-600 hover:bg-green-700">
-                            启动
+                          <button
+                            onClick={() => void doStart(i.name)}
+                            disabled={!!pending[i.name]}
+                            className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[12px] text-white bg-green-600 hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {pending[i.name] === 'start' ? <Loader2 size={12} className="animate-spin" /> : null}
+                            {pending[i.name] === 'start' ? '启动中…' : '启动'}
                           </button>
                         )}
                         <button onClick={() => void doTest(i.name)} className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[12px] text-teal-700 bg-teal-50 hover:bg-teal-100">

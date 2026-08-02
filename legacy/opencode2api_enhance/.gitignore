@@ -1,0 +1,27 @@
+# Runtime state
+config.json
+stats.json
+*.log
+
+# Rust manager runtime
+/runtime/
+instances.json
+
+# Build output
+dist/
+bin/
+opencode2api
+opencode2api.exe
+sing-box.exe
+
+# Editor and OS files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+.env
+
+
+# Added by cargo
+
+/target
