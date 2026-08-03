@@ -29,9 +29,13 @@ UI 参照 Windsurf Account Manager 的浅色官网风格：Tauri 2 无边框窗�
 3. **节点扫描**页 →「一键扫描全部」→ 勾选可用 →「添加选中为实例」
 4. **实例**页 →「启动」→ 用 `http://127.0.0.1:{实例端口}/v1` 作为 API 地址
 
+## 常见问题
+
+使用中遇到问题？先看 [常见问题（FAQ）](docs/FAQ.md) —— 包含 `max_tokens` 超限报错、Token 统计疑问等。
+
 ## 构建与打包
 
-依赖：Node.js ≥ 18、Rust（stable-x86_64-pc-windows-msvc）、Windows 需要 MSVC Build Tools + Windows SDK，以及 `bin/` 下的 `opencode2api.exe` 与 `sing-box.exe`（内嵌源，可从 `opencode2api_enhance/bin` 复制或独立构建）。
+依赖：Node.js ≥ 18、Rust（stable-x86\_64-pc-windows-msvc）、Windows 需要 MSVC Build Tools + Windows SDK，以及 `bin/` 下的 `opencode2api.exe` 与 `sing-box.exe`（内嵌源，可从 `opencode2api_enhance/bin` 复制或独立构建）。
 
 ```bash
 npm install
@@ -50,12 +54,14 @@ npm run tauri:dev
 
 运行时数据（配置文件、实例清单、日志）存 `%APPDATA%\opencode2api-manager\`：
 
-| 路径 | 说明 |
-|---|---|
-| `config.json` | 应用配置（Clash 外部控制、默认密码） |
-| `instances.json` | 实例清单 |
-| `runtime\` | 各实例的运行目录与日志 |
-| （exe 旁）`bin\` | 释放的 opencode2api.exe / sing-box.exe |
+
+| 路径               | 说明                                  |
+| ---------------- | ----------------------------------- |
+| `config.json`    | 应用配置（Clash 外部控制、默认密码）               |
+| `instances.json` | 实例清单                                |
+| `runtime\`       | 各实例的运行目录与日志                         |
+| （exe 旁）`bin\`    | 释放的 opencode2api.exe / sing-box.exe |
+
 
 ## 架构
 
@@ -102,6 +108,6 @@ scripts/                  # make-portable.sh 打包脚本
 
 ## 上游与致谢
 
-- 功能迁移自 `opencode2api_enhance`（多实例管理器思路）
-- Go 代理核心源于 [`6Kmfi6HP/opencode2api`](https://github.com/6Kmfi6HP/opencode2api)（upstream，只拉取不推送）
+- Go 代理核心源于 [`6Kmfi6HP/opencode2api`](https://github.com/6Kmfi6HP/opencode2api)
 - 前端设计样式参考 Windsurf Account Manager
+
