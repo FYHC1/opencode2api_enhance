@@ -35,13 +35,22 @@ UI 参照 Windsurf Account Manager 的浅色官网风格：Tauri 2 无边框窗�
 
 ## 构建与打包
 
-依赖：Node.js ≥ 18、Rust（stable-x86\_64-pc-windows-msvc）、Windows 需要 MSVC Build Tools + Windows SDK，以及 `bin/` 下的 `opencode2api.exe` 与 `sing-box.exe`（内嵌源，可从 `opencode2api_enhance/bin` 复制或独立构建）。
+依赖：Node.js ≥ 18、Rust（stable-x86\_64-pc-windows-msvc）、Windows 需要 MSVC Build Tools + Windows SDK。`bin/` 下的两个内嵌 exe 不入库，本地构建前需自行准备，见下文「内嵌二进制（bin/）」。
 
 ```bash
 npm install
 npm run tauri:build -- --no-bundle   # 产出 src-tauri/target/release/opencode2api.exe（含内嵌子程序）
 bash scripts/make-portable.sh        # 组装 dist/opencode2api-manager-<ver>-portable.zip
 ```
+
+### 内嵌二进制（bin/）
+
+`bin/` 被 `.gitignore` 忽略，`opencode2api.exe` 与 `sing-box.exe` 均不入库，本地构建前需自行准备：
+
+- `opencode2api.exe`：由本仓库 Go 源码构建（`go build -trimpath -ldflags "-s -w" -o bin/opencode2api.exe .`）
+- `sing-box.exe`：从 [sing-box 官方 Release](https://github.com/SagerNet/sing-box/releases) 下载，当前与 CI 一致固定 v1.13.15
+
+远程构建无需手动准备：GitHub Actions 会自动构建 Go 核心、下载 sing-box 并完成打包（见 `.github/workflows/build-release.yml`）。
 
 开发热更：
 
