@@ -20,6 +20,8 @@ export default function InstancesPage({
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [addOpen, setAddOpen] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
+  // 手动刷新进度：{ done: 已检查数量, total: 实例总数 }，null = 不在刷新
+  const [refreshProgress, setRefreshProgress] = useState<{ done: number; total: number } | null>(null)
 
   const load = useCallback(async (silent = true) => {
     try {
@@ -29,18 +31,45 @@ export default function InstancesPage({
     }
   }, [toast])
 
-  // 自动轮询（静默）
+  // 首次加载查询一次实例状态，之后不自动轮询，由用户点击刷新按钮手动刷新
   useEffect(() => {
-    load()
-    const t = setInterval(() => void load(true), 3000)
-    return () => clearInterval(t)
+    void load()
   }, [load])
 
-  // 手动刷新（带 loading）
+  // 手动刷新：按名称分批（每批并发 CHECK_BATCH）调用后端校正状态，
+  // 每批返回后更新列表并累计进度，全部完成后按钮文字恢复「刷新」
+  const CHECK_BATCH = 5
   const doRefresh = async () => {
+    const names = instances.map((i) => i.name)
+    const total = names.length
+    if (total === 0) {
+      await load(false)
+      return
+    }
     setRefreshing(true)
-    await load(false)
-    setRefreshing(false)
+    setRefreshProgress({ done: 0, total })
+    let done = 0
+    try {
+      for (let i = 0; i < names.length; i += CHECK_BATCH) {
+        const batch = names.slice(i, i + CHECK_BATCH)
+        const updated = await api.refreshStates(batch)
+        if (updated.length > 0) {
+          // 函数式合并，避免并发批次间基于旧 state 互相覆盖
+          setInstances((prev) => {
+            const map = new Map(prev.map((it) => [it.name, it]))
+            for (const u of updated) map.set(u.name, u)
+            return [...map.values()]
+          })
+        }
+        done += updated.length
+        setRefreshProgress({ done, total })
+      }
+    } catch (e) {
+      toast(String(e), false)
+    } finally {
+      setRefreshing(false)
+      setRefreshProgress(null)
+    }
   }
 
   const toggle = (name: string) => {
@@ -173,10 +202,11 @@ if (kind === 'delete' && !confirm(`确定删除选中的 ${names.length} 个实�
         <div className="flex items-center gap-2">
           <button
             onClick={() => void doRefresh()}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-zinc-700 bg-white border border-zinc-200 hover:bg-zinc-50"
+            disabled={refreshing}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-zinc-700 bg-white border border-zinc-200 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-70"
           >
             <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
-            {refreshing ? '刷新中…' : '刷新'}
+            {refreshProgress ? `刷新 ${refreshProgress.done} / ${refreshProgress.total}` : '刷新'}
           </button>
           <button
             onClick={() => setAddOpen(true)}

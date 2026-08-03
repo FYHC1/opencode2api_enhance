@@ -62,6 +62,6 @@ jobs:
         with:
           tagName: app-v__VERSION__
           releaseName: "opencode2api v__VERSION__"
-          releaseBody: "自动打包（由包含「编译」的提交触发）"
+          releaseBody: ${{ github.event.head_commit.message }}
           releaseDraft: false
           prerelease: false

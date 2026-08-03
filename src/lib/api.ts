@@ -107,6 +107,35 @@ export type BinariesInfo = {
   sb_exists: boolean
 }
 
+// ─── Token 统计（按实例） ─────────────────────────────────────────────
+
+export type ModelStat = {
+  model: string
+  requests: number
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+}
+
+export type InstanceStat = {
+  name: string
+  /** 实例目录存在但实例列表中已无（已删除/历史实例）时为 false */
+  exists: boolean
+  requests: number
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  models: ModelStat[]
+}
+
+export type StatsSummary = {
+  total_requests: number
+  total_prompt_tokens: number
+  total_completion_tokens: number
+  total_tokens: number
+  instances: InstanceStat[]
+}
+
 // ─── Tauri command 封装 ─────────────────────────────────────────────
 
 export const api = {
@@ -115,6 +144,8 @@ export const api = {
 
   // 实例
   listInstances: () => invoke<Instance[]>('list_instances'),
+  /** 手动刷新指定实例的状态（返回这些实例的最新状态） */
+  refreshStates: (names: string[]) => invoke<Instance[]>('refresh_states', { names }),
   addInstance: (name: string, port: number, node: string, password: string) =>
     invoke<Instance>('add_instance', { name, port, node, password }),
   removeInstance: (name: string) => invoke<void>('remove_instance', { name }),
@@ -162,4 +193,7 @@ export const api = {
 
   // 二进制信息
   getBinariesInfo: () => invoke<BinariesInfo>('get_binaries_info'),
+
+  // Token 统计（按实例）
+  getStats: () => invoke<StatsSummary>('get_stats'),
 }
