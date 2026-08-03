@@ -30,6 +30,8 @@ pub fn create_manager() -> InstanceManager {
     let (instances_path, binary_dir, runtime_dir) = manager_paths();
     let mut manager = InstanceManager::new(instances_path, binary_dir, runtime_dir);
     let _ = manager.load();
+    // 启动即校正：清理"进程已死但状态残留 Running"的僵尸状态
+    let _ = manager.reconcile_states();
     manager
 }
 
@@ -184,7 +186,21 @@ pub fn stop_all_instances(state: &tauri::State<'_, AppState>) {
 pub fn list_instances(state: tauri::State<'_, AppState>) -> Result<Vec<Instance>, String> {
     let mut mgr = lock_manager(&state)?;
     let _ = mgr.load();
+    // 首次加载时校正状态，保证前端显示与真实进程一致
+    let _ = mgr.reconcile_states();
     Ok(mgr.list_instances().to_vec())
+}
+
+/// 手动刷新：只校正指定名称的实例状态，返回这些实例的最新状态。
+/// 前端分批（每批少量并发）调用，按返回数量累计显示进度。
+#[tauri::command]
+pub fn refresh_states(
+    state: tauri::State<'_, AppState>,
+    names: Vec<String>,
+) -> Result<Vec<Instance>, String> {
+    let mut mgr = lock_manager(&state)?;
+    let _ = mgr.load();
+    mgr.reconcile_batch(&names).map_err(|e| e.to_string())
 }
 
 /// 生成不重复的实例名：实例1、实例2…
@@ -707,5 +723,242 @@ pub fn toggle_maximize(app: tauri::AppHandle) {
                 let _ = w.maximize();
             }
         }
+    }
+}
+
+// ======================== Token 统计（按实例） ========================
+
+/// 单个模型维度的统计（来自 Go 核心 stats.json 的 models 项）
+#[derive(Debug, Serialize)]
+pub struct ModelStat {
+    pub model: String,
+    pub requests: i64,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub total_tokens: i64,
+}
+
+/// 单个实例的统计汇总（按实例目录聚合 stats.json）
+#[derive(Debug, Serialize)]
+pub struct InstanceStat {
+    pub name: String,
+    /// 目录存在但实例列表中没有（已删除/历史实例）时为 false
+    pub exists: bool,
+    pub requests: i64,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub total_tokens: i64,
+    pub models: Vec<ModelStat>,
+}
+
+/// 全局统计总览（全部实例求和）
+#[derive(Debug, Serialize)]
+pub struct StatsSummary {
+    pub total_requests: i64,
+    pub total_prompt_tokens: i64,
+    pub total_completion_tokens: i64,
+    pub total_tokens: i64,
+    pub instances: Vec<InstanceStat>,
+}
+
+/// Go 核心 stats.json 的解析结构（字段名与 Go 侧 JSON 一致）
+#[derive(Debug, Deserialize)]
+struct GoModelStats {
+    #[serde(default)]
+    request_count: i64,
+    #[serde(default)]
+    prompt_tokens: i64,
+    #[serde(default)]
+    completion_tokens: i64,
+    #[serde(default)]
+    total_tokens: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct GoStatsData {
+    // 只取 models 汇总：Go 侧 total_requests 与 sum(models.request_count) 等价，
+    // 用 models 求和保证实例内一致性；多余字段由 serde 自动忽略
+    #[serde(default)]
+    models: std::collections::HashMap<String, GoModelStats>,
+}
+
+/// 按实例读取 token 统计：扫描 runtime/ 下各实例目录的 stats.json，
+/// 汇总出全局总览 + 实例列表（按总计 token 降序）。
+/// - 实例目录存在但实例列表中没有 → exists=false（已删除，统计保留）
+/// - stats.json 缺失或解析失败 → 跳过该目录，不报错
+#[tauri::command]
+pub fn get_stats() -> Result<StatsSummary, String> {
+    let (_, _, runtime_dir) = manager_paths();
+
+    let manager = create_manager();
+    let known_names: Vec<String> = manager
+        .list_instances()
+        .iter()
+        .map(|i| i.name.clone())
+        .collect();
+
+    Ok(aggregate_stats(&runtime_dir, &known_names))
+}
+
+/// 聚合逻辑（独立函数便于单元测试）：遍历 runtime_dir 各子目录读取 stats.json。
+fn aggregate_stats(runtime_dir: &std::path::Path, known_names: &[String]) -> StatsSummary {
+    let mut instances: Vec<InstanceStat> = Vec::new();
+    let entries = match std::fs::read_dir(runtime_dir) {
+        Ok(e) => e,
+        Err(_) => return StatsSummary {
+            total_requests: 0,
+            total_prompt_tokens: 0,
+            total_completion_tokens: 0,
+            total_tokens: 0,
+            instances,
+        },
+    };
+
+    for entry in entries.flatten() {
+        let dir_path = entry.path();
+        if !dir_path.is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        let stats_path = dir_path.join("stats.json");
+        if !stats_path.exists() {
+            continue;
+        }
+        let data = match std::fs::read_to_string(&stats_path) {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+        let go: GoStatsData = match serde_json::from_str(&data) {
+            Ok(g) => g,
+            Err(_) => continue,
+        };
+
+        let mut requests = 0i64;
+        let mut prompt_tokens = 0i64;
+        let mut completion_tokens = 0i64;
+        let mut total_tokens = 0i64;
+        let mut models: Vec<ModelStat> = Vec::new();
+
+        for (model, ms) in go.models {
+            requests += ms.request_count;
+            prompt_tokens += ms.prompt_tokens;
+            completion_tokens += ms.completion_tokens;
+            total_tokens += ms.total_tokens;
+            models.push(ModelStat {
+                model,
+                requests: ms.request_count,
+                prompt_tokens: ms.prompt_tokens,
+                completion_tokens: ms.completion_tokens,
+                total_tokens: ms.total_tokens,
+            });
+        }
+        // 模型明细按总计降序
+        models.sort_by(|a, b| b.total_tokens.cmp(&a.total_tokens));
+
+        let exists = known_names.contains(&name);
+        instances.push(InstanceStat {
+            name,
+            exists,
+            requests,
+            prompt_tokens,
+            completion_tokens,
+            total_tokens,
+            models,
+        });
+    }
+
+    // 实例按总计 token 降序
+    instances.sort_by(|a, b| b.total_tokens.cmp(&a.total_tokens));
+
+    StatsSummary {
+        total_requests: instances.iter().map(|i| i.requests).sum(),
+        total_prompt_tokens: instances.iter().map(|i| i.prompt_tokens).sum(),
+        total_completion_tokens: instances.iter().map(|i| i.completion_tokens).sum(),
+        total_tokens: instances.iter().map(|i| i.total_tokens).sum(),
+        instances,
+    }
+}
+
+#[cfg(test)]
+mod stats_tests {
+    use super::*;
+    use std::fs;
+
+    fn write_stats(dir: &std::path::Path, json: &str) {
+        fs::create_dir_all(dir).unwrap();
+        fs::write(dir.join("stats.json"), json).unwrap();
+    }
+
+    #[test]
+    fn test_stats_aggregate_basic() {
+        let root = std::env::temp_dir().join("opencode2api-stats-test-basic");
+        let _ = fs::remove_dir_all(&root);
+        write_stats(&root.join("user1"), r#"{"total_requests":2,"models":{"gpt-4o-mini":{"request_count":2,"prompt_tokens":400,"completion_tokens":70,"total_tokens":470}}}"#);
+        write_stats(&root.join("user2"), r#"{"total_requests":1,"models":{"claude-3-5":{"request_count":1,"prompt_tokens":100,"completion_tokens":30,"total_tokens":130}}}"#);
+
+        let known = vec!["user1".to_string(), "user2".to_string()];
+        let s = aggregate_stats(&root, &known);
+
+        assert_eq!(s.total_requests, 3);
+        assert_eq!(s.total_prompt_tokens, 500);
+        assert_eq!(s.total_completion_tokens, 100);
+        assert_eq!(s.total_tokens, 600);
+        assert_eq!(s.instances.len(), 2);
+        // 按总计降序：user1(470) 在前
+        assert_eq!(s.instances[0].name, "user1");
+        assert_eq!(s.instances[0].exists, true);
+        assert_eq!(s.instances[0].models.len(), 1);
+        assert_eq!(s.instances[0].models[0].model, "gpt-4o-mini");
+        assert_eq!(s.instances[1].exists, true);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_stats_deleted_instance_marked() {
+        let root = std::env::temp_dir().join("opencode2api-stats-test-deleted");
+        let _ = fs::remove_dir_all(&root);
+        // user_old 目录存在但不在实例列表中（已删除）
+        write_stats(&root.join("user_old"), r#"{"total_requests":5,"models":{"a":{"request_count":5,"prompt_tokens":50,"completion_tokens":5,"total_tokens":55}}}"#);
+        write_stats(&root.join("user_live"), r#"{"total_requests":1,"models":{"b":{"request_count":1,"prompt_tokens":10,"completion_tokens":1,"total_tokens":11}}}"#);
+
+        let known = vec!["user_live".to_string()];
+        let s = aggregate_stats(&root, &known);
+
+        assert_eq!(s.instances.len(), 2);
+        let old = s.instances.iter().find(|i| i.name == "user_old").unwrap();
+        assert_eq!(old.exists, false);
+        let live = s.instances.iter().find(|i| i.name == "user_live").unwrap();
+        assert_eq!(live.exists, true);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_stats_skips_missing_or_invalid() {
+        let root = std::env::temp_dir().join("opencode2api-stats-test-skip");
+        let _ = fs::remove_dir_all(&root);
+        // 无 stats.json 的目录
+        fs::create_dir_all(root.join("empty_dir")).unwrap();
+        // stats.json 是坏 JSON
+        write_stats(&root.join("bad_json"), r#"{not-json"#);
+        // 正常实例
+        write_stats(&root.join("good"), r#"{"total_requests":1,"models":{"m":{"request_count":1,"prompt_tokens":9,"completion_tokens":1,"total_tokens":10}}}"#);
+
+        let s = aggregate_stats(&root, &["good".to_string()]);
+        assert_eq!(s.instances.len(), 1);
+        assert_eq!(s.instances[0].name, "good");
+        assert_eq!(s.total_requests, 1);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_stats_models_sorted_desc() {
+        let root = std::env::temp_dir().join("opencode2api-stats-test-sort");
+        let _ = fs::remove_dir_all(&root);
+        write_stats(&root.join("u"), r#"{"total_requests":2,"models":{"small":{"request_count":1,"prompt_tokens":1,"completion_tokens":1,"total_tokens":2},"big":{"request_count":1,"prompt_tokens":100,"completion_tokens":50,"total_tokens":150}}}"#);
+
+        let s = aggregate_stats(&root, &["u".to_string()]);
+        assert_eq!(s.instances[0].models[0].model, "big");
+        assert_eq!(s.instances[0].models[1].model, "small");
+        let _ = fs::remove_dir_all(&root);
     }
 }

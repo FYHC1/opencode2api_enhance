@@ -209,7 +209,10 @@ let singbox_child = no_window(&mut Command::new(&singbox_bin))
         let oc_stderr = fs::File::create(log_dir.join("opencode2api.err.log"))
             .context("创建 opencode2api 错误日志失败")?;
 
-let oc_child = no_window(&mut Command::new(&oc_bin))
+	let oc_child = no_window(&mut Command::new(&oc_bin))
+            // 工作目录设为实例专属目录：Go 核心把 stats.json 写入当前工作目录，
+            // 隔离后每个实例的 token 统计独立落盘到 runtime/{实例名}/stats.json
+            .current_dir(&instance_dir)
             .arg("-port")
             .arg(self.instances[idx].port.to_string())
             .arg("-config")
@@ -489,6 +492,100 @@ let output = no_window(&mut Command::new("taskkill"))
     }
 }
 
+impl InstanceManager {
+    /// 状态校正：磁盘上标记 Running/Starting 的实例，若对应进程已不存在，
+    /// 则修正为 Stopped 并清空 PID（防"僵尸运行中"状态）。
+    /// 仅在发生变更时写盘。启动时与 list_instances 轮询时调用。
+    ///
+    /// 实现说明：一次枚举整张系统进程表，然后批量内存查找。
+    /// 避免对每个实例 spawn 一次 tasklist 子进程（实例多时会卡死 UI，
+    /// 例如 5000 个实例 × 串行子进程 ≈ 分钟级）。
+    pub fn reconcile_states(&mut self) -> Result<()> {
+        // 先收集待检查的 (下标, PID)，避免迭代时同时持有可变借用
+        let to_check: Vec<(usize, u32)> = self
+            .instances
+            .iter()
+            .enumerate()
+            .filter(|(_, i)| {
+                matches!(
+                    i.status,
+                    InstanceStatus::Running | InstanceStatus::Starting
+                )
+            })
+            .filter_map(|(idx, i)| i.pid.map(|p| (idx, p)))
+            .collect();
+        if to_check.is_empty() {
+            return Ok(());
+        }
+
+        // 一次性枚举系统进程
+        use sysinfo::{Pid, System};
+        let mut sys = System::new_all();
+        sys.refresh_processes();
+
+        let mut changed = false;
+        for (idx, pid) in to_check {
+            if sys.process(Pid::from_u32(pid)).is_none() {
+                let inst = &mut self.instances[idx];
+                inst.status = InstanceStatus::Stopped;
+                inst.pid = None;
+                inst.singbox_pid = None;
+                changed = true;
+            }
+        }
+        if changed {
+            self.save()?;
+        }
+        Ok(())
+    }
+
+    /// 只校正指定名称的实例（进程存活检查），返回这些实例的最新状态。
+    /// 仍是一次枚举进程表（快），仅更新传入名称的实例；
+    /// 供前端手动刷新时分批调用，进度由前端按返回数量累计。
+    pub fn reconcile_batch(&mut self, names: &[String]) -> Result<Vec<Instance>> {
+        let to_check: Vec<(usize, u32)> = self
+            .instances
+            .iter()
+            .enumerate()
+            .filter(|(_, i)| names.iter().any(|n| n == &i.name))
+            .filter(|(_, i)| {
+                matches!(
+                    i.status,
+                    InstanceStatus::Running | InstanceStatus::Starting
+                )
+            })
+            .filter_map(|(idx, i)| i.pid.map(|p| (idx, p)))
+            .collect();
+
+        if !to_check.is_empty() {
+            use sysinfo::{Pid, System};
+            let mut sys = System::new_all();
+            sys.refresh_processes();
+
+            let mut changed = false;
+            for (idx, pid) in to_check {
+                if sys.process(Pid::from_u32(pid)).is_none() {
+                    let inst = &mut self.instances[idx];
+                    inst.status = InstanceStatus::Stopped;
+                    inst.pid = None;
+                    inst.singbox_pid = None;
+                    changed = true;
+                }
+            }
+            if changed {
+                self.save()?;
+            }
+        }
+
+        Ok(self
+            .instances
+            .iter()
+            .filter(|i| names.iter().any(|n| n == &i.name))
+            .cloned()
+            .collect())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -546,5 +643,88 @@ mod tests {
         let r = manager.start_instance("nobody");
         assert!(r.is_err());
         fs::remove_dir_all(temp_dir("startnf")).ok();
+    }
+
+    #[test]
+    fn test_reconcile_marks_dead_running_as_stopped() {
+        let mut manager = new_manager("reconcile");
+        manager
+            .add_instance("u1".to_string(), 8088, "n".to_string(), "".to_string(), "".to_string())
+            .unwrap();
+        // 构造"进程已死但状态残留 Running"的僵尸状态
+        manager.instances[0].status = InstanceStatus::Running;
+        manager.instances[0].pid = Some(u32::MAX); // 必然不存在的 PID
+        manager.instances[0].singbox_pid = Some(u32::MAX);
+        manager.reconcile_states().unwrap();
+        assert_eq!(manager.instances[0].status, InstanceStatus::Stopped);
+        assert_eq!(manager.instances[0].pid, None);
+        assert_eq!(manager.instances[0].singbox_pid, None);
+        fs::remove_dir_all(temp_dir("reconcile")).ok();
+    }
+
+    #[test]
+    fn test_reconcile_keeps_alive_running() {
+        let mut manager = new_manager("reconcile_alive");
+        manager
+            .add_instance("u1".to_string(), 8088, "n".to_string(), "".to_string(), "".to_string())
+            .unwrap();
+        // 当前测试进程自身是活着的，Running 应保留
+        manager.instances[0].status = InstanceStatus::Running;
+        manager.instances[0].pid = Some(std::process::id());
+        manager.reconcile_states().unwrap();
+        assert_eq!(manager.instances[0].status, InstanceStatus::Running);
+        assert!(manager.instances[0].pid.is_some());
+        fs::remove_dir_all(temp_dir("reconcile_alive")).ok();
+    }
+
+    #[test]
+    fn test_reconcile_leaves_stopped_untouched() {
+        let mut manager = new_manager("reconcile_stopped");
+        manager
+            .add_instance("u1".to_string(), 8088, "n".to_string(), "".to_string(), "".to_string())
+            .unwrap();
+        manager.instances[0].status = InstanceStatus::Stopped;
+        manager.instances[0].pid = Some(u32::MAX); // 已停止状态不校验进程
+        manager.reconcile_states().unwrap();
+        assert_eq!(manager.instances[0].status, InstanceStatus::Stopped);
+        // 已停止实例不应被误改
+        assert!(manager.instances[0].pid.is_some());
+        fs::remove_dir_all(temp_dir("reconcile_stopped")).ok();
+    }
+
+    #[test]
+    fn test_reconcile_batch_only_updates_named_instances() {
+        let mut manager = new_manager("reconcile_batch");
+        manager
+            .add_instance("dead".to_string(), 8088, "n".to_string(), "".to_string(), "".to_string())
+            .unwrap();
+        manager
+            .add_instance("alive".to_string(), 8089, "n".to_string(), "".to_string(), "".to_string())
+            .unwrap();
+        manager
+            .add_instance("skip".to_string(), 8090, "n".to_string(), "".to_string(), "".to_string())
+            .unwrap();
+        // dead：进程必然不存在，应被校正为 Stopped
+        manager.instances[0].status = InstanceStatus::Running;
+        manager.instances[0].pid = Some(u32::MAX);
+        // alive：当前测试进程活着，Running 应保留
+        manager.instances[1].status = InstanceStatus::Running;
+        manager.instances[1].pid = Some(std::process::id());
+        // skip：僵尸状态但不传入名字，不应被校正
+        manager.instances[2].status = InstanceStatus::Running;
+        manager.instances[2].pid = Some(u32::MAX);
+
+        let updated = manager
+            .reconcile_batch(&["dead".to_string(), "alive".to_string()])
+            .unwrap();
+        assert_eq!(manager.instances[0].status, InstanceStatus::Stopped);
+        assert_eq!(manager.instances[1].status, InstanceStatus::Running);
+        // 未传入的实例保持原状（仍是僵尸 Running）
+        assert_eq!(manager.instances[2].status, InstanceStatus::Running);
+        // 返回的实例数与传入一致，且按原顺序
+        assert_eq!(updated.len(), 2);
+        assert_eq!(updated[0].name, "dead");
+        assert_eq!(updated[1].name, "alive");
+        fs::remove_dir_all(temp_dir("reconcile_batch")).ok();
     }
 }

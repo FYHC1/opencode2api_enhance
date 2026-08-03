@@ -32,6 +32,8 @@ pub fn run() {
     let (instances_path, _, runtime_dir) = commands::manager_paths();
     let mut manager = instance::InstanceManager::new(instances_path, binary_dir, runtime_dir);
     let _ = manager.load();
+    // 启动即校正：上次非正常退出留下的"Running 但进程已死"状态修正为 Stopped
+    let _ = manager.reconcile_states();
 
     tauri::Builder::default()
         .manage(AppState {
@@ -41,6 +43,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::list_nodes,
             commands::list_instances,
+            commands::refresh_states,
             commands::add_instance,
             commands::remove_instance,
             commands::start_instance,
@@ -60,6 +63,7 @@ pub fn run() {
             commands::autostart_get,
             commands::autostart_set,
             commands::get_binaries_info,
+            commands::get_stats,
             commands::hide_to_tray,
             commands::toggle_maximize,
             commands::quit_app
