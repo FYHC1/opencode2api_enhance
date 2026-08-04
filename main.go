@@ -203,12 +203,77 @@ var (
 	socks5ClientAddr string       // 缓存对应的代理地址
 )
 
-func getHTTPClient() *http.Client {
+// ======================== 代理健康池 ========================
+
+type socks5HealthState struct {
+	failures int
+	until    time.Time
+}
+
+var (
+	socks5HealthMu sync.Mutex
+	socks5Health   = map[string]socks5HealthState{}
+)
+
+// pickHealthyProxy 从 start 位置起轮询，跳过冷却中代理；全冷→返回冷却最早结束的兜底。
+func pickHealthyProxy(proxies []Socks5Proxy, start int) Socks5Proxy {
+	now := time.Now()
+	var fallback Socks5Proxy
+	var fallbackUntil time.Time
+	socks5HealthMu.Lock()
+	defer socks5HealthMu.Unlock()
+	for offset := 0; offset < len(proxies); offset++ {
+		proxy := proxies[(start+offset)%len(proxies)]
+		state := socks5Health[proxy.Addr]
+		if state.until.IsZero() || !now.Before(state.until) {
+			return proxy
+		}
+		if fallback.Addr == "" || state.until.Before(fallbackUntil) {
+			fallback = proxy
+			fallbackUntil = state.until
+		}
+	}
+	return fallback
+}
+
+// markSocks5Result 记录代理健康/冷却状态。
+// 失败分类：连接错→20s、429/限流→45s、连续 3 次→2min。
+func markSocks5Result(addr string, status int, requestErr error) {
+	if addr == "" {
+		return
+	}
+	failed := requestErr != nil || status == http.StatusTooManyRequests ||
+		status == http.StatusBadGateway || status == http.StatusServiceUnavailable ||
+		status == http.StatusGatewayTimeout
+	socks5HealthMu.Lock()
+	defer socks5HealthMu.Unlock()
+	if !failed {
+		if status >= 200 && status < 300 {
+			delete(socks5Health, addr)
+		}
+		return
+	}
+	state := socks5Health[addr]
+	state.failures++
+	cooldown := 20 * time.Second
+	if status == http.StatusTooManyRequests {
+		cooldown = 45 * time.Second
+	}
+	if state.failures >= 3 {
+		cooldown = 2 * time.Minute
+	}
+	state.until = time.Now().Add(cooldown)
+	socks5Health[addr] = state
+}
+
+// getHTTPClientWithProxy 返回 HTTP 客户端及所用代理地址。
+// round_robin 模式下通过 pickHealthyProxy 跳过冷却中代理。
+func getHTTPClientWithProxy() (*http.Client, string) {
 	socks5Mu.RLock()
 	defer socks5Mu.RUnlock()
 
 	if activeSocks5 == "" {
-		return httpClient
+		return httpClient, ""
 	}
 
 	var proxy Socks5Proxy
@@ -216,16 +281,15 @@ func getHTTPClient() *http.Client {
 
 	if activeSocks5 == socks5RR {
 		if len(socks5Proxies) == 0 {
-			return httpClient
+			return httpClient, ""
 		}
-		idx := atomic.AddUint32(&socks5RRIndex, 1) % uint32(len(socks5Proxies))
-		proxy = socks5Proxies[idx]
+		start := int(atomic.AddUint32(&socks5RRIndex, 1) % uint32(len(socks5Proxies)))
+		proxy = pickHealthyProxy(socks5Proxies, start)
 		useRR = true
 	} else {
 		if socks5Client != nil && socks5ClientAddr == activeSocks5 {
-			return socks5Client
+			return socks5Client, activeSocks5
 		}
-
 		var found bool
 		for i := range socks5Proxies {
 			if socks5Proxies[i].Addr == activeSocks5 {
@@ -235,7 +299,7 @@ func getHTTPClient() *http.Client {
 			}
 		}
 		if !found {
-			return httpClient
+			return httpClient, ""
 		}
 	}
 
@@ -254,17 +318,43 @@ func getHTTPClient() *http.Client {
 		socks5Client = client
 		socks5ClientAddr = activeSocks5
 	}
+	return client, proxy.Addr
+}
+
+
+func getHTTPClient() *http.Client {
+	client, _ := getHTTPClientWithProxy()
 	return client
 }
 
 // getHTTPClientForTier 根据层级返回 HTTP 客户端
 // 付费层走直连，免费层（默认）走 SOCKS5 代理（如配置）
 func getHTTPClientForTier(tier TierType) *http.Client {
-	if tier == TierPaid {
-		return httpClient
-	}
-	return getHTTPClient()
+	client, _ := getHTTPClientForTierWithProxy(tier)
+	return client
 }
+
+func getHTTPClientForTierWithProxy(tier TierType) (*http.Client, string) {
+	if tier == TierPaid {
+		return httpClient, ""
+	}
+	return getHTTPClientWithProxy()
+}
+
+// getStreamingHTTPClientForTierWithProxy keeps the connection/setup limits of
+// the normal client but removes http.Client.Timeout. That field is a total
+// request lifetime limit, so using it for SSE would terminate healthy long
+// reasoning streams after exactly five minutes.
+func getStreamingHTTPClientForTierWithProxy(tier TierType) (*http.Client, string) {
+	client, proxyAddr := getHTTPClientForTierWithProxy(tier)
+	if client == nil || client.Timeout == 0 {
+		return client, proxyAddr
+	}
+	streamClient := *client
+	streamClient.Timeout = 0
+	return &streamClient, proxyAddr
+}
+
 
 // ======================== 随机 ID ========================
 
@@ -927,18 +1017,54 @@ func applyConfig(cfg AppConfig) {
 	forceDisableThinking = cfg.ForceDisableThinking
 
 	socks5Mu.Lock()
+	proxiesChanged := false
 	if cfg.Socks5Proxies != nil {
-		socks5Proxies = cfg.Socks5Proxies
+		proxiesChanged = !sameSocks5Proxies(socks5Proxies, cfg.Socks5Proxies)
+		socks5Proxies = append([]Socks5Proxy(nil), cfg.Socks5Proxies...)
 	}
-	if activeSocks5 != cfg.ActiveSocks5 {
+	if activeSocks5 != cfg.ActiveSocks5 || proxiesChanged {
 		activeSocks5 = cfg.ActiveSocks5
 		socks5Client = nil
 		socks5ClientAddr = ""
 		atomic.StoreUint32(&socks5RRIndex, 0)
 	}
 	socks5Mu.Unlock()
+	if proxiesChanged {
+		socks5HealthMu.Lock()
+		socks5Health = map[string]socks5HealthState{}
+		socks5HealthMu.Unlock()
+	}
 
 }
+
+func sameSocks5Proxies(a, b []Socks5Proxy) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func getSocks5ProxyCount() int {
+	socks5Mu.RLock()
+	defer socks5Mu.RUnlock()
+	return len(socks5Proxies)
+}
+
+// maxRouteRetries 返回同模型路由重试上限：多代理时按代理数扩展，否则沿用上游重试上限。
+func maxRouteRetries() int {
+	proxyCount := getSocks5ProxyCount()
+	if proxyCount > maxUpstreamRetries {
+		return proxyCount
+	}
+	return maxUpstreamRetries
+}
+
+
 
 // startConfigWatcher applies config file changes without restarting the
 // process, because restarting a live HTTP server drops active SSE streams.
@@ -1716,16 +1842,6 @@ const (
 
 func callOpenCodeAPI(upstreamBody []byte, modelID string, auth UpstreamAuth) ([]byte, int, http.Header, error) {
 	initOCSession()
-	candidates := getCandidateModels(auth, modelID)
-	modelsToTry := []string{modelID}
-	for _, m := range candidates {
-		if m != modelID {
-			modelsToTry = append(modelsToTry, m)
-		}
-	}
-	if len(modelsToTry) == 0 {
-		modelsToTry = []string{modelID}
-	}
 
 	var bodyMap map[string]any
 	if err := json.Unmarshal(upstreamBody, &bodyMap); err != nil {
@@ -1739,37 +1855,42 @@ func callOpenCodeAPI(upstreamBody []byte, modelID string, auth UpstreamAuth) ([]
 	var lastBody []byte
 	var lastStatus int
 	var lastHeader http.Header
-	for i, tryModel := range modelsToTry {
-		up, err := buildOCRequestWithEndpoint(tryModel, bodyMap, auth, useGoEndpoint)
+	maxRetries := maxRouteRetries()
+	for retryCount <= maxRetries {
+		up, err := buildOCRequestWithEndpoint(modelID, bodyMap, auth, useGoEndpoint)
 		if err != nil {
 			lastErr = err
-			continue
+			break
 		}
-		client := getHTTPClientForTier(auth.tier())
+		client, proxyAddr := getHTTPClientForTierWithProxy(auth.tier())
 		resp, err := client.Do(up)
 		if err != nil {
+			markSocks5Result(proxyAddr, 0, err)
 			lastErr = err
+			retryCount++
 			continue
 		}
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			markSocks5Result(proxyAddr, resp.StatusCode, nil)
 			b, readErr := io.ReadAll(resp.Body)
 			resp.Body.Close()
 			if readErr != nil {
 				return nil, 0, nil, readErr
 			}
 			if isAnthropicFormat(b) {
-				b = convertAnthropicToOpenAI(b, tryModel)
+				b = convertAnthropicToOpenAI(b, modelID)
 			}
 			return b, resp.StatusCode, resp.Header, nil
 		}
 		errBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		slog.Error("upstream error", "model", tryModel, "status", resp.StatusCode, "body", string(errBody))
+		markSocks5Result(proxyAddr, resp.StatusCode, nil)
+		slog.Error("upstream error", "model", modelID, "status", resp.StatusCode, "body", string(errBody))
 		lastBody = errBody
 		lastStatus = resp.StatusCode
 		lastHeader = resp.Header
 		lastErr = fmt.Errorf("upstream error")
-		if shouldRetryUpstreamStatus(resp.StatusCode) && i < len(modelsToTry)-1 {
+		if shouldRetryUpstreamStatus(resp.StatusCode) {
 			client.CloseIdleConnections()
 			if resp.StatusCode == http.StatusUnauthorized {
 				retry401Count++
@@ -1778,7 +1899,7 @@ func callOpenCodeAPI(upstreamBody []byte, modelID string, auth UpstreamAuth) ([]
 				}
 			} else {
 				retryCount++
-				if retryCount >= maxUpstreamRetries {
+				if retryCount >= maxRetries {
 					break
 				}
 			}
@@ -1789,18 +1910,9 @@ func callOpenCodeAPI(upstreamBody []byte, modelID string, auth UpstreamAuth) ([]
 	return lastBody, lastStatus, lastHeader, lastErr
 }
 
+
 func callOpenCodeAPIStream(upstreamBody []byte, modelID string, auth UpstreamAuth) (io.ReadCloser, int, http.Header, error) {
 	initOCSession()
-	candidates := getCandidateModels(auth, modelID)
-	modelsToTry := []string{modelID}
-	for _, m := range candidates {
-		if m != modelID {
-			modelsToTry = append(modelsToTry, m)
-		}
-	}
-	if len(modelsToTry) == 0 {
-		modelsToTry = []string{modelID}
-	}
 
 	var bodyMap map[string]any
 	if err := json.Unmarshal(upstreamBody, &bodyMap); err != nil {
@@ -1813,26 +1925,32 @@ func callOpenCodeAPIStream(upstreamBody []byte, modelID string, auth UpstreamAut
 	var lastHeader http.Header
 	var retryCount int
 	var retry401Count int
-	for i, tryModel := range modelsToTry {
-		up, err := buildOCRequestWithEndpoint(tryModel, bodyMap, auth, useGoEndpoint)
+	maxRetries := maxRouteRetries()
+	for retryCount <= maxRetries {
+		up, err := buildOCRequestWithEndpoint(modelID, bodyMap, auth, useGoEndpoint)
 		if err != nil {
-			continue
+			break
 		}
-		client := getHTTPClientForTier(auth.tier())
+		// SSE 流式请求用去总超时客户端，避免健康长推理流被 5 分钟人为切断
+		client, proxyAddr := getStreamingHTTPClientForTierWithProxy(auth.tier())
 		resp, err := client.Do(up)
 		if err != nil {
+			markSocks5Result(proxyAddr, 0, err)
+			retryCount++
 			continue
 		}
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			markSocks5Result(proxyAddr, resp.StatusCode, nil)
 			return resp.Body, resp.StatusCode, resp.Header, nil
 		}
 		errBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		slog.Error("upstream error", "model", tryModel, "status", resp.StatusCode, "body", string(errBody))
+		markSocks5Result(proxyAddr, resp.StatusCode, nil)
+		slog.Error("upstream error", "model", modelID, "status", resp.StatusCode, "body", string(errBody))
 		lastBody = errBody
 		lastStatus = resp.StatusCode
 		lastHeader = resp.Header
-		if shouldRetryUpstreamStatus(resp.StatusCode) && i < len(modelsToTry)-1 {
+		if shouldRetryUpstreamStatus(resp.StatusCode) {
 			client.CloseIdleConnections()
 			if resp.StatusCode == http.StatusUnauthorized {
 				retry401Count++
@@ -1841,13 +1959,13 @@ func callOpenCodeAPIStream(upstreamBody []byte, modelID string, auth UpstreamAut
 				}
 			} else {
 				retryCount++
-				if retryCount >= maxUpstreamRetries {
+				if retryCount >= maxRetries {
 					break
 				}
 			}
 			continue
 		}
-		// 返回错误体供下游透传
+		// 不可重试的错误体供下游透传
 		return io.NopCloser(bytes.NewReader(lastBody)), lastStatus, lastHeader, nil
 	}
 	if lastStatus != 0 {
@@ -1855,6 +1973,7 @@ func callOpenCodeAPIStream(upstreamBody []byte, modelID string, auth UpstreamAut
 	}
 	return nil, 500, nil, fmt.Errorf("all models failed")
 }
+
 
 // ======================== 安全响应头过滤 ========================
 

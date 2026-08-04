@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestVersionStringIncludesBuildMetadata(t *testing.T) {
@@ -147,32 +148,33 @@ func TestCallOpenCodeAPIRetries4xxAndClosesConnectionBeforeRetry(t *testing.T) {
 		wantCloses  int
 		requestBody string
 	}{
-		{
-			name:   "non-stream retries 401",
-			stream: false,
-			responses: []fakeUpstreamResponse{
-				{status: http.StatusUnauthorized, body: `{"error":"unauthorized"}`},
-				{status: http.StatusOK, body: `{"id":"chatcmpl_test","choices":[]}`},
-			},
-			wantStatus:  http.StatusOK,
-			wantBody:    `{"id":"chatcmpl_test","choices":[]}`,
-			wantModels:  []string{"primary-model", "fallback-model-free"},
-			wantCloses:  1,
-			requestBody: `{"model":"primary-model","messages":[]}`,
+	// F6: 同模型路由重试，不换候选模型
+	{
+		name:   "non-stream retries 401",
+		stream: false,
+		responses: []fakeUpstreamResponse{
+			{status: http.StatusUnauthorized, body: `{"error":"unauthorized"}`},
+			{status: http.StatusOK, body: `{"id":"chatcmpl_test","choices":[]}`},
 		},
-		{
-			name:   "stream retries 429",
-			stream: true,
-			responses: []fakeUpstreamResponse{
-				{status: http.StatusTooManyRequests, body: `{"error":"rate_limited"}`},
-				{status: http.StatusOK, body: "data: ok\n\n"},
-			},
-			wantStatus:  http.StatusOK,
-			wantBody:    "data: ok\n\n",
-			wantModels:  []string{"primary-model", "fallback-model-free"},
-			wantCloses:  1,
-			requestBody: `{"model":"primary-model","messages":[],"stream":true}`,
+		wantStatus:  http.StatusOK,
+		wantBody:    `{"id":"chatcmpl_test","choices":[]}`,
+		wantModels:  []string{"primary-model", "primary-model"},
+		wantCloses:  1,
+		requestBody: `{"model":"primary-model","messages":[]}`,
+	},
+	{
+		name:   "stream retries 429",
+		stream: true,
+		responses: []fakeUpstreamResponse{
+			{status: http.StatusTooManyRequests, body: `{"error":"rate_limited"}`},
+			{status: http.StatusOK, body: "data: ok\n\n"},
 		},
+		wantStatus:  http.StatusOK,
+		wantBody:    "data: ok\n\n",
+		wantModels:  []string{"primary-model", "primary-model"},
+		wantCloses:  1,
+		requestBody: `{"model":"primary-model","messages":[],"stream":true}`,
+	},
 	}
 
 	for _, tt := range tests {
@@ -294,7 +296,8 @@ func TestCallOpenCodeAPIExhausted4xxReturnsLastUpstreamResponse(t *testing.T) {
 	if header.Get("X-Upstream-Error") != "last" {
 		t.Fatalf("final header = %q, want last", header.Get("X-Upstream-Error"))
 	}
-	wantModels := []string{"primary-model", "fallback-model-free"}
+	// F6: 同模型路由重试，不换候选模型。401 触发一次重试后遇到不可重试 403 结束。
+	wantModels := []string{"primary-model", "primary-model"}
 	if !reflect.DeepEqual(transport.requestedModels, wantModels) {
 		t.Fatalf("requested models = %#v, want %#v", transport.requestedModels, wantModels)
 	}
@@ -658,6 +661,136 @@ func TestAPIAuthMiddleware(t *testing.T) {
 				t.Fatalf("status = %d, want %d", rec.Code, tt.want)
 			}
 		})
+	}
+}
+
+// ======================== F3 代理池健康检查 ========================
+
+func TestPickHealthyProxySingleProxyNeverSwitches(t *testing.T) {
+	proxies := []Socks5Proxy{{Addr: "127.0.0.1:1080"}}
+	for i := 0; i < 5; i++ {
+		got := pickHealthyProxy(proxies, 0)
+		if got.Addr != "127.0.0.1:1080" {
+			t.Fatalf("pickHealthyProxy() = %q, want single proxy always", got.Addr)
+		}
+	}
+}
+
+func TestPickHealthyProxySkipsCoolingProxy(t *testing.T) {
+	proxies := []Socks5Proxy{
+		{Addr: "127.0.0.1:1080"},
+		{Addr: "127.0.0.1:1081"},
+	}
+	socks5HealthMu.Lock()
+	socks5Health["127.0.0.1:1080"] = socks5HealthState{failures: 1, until: time.Now().Add(2 * time.Minute)}
+	socks5HealthMu.Unlock()
+	t.Cleanup(func() {
+		socks5HealthMu.Lock()
+		delete(socks5Health, "127.0.0.1:1080")
+		socks5HealthMu.Unlock()
+	})
+
+	// start=0 指向冷却中的 1080，应跳过落到 1081
+	got := pickHealthyProxy(proxies, 0)
+	if got.Addr != "127.0.0.1:1081" {
+		t.Fatalf("pickHealthyProxy() = %q, want healthy 1081", got.Addr)
+	}
+}
+
+func TestPickHealthyProxyAllCoolingReturnsEarliest(t *testing.T) {
+	proxies := []Socks5Proxy{
+		{Addr: "127.0.0.1:1080"},
+		{Addr: "127.0.0.1:1081"},
+	}
+	socks5HealthMu.Lock()
+	socks5Health["127.0.0.1:1080"] = socks5HealthState{failures: 1, until: time.Now().Add(2 * time.Minute)}
+	socks5Health["127.0.0.1:1081"] = socks5HealthState{failures: 1, until: time.Now().Add(30 * time.Second)}
+	socks5HealthMu.Unlock()
+	t.Cleanup(func() {
+		socks5HealthMu.Lock()
+		delete(socks5Health, "127.0.0.1:1080")
+		delete(socks5Health, "127.0.0.1:1081")
+		socks5HealthMu.Unlock()
+	})
+
+	// 全冷 → 兜底返回冷却最早结束的 1081
+	got := pickHealthyProxy(proxies, 0)
+	if got.Addr != "127.0.0.1:1081" {
+		t.Fatalf("pickHealthyProxy() = %q, want earliest-ending 1081", got.Addr)
+	}
+}
+
+func TestMarkSocks5ResultCooldownClassification(t *testing.T) {
+	cleanup := func() {
+		socks5HealthMu.Lock()
+		socks5Health = map[string]socks5HealthState{}
+		socks5HealthMu.Unlock()
+	}
+	t.Cleanup(cleanup)
+
+	// 连接错误 → 20s 冷却
+	markSocks5Result("127.0.0.1:1080", 0, io.EOF)
+	socks5HealthMu.Lock()
+	s := socks5Health["127.0.0.1:1080"]
+	socks5HealthMu.Unlock()
+	if s.failures != 1 {
+		t.Fatalf("failures = %d, want 1", s.failures)
+	}
+	if until := time.Until(s.until); until < 19*time.Second || until > 21*time.Second {
+		t.Fatalf("connection-error cooldown = %v, want ~20s", until)
+	}
+
+	// 429 → 45s 冷却
+	markSocks5Result("127.0.0.1:1080", http.StatusTooManyRequests, nil)
+	socks5HealthMu.Lock()
+	s = socks5Health["127.0.0.1:1080"]
+	socks5HealthMu.Unlock()
+	if s.failures != 2 {
+		t.Fatalf("failures = %d, want 2", s.failures)
+	}
+	if until := time.Until(s.until); until < 44*time.Second || until > 46*time.Second {
+		t.Fatalf("429 cooldown = %v, want ~45s", until)
+	}
+
+	// 连续 3 次失败 → 2min 冷却
+	markSocks5Result("127.0.0.1:1080", http.StatusBadGateway, nil)
+	socks5HealthMu.Lock()
+	s = socks5Health["127.0.0.1:1080"]
+	socks5HealthMu.Unlock()
+	if s.failures != 3 {
+		t.Fatalf("failures = %d, want 3", s.failures)
+	}
+	if until := time.Until(s.until); until < 119*time.Second || until > 121*time.Second {
+		t.Fatalf("3-failure cooldown = %v, want ~2min", until)
+	}
+
+	// 成功请求 → 清除健康记录
+	markSocks5Result("127.0.0.1:1080", http.StatusOK, nil)
+	socks5HealthMu.Lock()
+	_, ok := socks5Health["127.0.0.1:1080"]
+	socks5HealthMu.Unlock()
+	if ok {
+		t.Fatal("socks5Health entry not cleared after success")
+	}
+}
+
+func TestGetStreamingHTTPClientRemovesTotalTimeout(t *testing.T) {
+	socks5Mu.Lock()
+	oldActive := activeSocks5
+	activeSocks5 = ""
+	socks5Mu.Unlock()
+	t.Cleanup(func() {
+		socks5Mu.Lock()
+		activeSocks5 = oldActive
+		socks5Mu.Unlock()
+	})
+
+	client, _ := getStreamingHTTPClientForTierWithProxy(TierFree)
+	if client == nil {
+		t.Fatal("streaming client = nil")
+	}
+	if client.Timeout != 0 {
+		t.Fatalf("streaming client Timeout = %v, want 0 (no total limit for SSE)", client.Timeout)
 	}
 }
 
