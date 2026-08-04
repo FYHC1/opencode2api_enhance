@@ -2160,6 +2160,7 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		reader := bufio.NewReader(upResp)
 		doneSeen := false
+		var lastUsage map[string]any
 		for {
 			line, err := reader.ReadString('\n')
 			if err != nil {
@@ -2188,33 +2189,28 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 			}
 
 			out, usage := convertStreamChunkWithUsage(line, keepReasoning)
-			if out == "" {
-				// 空choices chunk，但可能有 usage
-				if usage != nil {
-					pt, _ := usage["prompt_tokens"].(float64)
-					ct, _ := usage["completion_tokens"].(float64)
-					tt, _ := usage["total_tokens"].(float64)
-					if tt > 0 {
-						recordTokenUsage(req.Model, int64(pt), int64(ct), int64(tt), proxyAddr)
-					}
+			// 上游 router 会在每个 chunk 附带累计 usage，只保留最后一次（终值）
+			if usage != nil {
+				if tt, _ := usage["total_tokens"].(float64); tt > 0 {
+					lastUsage = usage
 				}
-				continue
 			}
-
-			// 提取 usage（已在 convertStreamChunkWithUsage 中解析）
-			if usage != nil && !doneSeen {
-				pt, _ := usage["prompt_tokens"].(float64)
-				ct, _ := usage["completion_tokens"].(float64)
-				tt, _ := usage["total_tokens"].(float64)
-				if tt > 0 {
-					recordTokenUsage(req.Model, int64(pt), int64(ct), int64(tt), proxyAddr)
-				}
+			if out == "" {
+				continue
 			}
 
 			w.Write([]byte(out))
 			w.Write([]byte("\n"))
 			if f, ok := w.(http.Flusher); ok {
 				f.Flush()
+			}
+		}
+		if lastUsage != nil {
+			pt, _ := lastUsage["prompt_tokens"].(float64)
+			ct, _ := lastUsage["completion_tokens"].(float64)
+			tt, _ := lastUsage["total_tokens"].(float64)
+			if tt > 0 {
+				recordTokenUsage(req.Model, int64(pt), int64(ct), int64(tt), proxyAddr)
 			}
 		}
 		return
