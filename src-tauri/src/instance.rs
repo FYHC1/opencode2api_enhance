@@ -34,6 +34,8 @@ pub struct Instance {
     pub singbox_port: u16,
     pub pid: Option<u32>,
     pub singbox_pid: Option<u32>,
+    #[serde(default)]
+    pub join_gateway: bool,
     pub status: InstanceStatus,
 }
 
@@ -103,6 +105,7 @@ impl InstanceManager {
             singbox_port: port + 10000,
             pid: None,
             singbox_pid: None,
+            join_gateway: false,
             status: InstanceStatus::Stopped,
         };
         self.instances.push(instance);
@@ -395,6 +398,18 @@ let singbox_child = no_window(&mut Command::new(&singbox_bin))
     #[allow(dead_code)]
     pub fn find_instance_mut(&mut self, name: &str) -> Option<&mut Instance> {
         self.instances.iter_mut().find(|i| i.name == name)
+    }
+
+    /// 设置实例是否加入统一网关池（join_gateway）。
+    /// 不持久化，由调用方决定何时 save_state。
+    pub fn set_join_gateway(&mut self, name: &str, join: bool) -> Result<()> {
+        let inst = self
+            .instances
+            .iter_mut()
+            .find(|i| i.name == name)
+            .context("实例不存在")?;
+        inst.join_gateway = join;
+        Ok(())
     }
 
     fn save(&self) -> Result<()> {

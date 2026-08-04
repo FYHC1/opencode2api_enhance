@@ -2,6 +2,7 @@ pub mod clash_yaml;
 pub mod commands;
 pub mod config;
 pub mod embed;
+pub mod gateway;
 pub mod instance;
 pub mod opencode_cfg;
 pub mod probe;
@@ -14,7 +15,9 @@ use tauri::Manager;
 pub struct AppState {
     pub manager: Arc<Mutex<instance::InstanceManager>>,
     pub scan: Arc<probe::ScanController>,
+    pub gateway: Arc<Mutex<gateway::GatewayManager>>,
 }
+
 
 /// 桌面入口：释放内嵌二进制 → 构建 AppState → 启动 Tauri（托盘常驻）
 pub fn run() {
@@ -29,16 +32,31 @@ pub fn run() {
         Err(e) => eprintln!("警告: 释放内置组件失败: {}", e),
     }
 
-    let (instances_path, _, runtime_dir) = commands::manager_paths();
-    let mut manager = instance::InstanceManager::new(instances_path, binary_dir, runtime_dir);
+    let (instances_path, binary_dir, runtime_dir) = commands::manager_paths();
+    let mut manager = instance::InstanceManager::new(
+        instances_path,
+        binary_dir.clone(),
+        runtime_dir.clone(),
+    );
     let _ = manager.load();
     // 启动即校正：上次非正常退出留下的"Running 但进程已死"状态修正为 Stopped
     let _ = manager.reconcile_states();
 
+    let manager = Arc::new(Mutex::new(manager));
+    let gateway_manager = Arc::new(Mutex::new(gateway::GatewayManager::new(
+        binary_dir,
+        runtime_dir,
+    )));
+    // 启动即同步统一网关：恢复上次「运行中且入池」实例的代理池（无入池实例则停网关）
+    if let (Ok(mgr), Ok(mut gateway)) = (manager.lock(), gateway_manager.lock()) {
+        let _ = gateway.sync(mgr.list_instances());
+    }
+
     tauri::Builder::default()
         .manage(AppState {
-            manager: Arc::new(Mutex::new(manager)),
+            manager,
             scan: Arc::new(probe::ScanController::new()),
+            gateway: gateway_manager,
         })
         .invoke_handler(tauri::generate_handler![
             commands::list_nodes,
@@ -63,10 +81,14 @@ pub fn run() {
             commands::autostart_get,
             commands::autostart_set,
             commands::get_binaries_info,
+
             commands::get_stats,
             commands::hide_to_tray,
             commands::toggle_maximize,
-            commands::quit_app
+            commands::quit_app,
+            commands::gateway_status,
+            commands::gateway_set_route_mode,
+            commands::set_join_gateway
         ])
 .setup(|app| {
             use tauri::Manager;

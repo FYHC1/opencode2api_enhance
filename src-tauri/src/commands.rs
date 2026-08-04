@@ -57,7 +57,93 @@ fn lock_manager<'a>(state: &'a tauri::State<'a, AppState>) -> Result<std::sync::
         .map_err(|_| "状态锁失败".to_string())
 }
 
+// ======================== 统一网关（F1） ========================
+
+/// 同步统一网关：根据「运行中且 join_gateway=true」的实例集合更新网关池。
+pub fn sync_gateway(state: &tauri::State<'_, AppState>) {
+    let instances = state
+        .manager
+        .lock()
+        .map(|mut mgr| {
+            let _ = mgr.reconcile_states();
+            mgr.list_instances().to_vec()
+        })
+        .unwrap_or_default();
+    if let Ok(mut gateway) = state.gateway.lock() {
+        if let Err(e) = gateway.sync(&instances) {
+            eprintln!("统一网关同步失败: {}", e);
+        }
+    }
+}
+
+#[tauri::command]
+pub fn gateway_status(
+    state: tauri::State<'_, AppState>,
+) -> Result<crate::gateway::GatewayStatus, String> {
+    let total_instances = state
+        .manager
+        .lock()
+        .map_err(|_| "状态锁失败".to_string())?
+        .list_instances()
+        .len();
+    let mut gateway = state
+        .gateway
+        .lock()
+        .map_err(|_| "网关锁失败".to_string())?;
+    Ok(gateway.status(total_instances))
+}
+
+/// 切换网关路由模式（failover / round_robin）：写入网关配置并重启网关进程。
+#[tauri::command]
+pub fn gateway_set_route_mode(
+    state: tauri::State<'_, AppState>,
+    mode: String,
+) -> Result<(), String> {
+    if mode != "failover" && mode != "round_robin" {
+        return Err("路由模式仅支持 failover / round_robin".to_string());
+    }
+    let instances = state
+        .manager
+        .lock()
+        .map_err(|_| "状态锁失败".to_string())?
+        .list_instances()
+        .to_vec();
+    let mut gateway = state
+        .gateway
+        .lock()
+        .map_err(|_| "网关锁失败".to_string())?;
+    // 记录模式供下次 sync 使用；通过 stop+sync 让配置重写并重启进程
+    gateway.set_route_mode(&mode);
+    gateway.stop();
+    gateway
+        .sync(&instances)
+        .map_err(|e| format!("切换路由模式失败: {}", e))
+}
+
+/// 切换实例是否加入统一网关池（join_gateway），并同步网关。
+#[tauri::command]
+pub fn set_join_gateway(
+    state: tauri::State<'_, AppState>,
+    name: String,
+    join: bool,
+) -> Result<(), String> {
+    let mut mgr = lock_manager(&state)?;
+    let _ = mgr.load();
+    mgr.set_join_gateway(&name, join)
+        .map_err(|e| e.to_string())?;
+    mgr.save_state().map_err(|e| e.to_string())?;
+    let instances = mgr.list_instances().to_vec();
+    drop(mgr);
+    if let Ok(mut gateway) = state.gateway.lock() {
+        gateway
+            .sync(&instances)
+            .map_err(|e| format!("同步网关失败: {}", e))?;
+    }
+    Ok(())
+}
+
 // ======================== 响应结构 ========================
+
 
 #[derive(Debug, Serialize)]
 pub struct NodeView {
@@ -265,7 +351,17 @@ pub fn add_instance(
 pub fn remove_instance(state: tauri::State<'_, AppState>, name: String) -> Result<(), String> {
     let mut mgr = lock_manager(&state)?;
     let _ = mgr.load();
-    mgr.remove_instance(&name).map_err(|e| e.to_string())
+    mgr.remove_instance(&name).map_err(|e| e.to_string())?;
+    mgr.save_state().map_err(|e| e.to_string())?;
+    let instances = mgr.list_instances().to_vec();
+    drop(mgr);
+    // 同步网关：移除的实例若在池中，需从代理池剔除
+    if let Ok(mut gateway) = state.gateway.lock() {
+        gateway
+            .sync(&instances)
+            .map_err(|e| format!("同步网关失败: {}", e))?;
+    }
+    Ok(())
 }
 
 // ======================== 实例启停（阻塞，走 spawn_blocking） ========================
@@ -273,6 +369,7 @@ pub fn remove_instance(state: tauri::State<'_, AppState>, name: String) -> Resul
 #[tauri::command]
 pub async fn start_instance(state: tauri::State<'_, AppState>, name: String) -> Result<(), String> {
     let manager = Arc::clone(&state.manager);
+    let gateway = Arc::clone(&state.gateway);
     tauri::async_runtime::spawn_blocking(move || {
         // 短锁：标记 Starting 并取出实例快照
         let (instance, binary_dir, runtime_dir) = {
@@ -290,13 +387,19 @@ pub async fn start_instance(state: tauri::State<'_, AppState>, name: String) -> 
         let mut mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
         let apply_result = mgr.apply_start_result(&name, outcome);
         let save_result = mgr.save_state().map_err(|error| error.to_string());
-        match apply_result {
+        let result = match apply_result {
             Ok(()) => save_result,
             Err(error) => {
                 let _ = save_result;
                 Err(error.to_string())
             }
+        };
+        // 同步网关（池成员可能变化）
+        let _ = mgr.reconcile_states();
+        if let Ok(mut g) = gateway.lock() {
+            let _ = g.sync(mgr.list_instances());
         }
+        result
     })
     .await
     .map_err(|e| e.to_string())?
@@ -305,6 +408,7 @@ pub async fn start_instance(state: tauri::State<'_, AppState>, name: String) -> 
 #[tauri::command]
 pub async fn stop_instance(state: tauri::State<'_, AppState>, name: String) -> Result<(), String> {
     let manager = Arc::clone(&state.manager);
+    let gateway = Arc::clone(&state.gateway);
     tauri::async_runtime::spawn_blocking(move || {
         // 短锁：标记 Stopping 并取出 PID
         let (pid, singbox_pid) = {
@@ -325,8 +429,14 @@ pub async fn stop_instance(state: tauri::State<'_, AppState>, name: String) -> R
         }
         // 短锁：回写停止状态
         let mut mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
-        mgr.finish_stop(&name).map_err(|error| error.to_string())?;
-        mgr.save_state().map_err(|error| error.to_string())
+        let result = mgr.finish_stop(&name).map_err(|error| error.to_string());
+        mgr.save_state().map_err(|error| error.to_string())?;
+        // 同步网关（池成员可能变化）
+        let _ = mgr.reconcile_states();
+        if let Ok(mut g) = gateway.lock() {
+            let _ = g.sync(mgr.list_instances());
+        }
+        result
     })
     .await
     .map_err(|e| e.to_string())?
@@ -565,12 +675,14 @@ fn run_parallel_stop_jobs(jobs: Vec<(String, Option<u32>, Option<u32>)>) -> Vec<
         .unwrap_or_default()
 }
 
+
 #[tauri::command]
 pub async fn batch_start(
     state: tauri::State<'_, AppState>,
     names: Vec<String>,
 ) -> Result<BatchOpResult, String> {
     let manager = Arc::clone(&state.manager);
+    let gateway = Arc::clone(&state.gateway);
     tauri::async_runtime::spawn_blocking(move || {
         let mut unique_names = Vec::new();
         let mut seen = HashSet::new();
@@ -626,12 +738,22 @@ pub async fn batch_start(
             mgr.save_state().map_err(|error| error.to_string())?;
         }
 
-        Ok(BatchOpResult {
+        let result = Ok(BatchOpResult {
             success_count: success.len(),
             error_count: errors.len(),
             success,
             errors,
-        })
+        });
+
+        // 同步网关（池成员可能变化）
+        if let Ok(mut g) = gateway.lock() {
+            if let Ok(mut mgr) = manager.lock() {
+                let _ = mgr.reconcile_states();
+                let _ = g.sync(mgr.list_instances());
+            }
+        }
+
+        result
     })
     .await
     .map_err(|e| e.to_string())?
@@ -643,6 +765,7 @@ pub async fn batch_stop(
     names: Vec<String>,
 ) -> Result<BatchOpResult, String> {
     let manager = Arc::clone(&state.manager);
+    let gateway = Arc::clone(&state.gateway);
     tauri::async_runtime::spawn_blocking(move || {
         let mut unique_names = Vec::new();
         let mut seen = HashSet::new();
@@ -691,13 +814,22 @@ pub async fn batch_stop(
             }
             mgr.save_state().map_err(|error| error.to_string())?;
         }
-
-        Ok(BatchOpResult {
+        let result = Ok(BatchOpResult {
             success_count: success.len(),
             error_count: errors.len(),
             success,
             errors,
-        })
+        });
+
+        // 同步网关（池成员可能变化）
+        if let Ok(mut g) = gateway.lock() {
+            if let Ok(mut mgr) = manager.lock() {
+                let _ = mgr.reconcile_states();
+                let _ = g.sync(mgr.list_instances());
+            }
+        }
+
+        result
     })
     .await
     .map_err(|e| e.to_string())?
@@ -709,10 +841,19 @@ pub async fn batch_delete(
     names: Vec<String>,
 ) -> Result<BatchOpResult, String> {
     let manager = Arc::clone(&state.manager);
+    let gateway = Arc::clone(&state.gateway);
     tauri::async_runtime::spawn_blocking(move || {
         let mut mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
         let _ = mgr.load();
-        Ok(batch_op_response(names, |name| mgr.remove_instance(name)))
+        let result = batch_op_response(names, |name| mgr.remove_instance(name));
+        let _ = mgr.save_state();
+        let instances = mgr.list_instances().to_vec();
+        drop(mgr);
+        // 同步网关：删除的实例若在池中，需从代理池剔除
+        if let Ok(mut g) = gateway.lock() {
+            let _ = g.sync(&instances);
+        }
+        Ok(result)
     })
     .await
     .map_err(|e| e.to_string())?
