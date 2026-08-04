@@ -524,6 +524,11 @@ pub fn batch_add(
             errors.push(json!({ "node": "", "error": "空节点名" }));
             continue;
         }
+        // 按节点去重：同一节点只允许例化一次（已在实例列表中的节点跳过）
+        if mgr.list_instances().iter().any(|x| x.node == node) {
+            errors.push(json!({ "node": node, "error": "该节点已添加为实例" }));
+            continue;
+        }
         let port = item.port.unwrap_or(base_port.saturating_add(i as u16));
         let name = item
             .name

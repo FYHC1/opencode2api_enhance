@@ -141,11 +141,14 @@ export default function NodesPage({
   const [addTarget, setAddTarget] = useState<'solo' | 'pool'>('solo')
 
   const doAddSelected = async () => {
-    const items = [...selected].map((node) => ({ node }))
+    // 过滤掉已在实例中的节点（防 disabled 快照过期后仍能勾选）
+    const skip = [...selected].filter((n) => instanceNodes.has(n))
+    const items = [...selected].filter((n) => !instanceNodes.has(n)).map((node) => ({ node }))
     if (items.length === 0) {
-      toast('请先勾选要添加的节点', false)
+      toast(skip.length > 0 ? '所选节点均已添加为实例' : '请先勾选要添加的节点', false)
       return
     }
+    setAdding(true)
     setAdding(true)
     try {
       const r = await api.batchAdd(items, 18100, true)
