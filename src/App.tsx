@@ -11,9 +11,9 @@ import StatsPage from './pages/StatsPage'
 type Tab = 'instances' | 'pool' | 'nodes' | 'settings' | 'stats'
 
 const NAV: { id: Tab; label: string; icon: typeof Server }[] = [
-  { id: 'instances', label: '实例', icon: Server },
+  { id: 'instances', label: '独享', icon: Server },
   { id: 'pool', label: '实例池', icon: Layers },
-  { id: 'nodes', label: '节点扫描', icon: Radar },
+  { id: 'nodes', label: '节点池', icon: Radar },
   { id: 'stats', label: '统计', icon: BarChart3 },
   { id: 'settings', label: '设置', icon: Settings },
 ]

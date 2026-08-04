@@ -150,10 +150,10 @@ export default function InstancesPage({
   }
 
 const doRemove = async (name: string) => {
-    if (!confirm(`确定移除实例 ${name}？移除会关闭实例并释放回节点扫描。`)) return
+    if (!confirm(`确定释放实例 ${name}？将关闭实例并释放节点。`)) return
     try {
       await api.removeInstance(name)
-      toast(`已移除实例 ${name}（释放回节点扫描）`)
+      toast(`已释放实例 ${name}`)
       setSelected((prev) => {
         const next = new Set(prev)
         next.delete(name)
@@ -184,14 +184,14 @@ const doRemove = async (name: string) => {
       toast('请先勾选实例')
       return
     }
-if (kind === 'delete' && !confirm(`确定移除选中的 ${names.length} 个实例？将自动关闭并释放回节点扫描。`)) return
+if (kind === 'delete' && !confirm(`确定释放选中的 ${names.length} 个实例？将自动关闭并释放节点。`)) return
     setBatchBusy(true)
     try {
       const fn =
         kind === 'start' ? api.batchStart : kind === 'stop' ? api.batchStop : api.batchDelete
       const r = await fn(names)
       toast(
-        `${kind === 'start' ? '启动' : kind === 'stop' ? '停止' : '移除'}成功 ${r.success_count} 个` +
+        `${kind === 'start' ? '启动' : kind === 'stop' ? '停止' : '释放'}成功 ${r.success_count} 个` +
           (r.error_count ? `，失败 ${r.error_count}` : ''),
         r.error_count === 0,
       )
@@ -218,7 +218,7 @@ if (kind === 'delete' && !confirm(`确定移除选中的 ${names.length} 个实�
       {/* 工具条：标题 + 操作按钮（原先样式一排） */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <h2 className="text-lg font-semibold text-zinc-900">实例管理</h2>
+<h2 className="text-lg font-semibold text-zinc-900">独享管理</h2>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -388,8 +388,8 @@ if (kind === 'delete' && !confirm(`确定移除选中的 ${names.length} 个实�
                         <button onClick={() => void doTest(i.name)} className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[12px] text-teal-700 bg-teal-50 hover:bg-teal-100">
                           <TestTube2 size={12} /> 测试
                         </button>
-                        <button onClick={() => void doRemove(i.name)} className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[12px] text-red-600 bg-red-50 hover:bg-red-100">
-                          <Trash2 size={12} /> 移除
+<button onClick={() => void doRemove(i.name)} className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[12px] text-red-600 bg-red-50 hover:bg-red-100">
+                          <Trash2 size={12} /> 释放
                         </button>
                       </div>
                     </td>
@@ -409,7 +409,7 @@ if (kind === 'delete' && !confirm(`确定移除选中的 ${names.length} 个实�
       {soloInstances.length === 0 && (
         <div className="flex flex-col items-center justify-center py-24 text-zinc-400">
           <p className="text-base mb-2">暂无独享实例</p>
-          <p className="text-[13px]">在「节点扫描」页勾选节点，以「独享」方式批量添加；池成员见「实例池」页</p>
+<p className="text-[13px]">在「节点池」页勾选节点，以「独享」方式批量添加；池成员见「实例池」页</p>
         </div>
       )}
 

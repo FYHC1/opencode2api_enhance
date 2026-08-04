@@ -95,13 +95,13 @@ export default function PoolPage({
     }
   }
 
-  // 释放池成员：一条龙（自动关闭实例 → 删除记录 → 释放回节点扫描），无「恢复独享」中间态
+  // 释放池成员：一条龙（自动关闭实例 → 删除记录 → 释放节点），无「恢复独享」中间态
   const doRelease = async (name: string) => {
-    if (!confirm(`确定释放实例 ${name}？将关闭实例、删除记录并释放回节点扫描。`)) return
+    if (!confirm(`确定释放实例 ${name}？将关闭实例并释放节点。`)) return
     setKickBusy(name)
     try {
       await api.removeInstance(name)
-      toast(`已释放实例 ${name}（回节点扫描）`)
+      toast(`已释放实例 ${name}`)
       await load()
     } catch (e) {
       toast(String(e), false)
@@ -435,7 +435,7 @@ export default function PoolPage({
         ) : (
           <div className="flex flex-col items-center justify-center py-16 text-zinc-400">
 <p className="text-[13px] mb-1">暂无池成员</p>
-            <p className="text-[12px]">在「节点扫描」页勾选节点，以「进池」方式批量添加（聚合到统一网关）</p>
+<p className="text-[12px]">在「节点池」页勾选节点，以「进池」方式批量添加（聚合到统一网关）</p>
           </div>
         )}
       </div>
