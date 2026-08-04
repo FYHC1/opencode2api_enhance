@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.0.2（2026-08-05）
+
+### 🐛 Bug 修复
+
+- **sing-box 生成配置修复**：生成配置不再包含非法 `transport {type:tcp}`，修复扫描时 sing-box 启动即退出的问题（FIX_LOG 3.1）（贡献：FYHC1）
+- **统一网关 token 统计修复**：网关进程未设置工作目录导致 token 统计错位落盘应用 exe 目录，统计界面读不到网关流量；现已对齐到 `runtime/_unified-gateway/`（贡献：FYHC1）
+- **统一网关按节点拆分 token 统计**：界面新增「调用节点明细」，按 SOCKS5 出口节点聚合显示各节点请求数与 token 用量；直连实例不再产生无效的 `node_stats.json`（贡献：FYHC1）
+
+### 🙏 致谢
+
+感谢 [FYHC1](https://github.com/FYHC1) 对本版本的两项 Bug 修复贡献（#2 sing-box 配置、#3 统一网关 token 统计）。
+
+
+
 ## v1.0.1（2026-08-04）
 
 ### 🐛 Bug 修复
