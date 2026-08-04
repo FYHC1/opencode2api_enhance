@@ -537,7 +537,7 @@ pub(crate) fn is_probe_completion_success(status: u16, body: &str) -> bool {
 
 fn is_probe_free_model(model: &str) -> bool {
     let id = model.trim().to_ascii_lowercase();
-    id.ends_with("-free")
+    id.contains("-free")
         || id == "big-pickle"
         || matches!(
             id.as_str(),
@@ -564,7 +564,7 @@ fn select_probe_free_model(body: &str) -> Option<String> {
         if first.is_none() {
             first = Some(id.to_string());
         }
-        if id.to_ascii_lowercase().ends_with("-free") || id.eq_ignore_ascii_case("big-pickle") {
+        if id.contains("-free") || id.eq_ignore_ascii_case("big-pickle") {
             return Some(id.to_string());
         }
     }
@@ -947,6 +947,14 @@ mod tests {
         let body = r#"{"data":[{"id":"gpt-4o"},{"id":"big-pickle"}]}"#;
         let got = select_probe_free_model(body);
         assert_eq!(got.as_deref(), Some("big-pickle"));
+    }
+
+    #[test]
+    fn test_select_probe_free_model_matches_contains_free() {
+        // 名称任意位置包含 "-free"（不止后缀）也应识别为免费
+        let body = r#"{"data":[{"id":"gpt-4o"},{"id":"x-free-7b-instruct"},{"id":"gpt-4-turbo"}]}"#;
+        let got = select_probe_free_model(body);
+        assert_eq!(got.as_deref(), Some("x-free-7b-instruct"));
     }
 
     #[test]

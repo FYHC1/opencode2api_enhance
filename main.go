@@ -1809,9 +1809,9 @@ func (auth UpstreamAuth) shouldUseGoEndpoint(modelID string) bool {
 	}
 }
 
-// isFreeModel 判断模型是否属于免费模型（以 -free 结尾，或官方动态返回的真实免费模型 big-pickle）
+// isFreeModel 判定免费模型：名称任意位置包含 "-free"，或名称等于官方动态返回的真实免费模型 big-pickle。
 func isFreeModel(modelID string) bool {
-	return strings.HasSuffix(modelID, "-free") || strings.EqualFold(modelID, "big-pickle")
+	return strings.Contains(strings.ToLower(modelID), "-free") || strings.EqualFold(modelID, "big-pickle")
 }
 
 
