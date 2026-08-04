@@ -29,6 +29,19 @@ func TestVersionStringIncludesBuildMetadata(t *testing.T) {
 		}
 	}
 }
+func TestIsFreeModelIncludesBigPickleOnly(t *testing.T) {
+	for _, model := range []string{"deepseek-v4-flash-free", "big-pickle", "BIG-PICKLE"} {
+		if !isFreeModel(model) {
+			t.Fatalf("isFreeModel(%q) = false, want true", model)
+		}
+	}
+	for _, model := range []string{"deepseek-v4-flash", "minimax-m2.7"} {
+		if isFreeModel(model) {
+			t.Fatalf("isFreeModel(%q) = true, want false", model)
+		}
+	}
+}
+
 
 type fakeUpstreamResponse struct {
 	status int
