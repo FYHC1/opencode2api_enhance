@@ -191,12 +191,12 @@ const [joinBusy, setJoinBusy] = useState<Record<string, boolean>>({})
     }
   }
 
-  // 批量入/出池：逐实例调用 setJoinGateway（Rust 无批量命令）
+  // 批量出池：逐实例调用 setJoinGateway（Rust 无批量命令），无需确认弹窗
   const [joinBatchBusy, setJoinBatchBusy] = useState(false)
-  const doBatchJoin = async (join: boolean) => {
-    const names = [...selected].filter((n) => (join ? !instances.find((i) => i.name === n)?.join_gateway : instances.find((i) => i.name === n)?.join_gateway))
+  const doBatchLeave = async () => {
+    const names = [...selected].filter((n) => instances.find((i) => i.name === n)?.join_gateway)
     if (names.length === 0) {
-      toast(`未选中需要${join ? '移入' : '移出'}的实例`)
+      toast('未选中需要移出的实例')
       return
     }
     setJoinBatchBusy(true)
@@ -205,16 +205,62 @@ const [joinBusy, setJoinBusy] = useState<Record<string, boolean>>({})
       let fail = 0
       for (const n of names) {
         try {
-          await api.setJoinGateway(n, join)
+          await api.setJoinGateway(n, false)
           ok++
         } catch {
           fail++
         }
       }
-      toast(`${join ? '移入' : '移出'}实例池成功 ${ok} 个${fail ? `，失败 ${fail}` : ''}`, fail === 0)
+      toast(`移出实例池成功 ${ok} 个${fail ? `，失败 ${fail}` : ''}`, fail === 0)
       await load()
     } finally {
       setJoinBatchBusy(false)
+    }
+  }
+
+  // 批量入池：弹窗确认（提示默认启动）→ 逐个启动未运行实例并入池，实时进度
+  const [joinConfirm, setJoinConfirm] = useState<string[] | null>(null)
+  const [joinProgress, setJoinProgress] = useState<{ done: number; total: number } | null>(null)
+  const [joinRunning, setJoinRunning] = useState(false)
+
+  const openJoinConfirm = () => {
+    const names = [...selected].filter((n) => !instances.find((i) => i.name === n)?.join_gateway)
+    if (names.length === 0) {
+      toast('未选中需要移入的实例')
+      return
+    }
+    setJoinConfirm(names)
+  }
+
+  const runBatchJoin = async () => {
+    if (!joinConfirm) return
+    const names = joinConfirm
+    const total = names.length
+    setJoinRunning(true)
+    setJoinProgress({ done: 0, total })
+    let ok = 0
+    let fail = 0
+    try {
+      for (const n of names) {
+        try {
+          const inst = instances.find((i) => i.name === n)
+          // 加入池的节点默认启动：未运行的先启动，再打 join_gateway 标记
+          if (inst && inst.status !== 'Running') {
+            await api.startInstance(n)
+          }
+          await api.setJoinGateway(n, true)
+          ok++
+        } catch {
+          fail++
+        }
+        setJoinProgress({ done: ok + fail, total })
+      }
+      toast(`已启动并入池 ${ok} 个${fail ? `，失败 ${fail}` : ''}`, fail === 0)
+      await load()
+    } finally {
+      setJoinRunning(false)
+      setJoinProgress(null)
+      setJoinConfirm(null)
     }
   }
 
@@ -284,15 +330,15 @@ if (kind === 'delete' && !confirm(`确定删除选中的 ${names.length} 个实�
             <Square size={14} /> 批量停止
           </button>
           <button
-            onClick={() => void doBatchJoin(true)}
-            disabled={selected.size === 0 || joinBatchBusy || batchBusy}
+            onClick={() => openJoinConfirm()}
+            disabled={selected.size === 0 || joinBatchBusy || batchBusy || joinRunning}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-teal-700 bg-teal-50 border border-teal-100 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {joinBatchBusy ? <Loader2 size={14} className="animate-spin" /> : <Network size={14} />} 批量入池
+            {joinRunning ? <Loader2 size={14} className="animate-spin" /> : <Network size={14} />} 批量入池
           </button>
           <button
-            onClick={() => void doBatchJoin(false)}
-            disabled={selected.size === 0 || joinBatchBusy || batchBusy}
+            onClick={() => void doBatchLeave()}
+            disabled={selected.size === 0 || joinBatchBusy || batchBusy || joinRunning}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-amber-700 bg-amber-50 border border-amber-100 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-40"
           >
             {joinBatchBusy ? <Loader2 size={14} className="animate-spin" /> : <Network size={14} />} 批量出池
@@ -482,6 +528,59 @@ if (kind === 'delete' && !confirm(`确定删除选中的 ${names.length} 个实�
         <div className="flex flex-col items-center justify-center py-24 text-zinc-400">
           <p className="text-base mb-2">暂无实例</p>
           <p className="text-[13px]">在「节点扫描」页勾选节点批量添加</p>
+        </div>
+      )}
+
+      {/* 批量入池确认弹窗：提示默认启动，确认后显示启动进度 */}
+      {joinConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/25" onClick={() => { if (!joinRunning) setJoinConfirm(null) }}>
+          <div
+            className="w-[420px] bg-white rounded-2xl shadow-xl p-5 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-[15px] font-semibold text-zinc-900">批量入池</h3>
+            {joinProgress ? (
+              <div className="space-y-3">
+                <p className="text-[13px] text-zinc-600">
+                  正在启动并移入实例池：{joinProgress.done} / {joinProgress.total}
+                </p>
+                <div className="h-2 rounded-full bg-zinc-100 overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-teal-500 transition-all duration-200"
+                    style={{ width: `${joinProgress.total > 0 ? (joinProgress.done / joinProgress.total) * 100 : 0}%` }}
+                  />
+                </div>
+              </div>
+            ) : (
+              <p className="text-[13px] text-zinc-600">
+                选中的 <span className="font-medium text-zinc-900">{joinConfirm.length}</span> 个实例加入池后会
+                <span className="font-medium text-zinc-900">默认启动</span>，是否继续？
+              </p>
+            )}
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                onClick={() => setJoinConfirm(null)}
+                disabled={joinRunning}
+                className="px-4 py-1.5 rounded-lg text-[13px] text-zinc-600 bg-zinc-100 hover:bg-zinc-200 disabled:opacity-40"
+              >
+                取消
+              </button>
+              <button
+                onClick={() => void runBatchJoin()}
+                disabled={joinRunning}
+                className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-[13px] text-white bg-teal-600 hover:bg-teal-700 disabled:opacity-60"
+              >
+                {joinRunning ? (
+                  <>
+                    <Loader2 size={14} className="animate-spin" />
+                    已启动 {joinProgress?.done ?? 0}/{joinProgress?.total ?? joinConfirm.length}
+                  </>
+                ) : (
+                  '继续'
+                )}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
