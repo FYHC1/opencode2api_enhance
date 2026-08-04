@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import clsx from 'clsx'
-import { Copy, Loader2, Power, RefreshCw, ShieldCheck, Network } from 'lucide-react'
+import { Copy, Loader2, Power, RefreshCw, ShieldCheck, Network, Search } from 'lucide-react'
 import { api, type GatewayStatus, type Instance } from '../lib/api'
 
 function statusBadge(st: Instance['status']): [string, string] {
@@ -21,9 +21,22 @@ export default function PoolPage({
   const [stopping, setStopping] = useState(false)
   const [routeBusy, setRouteBusy] = useState(false)
   const [kickBusy, setKickBusy] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
+  const [searchFocus, setSearchFocus] = useState(false)
 
-  // 池成员 = 已入池（join_gateway=true）的实例
-  const members = instances.filter((i) => i.join_gateway)
+  // 池成员 = 已入池（join_gateway=true）的实例；支持前端搜索（名称/节点/IP/端口）
+  const members = instances
+    .filter((i) => i.join_gateway)
+    .filter((i) => {
+      const q = search.trim().toLowerCase()
+      return (
+        !q ||
+        i.name.toLowerCase().includes(q) ||
+        i.node.toLowerCase().includes(q) ||
+        (i.ip || '').toLowerCase().includes(q) ||
+        String(i.port).includes(q)
+      )
+    })
 
   const load = useCallback(async () => {
     try {
@@ -233,10 +246,30 @@ export default function PoolPage({
             <span className="text-[14px] font-semibold text-zinc-900">池成员</span>
             <span className="text-[12px] text-zinc-400">已入池的实例会聚合到统一网关地址，未入池实例保持独享</span>
           </div>
+          <div
+            className={clsx(
+              'relative flex items-center rounded-lg border border-zinc-200 bg-white transition-all duration-200 overflow-hidden',
+              searchFocus || search ? 'w-52' : 'w-9',
+            )}
+          >
+            <Search size={14} className="absolute left-2.5 text-zinc-400 pointer-events-none" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onFocus={() => setSearchFocus(true)}
+              onBlur={() => setSearchFocus(false)}
+              placeholder="搜索池成员"
+              className={clsx(
+                'w-full bg-transparent py-1.5 pl-8 pr-2 text-[12px] outline-none placeholder:text-zinc-300 transition-opacity',
+                searchFocus || search ? 'opacity-100' : 'opacity-0',
+              )}
+            />
+          </div>
         </div>
         {members.length > 0 ? (
+          <div className="max-h-[600px] overflow-y-auto">
           <table className="w-full text-[13px]">
-            <thead>
+            <thead className="sticky top-0 z-10 bg-white">
               <tr className="text-left text-zinc-400 border-b border-zinc-100">
                 <th className="py-3 pl-4">名称 / 节点 IP</th>
                 <th className="py-3 pl-2">端口</th>
@@ -251,7 +284,20 @@ export default function PoolPage({
                   <tr key={i.name} className="border-b border-zinc-50 hover:bg-zinc-50/50">
                     <td className="py-2.5 pl-4">
                       <div className="font-medium text-zinc-800">{i.node}</div>
-                      <div className="text-[11px] text-zinc-400">{i.name}</div>
+                      <div className="text-[11px] text-zinc-400">
+                        {i.ip ? (
+                          <button
+                            onClick={() => void copyText(i.ip, '节点 IP')}
+                            className="flex items-center gap-1 text-zinc-400 hover:text-zinc-600 hover:underline"
+                            title="点击复制"
+                          >
+                            <code className="text-[12px]">{i.ip}</code>
+                            <Copy size={10} />
+                          </button>
+                        ) : (
+                          '—'
+                        )}
+                      </div>
                     </td>
                     <td className="py-2.5 pl-2 text-zinc-500">{i.port}</td>
                     <td className="py-2.5 pl-2">
@@ -274,6 +320,7 @@ export default function PoolPage({
               })}
             </tbody>
           </table>
+          </div>
         ) : (
           <div className="flex flex-col items-center justify-center py-16 text-zinc-400">
             <p className="text-[13px] mb-1">暂无池成员</p>

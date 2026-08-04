@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import clsx from 'clsx'
-import { Plus, RefreshCw, Play, Square, Trash2, TestTube2, Copy, Loader2, Network } from 'lucide-react'
+import { Plus, RefreshCw, Play, Square, Trash2, TestTube2, Copy, Loader2, Network, Search } from 'lucide-react'
 import { api, type Instance } from '../lib/api'
 
 function statusBadge(st: Instance['status']): [string, string] {
@@ -18,6 +18,9 @@ export default function InstancesPage({
 }) {
   const [instances, setInstances] = useState<Instance[]>([])
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [search, setSearch] = useState('')
+  const [searchFocus, setSearchFocus] = useState(false)
+  const [filter, setFilter] = useState<'all' | 'running' | 'stopped' | 'pool' | 'solo'>('all')
   const [addOpen, setAddOpen] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   // 手动刷新进度：{ done: 已检查数量, total: 实例总数 }，null = 不在刷新
@@ -81,11 +84,28 @@ export default function InstancesPage({
     })
   }
 
-  const selectedAll = instances.length > 0 && instances.every((i) => selected.has(i.name))
+  // 前端过滤：搜索（名称/节点/IP/端口）+ 状态/池筛选
+  const filtered = instances.filter((i) => {
+    const q = search.trim().toLowerCase()
+    const hit =
+      !q ||
+      i.name.toLowerCase().includes(q) ||
+      i.node.toLowerCase().includes(q) ||
+      (i.ip || '').toLowerCase().includes(q) ||
+      String(i.port).includes(q)
+    if (!hit) return false
+    if (filter === 'running' && i.status !== 'Running') return false
+    if (filter === 'stopped' && i.status !== 'Stopped') return false
+    if (filter === 'pool' && !i.join_gateway) return false
+    if (filter === 'solo' && i.join_gateway) return false
+    return true
+  })
+
+  const selectedAll = filtered.length > 0 && filtered.every((i) => selected.has(i.name))
 
   const toggleAll = () => {
     if (selectedAll) setSelected(new Set())
-    else setSelected(new Set(instances.map((i) => i.name)))
+    else setSelected(new Set(filtered.map((i) => i.name)))
   }
 
 // 忙态：optimistic —— 变化触发重渲染；key=实例名，值为该实例正在进行的操作
@@ -154,7 +174,7 @@ export default function InstancesPage({
     }
   }
 
-  const [joinBusy, setJoinBusy] = useState<Record<string, boolean>>({})
+const [joinBusy, setJoinBusy] = useState<Record<string, boolean>>({})
   const doJoin = async (name: string, join: boolean) => {
     setJoinBusy((prev) => ({ ...prev, [name]: true }))
     try {
@@ -169,6 +189,33 @@ export default function InstancesPage({
         delete next[name]
         return next
       })
+    }
+  }
+
+  // 批量入/出池：逐实例调用 setJoinGateway（Rust 无批量命令）
+  const [joinBatchBusy, setJoinBatchBusy] = useState(false)
+  const doBatchJoin = async (join: boolean) => {
+    const names = [...selected].filter((n) => (join ? !instances.find((i) => i.name === n)?.join_gateway : instances.find((i) => i.name === n)?.join_gateway))
+    if (names.length === 0) {
+      toast(`未选中需要${join ? '移入' : '移出'}的实例`)
+      return
+    }
+    setJoinBatchBusy(true)
+    try {
+      let ok = 0
+      let fail = 0
+      for (const n of names) {
+        try {
+          await api.setJoinGateway(n, join)
+          ok++
+        } catch {
+          fail++
+        }
+      }
+      toast(`${join ? '移入' : '移出'}实例池成功 ${ok} 个${fail ? `，失败 ${fail}` : ''}`, fail === 0)
+      await load()
+    } finally {
+      setJoinBatchBusy(false)
     }
   }
 
@@ -209,30 +256,64 @@ if (kind === 'delete' && !confirm(`确定删除选中的 ${names.length} 个实�
 
   return (
     <div className="p-6 space-y-4">
-      {/* 工具条 */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <h2 className="text-lg font-semibold text-zinc-900">实例管理</h2>
-          <span className="px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-500 text-xs font-medium">
-            {instances.length} 个
-          </span>
+      {/* 工具条：标题行 + 批量操作行 */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <h2 className="text-lg font-semibold text-zinc-900">实例管理</h2>
+            <span className="px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-500 text-xs font-medium">
+              {instances.length} 个
+            </span>
+            <div
+              className={clsx(
+                'relative flex items-center rounded-lg border border-zinc-200 bg-white transition-all duration-200 overflow-hidden',
+                searchFocus || search ? 'w-52' : 'w-9',
+              )}
+            >
+              <Search size={14} className="absolute left-2.5 text-zinc-400 pointer-events-none" />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                onFocus={() => setSearchFocus(true)}
+                onBlur={() => setSearchFocus(false)}
+                placeholder="搜索名称 / 节点 / IP"
+                className={clsx(
+                  'w-full bg-transparent py-1.5 pl-8 pr-2 text-[12px] outline-none placeholder:text-zinc-300 transition-opacity',
+                  searchFocus || search ? 'opacity-100' : 'opacity-0',
+                )}
+              />
+            </div>
+            <select
+              value={filter}
+              onChange={(e) => setFilter(e.target.value as typeof filter)}
+              className="px-2.5 py-1.5 rounded-lg border border-zinc-200 bg-white text-[12px] text-zinc-600 outline-none"
+            >
+              <option value="all">全部实例</option>
+              <option value="running">运行中</option>
+              <option value="stopped">已停止</option>
+              <option value="pool">池成员</option>
+              <option value="solo">独享</option>
+            </select>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => void doRefresh()}
+              disabled={refreshing}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-zinc-700 bg-white border border-zinc-200 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
+              {refreshProgress ? `刷新 ${refreshProgress.done} / ${refreshProgress.total}` : '刷新'}
+            </button>
+            <button
+              onClick={() => setAddOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-white bg-zinc-900 hover:bg-zinc-700"
+            >
+              <Plus size={14} /> 添加实例
+            </button>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => void doRefresh()}
-            disabled={refreshing}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-zinc-700 bg-white border border-zinc-200 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-70"
-          >
-            <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
-            {refreshProgress ? `刷新 ${refreshProgress.done} / ${refreshProgress.total}` : '刷新'}
-          </button>
-          <button
-            onClick={() => setAddOpen(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-white bg-zinc-900 hover:bg-zinc-700"
-          >
-            <Plus size={14} /> 添加实例
-          </button>
-<button
             onClick={() => void batch('start')}
             disabled={selected.size === 0 || batchBusy}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-white bg-green-600 hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-40"
@@ -247,6 +328,20 @@ if (kind === 'delete' && !confirm(`确定删除选中的 ${names.length} 个实�
             <Square size={14} /> 批量停止
           </button>
           <button
+            onClick={() => void doBatchJoin(true)}
+            disabled={selected.size === 0 || joinBatchBusy || batchBusy}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-teal-700 bg-teal-50 border border-teal-100 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {joinBatchBusy ? <Loader2 size={14} className="animate-spin" /> : <Network size={14} />} 批量入池
+          </button>
+          <button
+            onClick={() => void doBatchJoin(false)}
+            disabled={selected.size === 0 || joinBatchBusy || batchBusy}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-amber-700 bg-amber-50 border border-amber-100 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {joinBatchBusy ? <Loader2 size={14} className="animate-spin" /> : <Network size={14} />} 批量出池
+          </button>
+          <button
             onClick={() => void batch('delete')}
             disabled={selected.size === 0}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-red-600 bg-red-50 hover:bg-red-100 disabled:opacity-40"
@@ -256,10 +351,11 @@ if (kind === 'delete' && !confirm(`确定删除选中的 ${names.length} 个实�
         </div>
       </div>
 
-      {instances.length > 0 && (
+      {filtered.length > 0 && (
         <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm overflow-hidden">
+          <div className="max-h-[600px] overflow-y-auto">
           <table className="w-full text-[13px]">
-            <thead>
+            <thead className="sticky top-0 z-10 bg-white">
               <tr className="text-left text-zinc-400 border-b border-zinc-100">
                 <th className="py-3 pl-4 w-8">
                   <input type="checkbox" checked={selectedAll} onChange={toggleAll} className="accent-zinc-900" />
@@ -273,7 +369,7 @@ if (kind === 'delete' && !confirm(`确定删除选中的 ${names.length} 个实�
               </tr>
             </thead>
             <tbody>
-{instances.map((i) => {
+{filtered.map((i) => {
                 const isPending = pending[i.name]
                 // 乐观状态：操作中直接显示启动中/停止中，覆盖真实状态徽章
                 const displayStatus: Instance['status'] = isPending === 'stop' ? 'Stopping' : isPending === 'start' ? 'Starting' : i.status
@@ -375,10 +471,11 @@ if (kind === 'delete' && !confirm(`确定删除选中的 ${names.length} 个实�
                       </div>
                     </td>
                   </tr>
-                )
+)
               })}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 
@@ -386,6 +483,12 @@ if (kind === 'delete' && !confirm(`确定删除选中的 ${names.length} 个实�
         <div className="flex flex-col items-center justify-center py-24 text-zinc-400">
           <p className="text-base mb-2">暂无实例</p>
           <p className="text-[13px]">在「节点扫描」页勾选节点批量添加，或点击「添加实例」</p>
+        </div>
+      )}
+
+      {instances.length > 0 && filtered.length === 0 && (
+        <div className="flex flex-col items-center justify-center py-16 text-zinc-400">
+          <p className="text-[13px]">没有匹配「{search || filter}」的实例，试试调整搜索或筛选条件</p>
         </div>
       )}
 
