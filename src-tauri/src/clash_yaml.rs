@@ -19,6 +19,13 @@ pub struct ClashNode {
     #[serde(rename = "skip-cert-verify")]
     pub skip_cert_verify: Option<bool>,
     pub network: Option<String>,
+    /// hysteria2 带宽（Clash 配置里的 up / down）
+    pub up: Option<u64>,
+    pub down: Option<u64>,
+    /// hysteria2 obfs 混淆参数
+    pub obfs: Option<String>,
+    #[serde(rename = "obfs-password")]
+    pub obfs_password: Option<String>,
     #[serde(rename = "ws-opts")]
     pub ws_opts: Option<WsOpts>,
     #[serde(rename = "ws-headers")]
@@ -26,10 +33,38 @@ pub struct ClashNode {
     pub ws_headers: Option<serde_yaml::Value>,
     #[serde(rename = "client-fingerprint")]
     pub client_fingerprint: Option<String>,
+    /// VLESS 流控，例如 xtls-rprx-vision；REALITY 节点必需。
+    pub flow: Option<String>,
+    /// REALITY 参数（public-key / short-id），缺失会导致 TLS 握手失败。
+    #[serde(rename = "reality-opts")]
+    pub reality_opts: Option<RealityOpts>,
     #[allow(dead_code)]
     pub alpn: Option<Vec<String>>,
     #[serde(skip)]
     pub group: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct RealityOpts {
+    #[serde(rename = "public-key")]
+    pub public_key: Option<String>,
+    /// short-id 在 YAML 里可能未加引号而被解析成数字，这里做宽松转换。
+    #[serde(rename = "short-id", default, deserialize_with = "de_loose_string")]
+    pub short_id: Option<String>,
+}
+
+/// 把标量（字符串/数字/布尔）统一读成 Option<String>。
+fn de_loose_string<'de, D>(deserializer: D) -> std::result::Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_yaml::Value::deserialize(deserializer)?;
+    Ok(match value {
+        serde_yaml::Value::String(s) => Some(s),
+        serde_yaml::Value::Number(n) => Some(n.to_string()),
+        serde_yaml::Value::Bool(b) => Some(b.to_string()),
+        _ => None,
+    })
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

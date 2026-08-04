@@ -37,6 +37,19 @@ impl Config {
         }
     }
 
+    /// 生效的默认密码：config 未设置时回退 "123456"。
+    /// 实例未单独设置密码时，实例 API 门禁与探测均使用该值。
+    pub fn effective_default_password() -> String {
+        let password = Self::load()
+            .unwrap_or_default()
+            .default_password;
+        if password.is_empty() {
+            "123456".to_string()
+        } else {
+            password
+        }
+    }
+
     pub fn save(&self) -> Result<()> {
         let path = Self::config_path();
         let data = serde_json::to_string_pretty(self)

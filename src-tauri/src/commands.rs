@@ -12,7 +12,6 @@ use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
 
 
 // ======================== 路径与共享状态 ========================
@@ -39,15 +38,7 @@ pub fn create_manager() -> InstanceManager {
 }
 
 fn default_password() -> String {
-    let password = Config::load()
-        .unwrap_or_default()
-        .default_password
-        .clone();
-    if password.is_empty() {
-        "123456".to_string()
-    } else {
-        password
-    }
+    Config::effective_default_password()
 }
 
 fn lock_manager<'a>(state: &'a tauri::State<'a, AppState>) -> Result<std::sync::MutexGuard<'a, InstanceManager>, String> {
@@ -468,10 +459,16 @@ let mut mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
         let port = mgr
             .prepare_test(&name_owned)
             .map_err(|e| e.to_string())?;
-        // 启用 401 门禁后，自检需带实例密钥
+        // 启用 401 门禁后，自检需带实例密钥；实例未设密码时回退全局默认密码
         let auth = mgr
             .find_instance(&name_owned)
-            .map(|i| i.password.clone());
+            .map(|i| {
+                if i.password.is_empty() {
+                    crate::config::Config::effective_default_password()
+                } else {
+                    i.password.clone()
+                }
+            });
         drop(mgr); // 探测在锁外进行，避免长阻塞
         Ok(crate::instance::probe_free_completion(&name_owned, port, auth.as_deref()))
     })
@@ -883,7 +880,7 @@ fn is_port_used(mgr: &InstanceManager, port: u16) -> bool {
     if mgr.list_instances().iter().any(|i| i.port == port) {
         return true;
     }
-    crate::instance::wait_for_port(port, Duration::from_millis(300))
+    !crate::instance::is_port_free(port)
 }
 
 fn rand_seed() -> u64 {
@@ -934,7 +931,7 @@ pub async fn port_check(
                 reason: "已被实例占用".to_string(),
             });
         }
-        if crate::instance::wait_for_port(port, Duration::from_millis(300)) {
+        if !crate::instance::is_port_free(port) {
             return Ok(PortCheckResult {
                 available: false,
                 reason: "端口已被本机程序监听".to_string(),
@@ -962,7 +959,7 @@ pub fn scan_start(
     let password = default_password();
     let api_port = api_port.unwrap_or(DEFAULT_PROBE_API_PORT);
     let socks_port = socks_port.unwrap_or(DEFAULT_PROBE_SOCKS_PORT);
-    let timeout = timeout.unwrap_or(12);
+    let timeout = timeout.unwrap_or(25);
     let filter = nodes.filter(|v| !v.is_empty());
 
     match state.scan.start_scan(
