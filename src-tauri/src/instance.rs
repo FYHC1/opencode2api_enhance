@@ -113,16 +113,19 @@ impl InstanceManager {
         Ok(())
     }
 
+    /// 移除实例（释放回节点扫描）：若正在运行/启动/停止中，先自动关闭（kill 进程），再删除记录。
     pub fn remove_instance(&mut self, name: &str) -> Result<()> {
         let idx = self
             .instances
             .iter()
             .position(|i| i.name == name)
             .context("实例不存在")?;
-        if self.instances[idx].status == InstanceStatus::Running
-            || self.instances[idx].status == InstanceStatus::Starting
-        {
-            bail!("请先停止实例 '{}' 再删除", name);
+        // 一条龙：无论当前状态如何，先关闭进程再删除（无需手动先停止）
+        if let Some(pid) = self.instances[idx].pid {
+            let _ = kill_process(pid);
+        }
+        if let Some(pid) = self.instances[idx].singbox_pid {
+            let _ = kill_process(pid);
         }
         self.instances.remove(idx);
         self.save()?;

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import clsx from 'clsx'
-import { Copy, Loader2, Power, RefreshCw, ShieldCheck, Network, Search, Play, Square, TestTube2 } from 'lucide-react'
+import { Copy, Loader2, Power, RefreshCw, ShieldCheck, Network, Search, Play, Square, TestTube2, Trash2 } from 'lucide-react'
 import { api, type GatewayStatus, type Instance } from '../lib/api'
 
 function statusBadge(st: Instance['status']): [string, string] {
@@ -95,11 +95,13 @@ export default function PoolPage({
     }
   }
 
-  const doKick = async (name: string) => {
+  // 释放池成员：一条龙（自动关闭实例 → 删除记录 → 释放回节点扫描），无「恢复独享」中间态
+  const doRelease = async (name: string) => {
+    if (!confirm(`确定释放实例 ${name}？将关闭实例、删除记录并释放回节点扫描。`)) return
     setKickBusy(name)
     try {
-      await api.setJoinGateway(name, false)
-      toast(`已将实例 ${name} 移出实例池（恢复独享）`)
+      await api.removeInstance(name)
+      toast(`已释放实例 ${name}（回节点扫描）`)
       await load()
     } catch (e) {
       toast(String(e), false)
@@ -415,13 +417,13 @@ export default function PoolPage({
                         >
                           <TestTube2 size={12} /> 测试
                         </button>
-                        <button
-                          onClick={() => void doKick(i.name)}
+<button
+                          onClick={() => void doRelease(i.name)}
                           disabled={kickBusy === i.name || !!rowBusy[i.name]}
                           className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[12px] text-red-600 bg-red-50 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
                         >
-                          {kickBusy === i.name ? <Loader2 size={12} className="animate-spin" /> : null}
-                          {kickBusy === i.name ? '移出中…' : '移出池'}
+                          {kickBusy === i.name ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
+                          {kickBusy === i.name ? '释放中…' : '释放'}
                         </button>
                       </div>
                     </td>
@@ -432,8 +434,8 @@ export default function PoolPage({
           </table>
         ) : (
           <div className="flex flex-col items-center justify-center py-16 text-zinc-400">
-            <p className="text-[13px] mb-1">暂无池成员</p>
-            <p className="text-[12px]">在「实例」页将实例「移入池」，或「节点扫描」页批量添加时选择「添加进实例池」</p>
+<p className="text-[13px] mb-1">暂无池成员</p>
+            <p className="text-[12px]">在「节点扫描」页勾选节点，以「进池」方式批量添加（聚合到统一网关）</p>
           </div>
         )}
       </div>

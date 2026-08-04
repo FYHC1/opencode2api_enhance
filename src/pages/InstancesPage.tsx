@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import clsx from 'clsx'
-import { RefreshCw, Play, Square, Trash2, TestTube2, Copy, Loader2, Network, Search, Server } from 'lucide-react'
+import { RefreshCw, Play, Square, Trash2, TestTube2, Copy, Loader2, Search, Server } from 'lucide-react'
 import { api, type Instance } from '../lib/api'
 
 function statusBadge(st: Instance['status']): [string, string] {
@@ -20,7 +20,7 @@ export default function InstancesPage({
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [search, setSearch] = useState('')
   const [searchFocus, setSearchFocus] = useState(false)
-  const [filter, setFilter] = useState<'all' | 'running' | 'stopped' | 'pool' | 'solo'>('all')
+  const [filter, setFilter] = useState<'all' | 'running' | 'stopped'>('all')
   const [refreshing, setRefreshing] = useState(false)
   // 手动刷新进度：{ done: 已检查数量, total: 实例总数 }，null = 不在刷新
   const [refreshProgress, setRefreshProgress] = useState<{ done: number; total: number } | null>(null)
@@ -42,7 +42,8 @@ export default function InstancesPage({
   // 每批返回后更新列表并累计进度，全部完成后按钮文字恢复「刷新」
   const CHECK_BATCH = 5
   const doRefresh = async () => {
-    const names = instances.map((i) => i.name)
+    // 本页只管理独享实例（池成员在实例池页管理），刷新只校正独享
+    const names = instances.filter((i) => !i.join_gateway).map((i) => i.name)
     const total = names.length
     if (total === 0) {
       await load(false)
@@ -83,8 +84,11 @@ export default function InstancesPage({
     })
   }
 
-  // 前端过滤：搜索（名称/节点/IP/端口）+ 状态/池筛选
-  const filtered = instances.filter((i) => {
+  // 独享实例 = 未入池（页面边界：本页只显示独享，池成员在实例池页）
+  const soloInstances = instances.filter((i) => !i.join_gateway)
+
+  // 前端过滤：搜索（名称/节点/IP/端口）+ 状态筛选
+  const filtered = soloInstances.filter((i) => {
     const q = search.trim().toLowerCase()
     const hit =
       !q ||
@@ -95,8 +99,6 @@ export default function InstancesPage({
     if (!hit) return false
     if (filter === 'running' && i.status !== 'Running') return false
     if (filter === 'stopped' && i.status !== 'Stopped') return false
-    if (filter === 'pool' && !i.join_gateway) return false
-    if (filter === 'solo' && i.join_gateway) return false
     return true
   })
 
@@ -147,11 +149,11 @@ export default function InstancesPage({
     }
   }
 
-  const doRemove = async (name: string) => {
-    if (!confirm(`确定删除实例 ${name}？`)) return
+const doRemove = async (name: string) => {
+    if (!confirm(`确定移除实例 ${name}？移除会关闭实例并释放回节点扫描。`)) return
     try {
       await api.removeInstance(name)
-      toast(`已删除实例 ${name}`)
+      toast(`已移除实例 ${name}（释放回节点扫描）`)
       setSelected((prev) => {
         const next = new Set(prev)
         next.delete(name)
@@ -173,76 +175,7 @@ export default function InstancesPage({
     }
   }
 
-const [joinBusy, setJoinBusy] = useState<Record<string, boolean>>({})
-  const doJoin = async (name: string, join: boolean) => {
-    setJoinBusy((prev) => ({ ...prev, [name]: true }))
-    try {
-      await api.setJoinGateway(name, join)
-      toast(join ? `已将实例 ${name} 移入实例池` : `已将实例 ${name} 移出实例池（恢复独享）`)
-      await load()
-    } catch (e) {
-      toast(String(e), false)
-    } finally {
-      setJoinBusy((prev) => {
-        const next = { ...prev }
-        delete next[name]
-        return next
-      })
-    }
-  }
 
-  // 批量出池：逐实例调用 setJoinGateway（Rust 无批量命令），无需确认弹窗
-  const [joinBatchBusy, setJoinBatchBusy] = useState(false)
-  const doBatchLeave = async () => {
-    const names = [...selected].filter((n) => instances.find((i) => i.name === n)?.join_gateway)
-    if (names.length === 0) {
-      toast('未选中需要移出的实例')
-      return
-    }
-    setJoinBatchBusy(true)
-    try {
-      let ok = 0
-      let fail = 0
-      for (const n of names) {
-        try {
-          await api.setJoinGateway(n, false)
-          ok++
-        } catch {
-          fail++
-        }
-      }
-      toast(`移出实例池成功 ${ok} 个${fail ? `，失败 ${fail}` : ''}`, fail === 0)
-      await load()
-    } finally {
-      setJoinBatchBusy(false)
-    }
-  }
-
-  // 批量入池：只打 join_gateway 标记（入池默认不启动，启停由实例池页手动控制）
-  const doBatchJoin = async () => {
-    const names = [...selected].filter((n) => !instances.find((i) => i.name === n)?.join_gateway)
-    if (names.length === 0) {
-      toast('未选中需要移入的实例')
-      return
-    }
-    setJoinBatchBusy(true)
-    try {
-      let ok = 0
-      let fail = 0
-      for (const n of names) {
-        try {
-          await api.setJoinGateway(n, true)
-          ok++
-        } catch {
-          fail++
-        }
-      }
-      toast(`移入实例池成功 ${ok} 个${fail ? `，失败 ${fail}` : ''}`, fail === 0)
-      await load()
-    } finally {
-      setJoinBatchBusy(false)
-    }
-  }
 
 
   const batch = async (kind: 'start' | 'stop' | 'delete') => {
@@ -251,14 +184,14 @@ const [joinBusy, setJoinBusy] = useState<Record<string, boolean>>({})
       toast('请先勾选实例')
       return
     }
-if (kind === 'delete' && !confirm(`确定删除选中的 ${names.length} 个实例？`)) return
+if (kind === 'delete' && !confirm(`确定移除选中的 ${names.length} 个实例？将自动关闭并释放回节点扫描。`)) return
     setBatchBusy(true)
     try {
       const fn =
         kind === 'start' ? api.batchStart : kind === 'stop' ? api.batchStop : api.batchDelete
       const r = await fn(names)
       toast(
-        `${kind === 'start' ? '启动' : kind === 'stop' ? '停止' : '删除'}成功 ${r.success_count} 个` +
+        `${kind === 'start' ? '启动' : kind === 'stop' ? '停止' : '移除'}成功 ${r.success_count} 个` +
           (r.error_count ? `，失败 ${r.error_count}` : ''),
         r.error_count === 0,
       )
@@ -310,20 +243,7 @@ if (kind === 'delete' && !confirm(`确定删除选中的 ${names.length} 个实�
           >
             <Square size={14} /> 批量停止
           </button>
-          <button
-            onClick={() => void doBatchJoin()}
-            disabled={selected.size === 0 || joinBatchBusy || batchBusy}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-teal-700 bg-teal-50 border border-teal-100 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {joinBatchBusy ? <Loader2 size={14} className="animate-spin" /> : <Network size={14} />} 批量入池
-          </button>
-          <button
-            onClick={() => void doBatchLeave()}
-            disabled={selected.size === 0 || joinBatchBusy || batchBusy}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-amber-700 bg-amber-50 border border-amber-100 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {joinBatchBusy ? <Loader2 size={14} className="animate-spin" /> : <Network size={14} />} 批量出池
-          </button>
+
           <button
             onClick={() => void batch('delete')}
             disabled={selected.size === 0}
@@ -334,14 +254,15 @@ if (kind === 'delete' && !confirm(`确定删除选中的 ${names.length} 个实�
         </div>
       </div>
 
-      {instances.length > 0 && (
+      {soloInstances.length > 0 && (
         <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm overflow-hidden">
           <div className="px-4 py-3 border-b border-zinc-100 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Server size={15} className="text-teal-600" />
               <span className="text-[14px] font-semibold text-zinc-900">独享</span>
-              <span className="text-[12px] text-zinc-400">共 {instances.length} 个</span>
+              <span className="text-[12px] text-zinc-400">共 {soloInstances.length} 个</span>
             </div>
+
             <div className="flex items-center gap-2">
               <div
                 className={clsx(
@@ -367,12 +288,11 @@ if (kind === 'delete' && !confirm(`确定删除选中的 ${names.length} 个实�
                 onChange={(e) => setFilter(e.target.value as typeof filter)}
                 className="px-2.5 py-1.5 rounded-lg border border-zinc-200 bg-white text-[12px] text-zinc-600 outline-none"
               >
-                <option value="all">全部实例</option>
+<option value="all">全部实例</option>
                 <option value="running">运行中</option>
                 <option value="stopped">已停止</option>
-                <option value="pool">池成员</option>
-                <option value="solo">独享</option>
               </select>
+
             </div>
           </div>
           {filtered.length > 0 ? (
@@ -442,11 +362,6 @@ if (kind === 'delete' && !confirm(`确定删除选中的 ${names.length} 个实�
 <td className="py-2.5 pl-2">
                       <div className="flex items-center gap-1.5">
                         <span className={clsx('inline-block px-2 py-0.5 rounded-full text-xs font-medium', cls)}>{label}</span>
-                        {i.join_gateway && (
-                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-teal-50 text-teal-700 border border-teal-100" title="已加入实例池">
-                            <Network size={10} /> 池
-                          </span>
-                        )}
                       </div>
                     </td>
                     <td className="py-2.5 pl-2 pr-4">
@@ -473,22 +388,8 @@ if (kind === 'delete' && !confirm(`确定删除选中的 ${names.length} 个实�
                         <button onClick={() => void doTest(i.name)} className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[12px] text-teal-700 bg-teal-50 hover:bg-teal-100">
                           <TestTube2 size={12} /> 测试
                         </button>
-                        <button
-                          onClick={() => void doJoin(i.name, !i.join_gateway)}
-                          disabled={!!joinBusy[i.name]}
-                          className={clsx(
-                            'flex items-center gap-1 px-2.5 py-1 rounded-lg text-[12px] disabled:cursor-not-allowed disabled:opacity-60',
-                            i.join_gateway
-                              ? 'text-amber-700 bg-amber-50 hover:bg-amber-100'
-                              : 'text-teal-700 bg-teal-50 hover:bg-teal-100',
-                          )}
-                          title={i.join_gateway ? '移出实例池（恢复独享）' : '加入实例池（聚合到统一网关）'}
-                        >
-                          {joinBusy[i.name] ? <Loader2 size={12} className="animate-spin" /> : <Network size={12} />}
-                          {joinBusy[i.name] ? '处理中…' : i.join_gateway ? '移出池' : '移入池'}
-                        </button>
-                        <button onClick={() => void doRemove(i.name)} className="px-2.5 py-1 rounded-lg text-[12px] text-red-600 bg-red-50 hover:bg-red-100">
-                          删除
+                        <button onClick={() => void doRemove(i.name)} className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[12px] text-red-600 bg-red-50 hover:bg-red-100">
+                          <Trash2 size={12} /> 移除
                         </button>
                       </div>
                     </td>
@@ -505,10 +406,10 @@ if (kind === 'delete' && !confirm(`确定删除选中的 ${names.length} 个实�
         </div>
       )}
 
-      {instances.length === 0 && (
+      {soloInstances.length === 0 && (
         <div className="flex flex-col items-center justify-center py-24 text-zinc-400">
-          <p className="text-base mb-2">暂无实例</p>
-          <p className="text-[13px]">在「节点扫描」页勾选节点批量添加</p>
+          <p className="text-base mb-2">暂无独享实例</p>
+          <p className="text-[13px]">在「节点扫描」页勾选节点，以「独享」方式批量添加；池成员见「实例池」页</p>
         </div>
       )}
 
