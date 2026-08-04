@@ -6,6 +6,9 @@
 
 感谢 **opencode2api_enhance_2**（[作者 GitHub](待补充地址)）——本项目 v1.0.0 的「统一网关、免费额度实测健康检查、代理池健康检查、配置热更新、模型必填、同模型重试、批量并行启停」等核心能力均移植自该项目，是本次合并的基石。
 
+- Go 代理核心源于 [`6Kmfi6HP/opencode2api`](https://github.com/6Kmfi6HP/opencode2api)
+- 前端设计样式参考 Windsurf Account Manager
+
 
 
 本地**多实例代理管理器**桌面应用（Windows exe）。每个"实例" = 一个 opencode2api 代理进程 + 一个 sing-box 出口，绑定不同代理节点，把 OpenAI / Anthropic / Responses 风格的请求转发到 OpenCode 上游，并可通过多实例 × 多节点分散请求、绕过按 IP 的频率限制。
@@ -118,10 +121,3 @@ src-tauri/src/            # Rust 后端
 bin/                      # 内嵌子程序源（opencode2api.exe / sing-box.exe）
 portable/                 # 便携包使用说明
 scripts/                  # make-portable.sh 打包脚本
-```
-
-## 上游与致谢
-
-- Go 代理核心源于 [`6Kmfi6HP/opencode2api`](https://github.com/6Kmfi6HP/opencode2api)
-- 前端设计样式参考 Windsurf Account Manager
-
