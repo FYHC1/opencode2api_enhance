@@ -940,6 +940,31 @@ func applyConfig(cfg AppConfig) {
 
 }
 
+// startConfigWatcher applies config file changes without restarting the
+// process, because restarting a live HTTP server drops active SSE streams.
+func startConfigWatcher(path string) {
+	go func() {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+		lastData, _ := os.ReadFile(path)
+		for range ticker.C {
+			data, err := os.ReadFile(path)
+			if err != nil || bytes.Equal(data, lastData) {
+				continue
+			}
+			var cfg AppConfig
+			if err := json.Unmarshal(data, &cfg); err != nil {
+				slog.Warn("config reload skipped", "path", path, "error", err)
+				continue
+			}
+			applyConfig(cfg)
+			lastData = append(lastData[:0], data...)
+			slog.Info("config hot-reloaded", "path", path)
+		}
+	}()
+}
+
+
 func resolveModel(model string) string {
 	m := strings.TrimSpace(model)
 	configMu.RLock()
@@ -4834,6 +4859,8 @@ func main() {
 	if err := saveConfig(configPath, cfg); err != nil {
 		slog.Warn("failed to save config", "path", configPath, "error", err)
 	}
+	startConfigWatcher(configPath)
+
 
 	loadTokenStats()
 	slog.Info("config loaded", "path", configPath)
