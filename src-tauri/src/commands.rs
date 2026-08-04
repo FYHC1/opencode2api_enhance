@@ -1119,6 +1119,17 @@ pub struct ModelStat {
     pub total_tokens: i64,
 }
 
+/// 统一网关下单个节点（实例出口）的统计明细（来自 Go 核心 node_stats.json）
+#[derive(Debug, Serialize)]
+pub struct GatewayNodeStat {
+    pub name: String,
+    pub addr: String,
+    pub requests: i64,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub total_tokens: i64,
+}
+
 /// 单个实例的统计汇总（按实例目录聚合 stats.json）
 #[derive(Debug, Serialize)]
 pub struct InstanceStat {
@@ -1130,6 +1141,9 @@ pub struct InstanceStat {
     pub completion_tokens: i64,
     pub total_tokens: i64,
     pub models: Vec<ModelStat>,
+    /// 仅统一网关条目：按节点（SOCKS5 出口）拆分的调用统计
+    #[serde(default)]
+    pub nodes: Vec<GatewayNodeStat>,
 }
 
 /// 全局统计总览（全部实例求和）
@@ -1163,6 +1177,25 @@ struct GoStatsData {
     models: std::collections::HashMap<String, GoModelStats>,
 }
 
+/// Go 核心 node_stats.json（统一网关按节点统计）的解析结构
+#[derive(Debug, Deserialize)]
+struct GoNodeStat {
+    #[serde(default)]
+    request_count: i64,
+    #[serde(default)]
+    prompt_tokens: i64,
+    #[serde(default)]
+    completion_tokens: i64,
+    #[serde(default)]
+    total_tokens: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct GoNodeStatsData {
+    #[serde(default)]
+    nodes: std::collections::HashMap<String, GoNodeStat>,
+}
+
 /// 按实例读取 token 统计：扫描 runtime/ 下各实例目录的 stats.json，
 /// 汇总出全局总览 + 实例列表（按总计 token 降序）。
 /// - 实例目录存在但实例列表中没有 → exists=false（已删除，统计保留）
@@ -1177,12 +1210,19 @@ pub fn get_stats() -> Result<StatsSummary, String> {
         .iter()
         .map(|i| i.name.clone())
         .collect();
+    let port_to_name: std::collections::HashMap<u16, String> = manager
+        .list_instances()
+        .iter()
+        .map(|i| (i.singbox_port, i.name.clone()))
+        .collect();
 
-    Ok(aggregate_stats(&runtime_dir, &known_names))
+    Ok(aggregate_stats(&runtime_dir, &known_names, &port_to_name))
 }
 
 /// 聚合逻辑（独立函数便于单元测试）：遍历 runtime_dir 各子目录读取 stats.json。
-fn aggregate_stats(runtime_dir: &std::path::Path, known_names: &[String]) -> StatsSummary {
+/// port_to_name 提供 sing-box 端口 → 实例名映射，用于把统一网关 node_stats.json
+/// 中的 SOCKS5 出口地址（127.0.0.1:281xx）解析为实例名。
+fn aggregate_stats(runtime_dir: &std::path::Path, known_names: &[String], port_to_name: &std::collections::HashMap<u16, String>) -> StatsSummary {
     let mut instances: Vec<InstanceStat> = Vec::new();
     let entries = match std::fs::read_dir(runtime_dir) {
         Ok(e) => e,
@@ -1236,15 +1276,48 @@ fn aggregate_stats(runtime_dir: &std::path::Path, known_names: &[String]) -> Sta
         // 模型明细按总计降序
         models.sort_by(|a, b| b.total_tokens.cmp(&a.total_tokens));
 
-        let exists = known_names.contains(&name);
+        let exists = known_names.contains(&name) || name == "_unified-gateway";
+        let display_name = if name == "_unified-gateway" {
+            "统一网关".to_string()
+        } else {
+            name.clone()
+        };
+        // 统一网关条目附带按节点拆分的统计（node_stats.json）
+        let mut nodes: Vec<GatewayNodeStat> = Vec::new();
+        if name == "_unified-gateway" {
+            let node_path = dir_path.join("node_stats.json");
+            if let Ok(data) = std::fs::read_to_string(&node_path) {
+                if let Ok(gns) = serde_json::from_str::<GoNodeStatsData>(&data) {
+                    for (addr, ns) in gns.nodes {
+                        // addr 形如 127.0.0.1:28119，取端口反查实例名
+                        let node_name = addr
+                            .rsplit(':')
+                            .next()
+                            .and_then(|p| p.parse::<u16>().ok())
+                            .and_then(|port| port_to_name.get(&port).cloned())
+                            .unwrap_or_else(|| addr.clone());
+                        nodes.push(GatewayNodeStat {
+                            name: node_name,
+                            addr,
+                            requests: ns.request_count,
+                            prompt_tokens: ns.prompt_tokens,
+                            completion_tokens: ns.completion_tokens,
+                            total_tokens: ns.total_tokens,
+                        });
+                    }
+                    nodes.sort_by(|a, b| b.total_tokens.cmp(&a.total_tokens));
+                }
+            }
+        }
         instances.push(InstanceStat {
-            name,
+            name: display_name,
             exists,
             requests,
             prompt_tokens,
             completion_tokens,
             total_tokens,
             models,
+            nodes,
         });
     }
 
@@ -1278,7 +1351,7 @@ mod stats_tests {
         write_stats(&root.join("user2"), r#"{"total_requests":1,"models":{"claude-3-5":{"request_count":1,"prompt_tokens":100,"completion_tokens":30,"total_tokens":130}}}"#);
 
         let known = vec!["user1".to_string(), "user2".to_string()];
-        let s = aggregate_stats(&root, &known);
+        let s = aggregate_stats(&root, &known, &std::collections::HashMap::new());
 
         assert_eq!(s.total_requests, 3);
         assert_eq!(s.total_prompt_tokens, 500);
@@ -1303,7 +1376,7 @@ mod stats_tests {
         write_stats(&root.join("user_live"), r#"{"total_requests":1,"models":{"b":{"request_count":1,"prompt_tokens":10,"completion_tokens":1,"total_tokens":11}}}"#);
 
         let known = vec!["user_live".to_string()];
-        let s = aggregate_stats(&root, &known);
+        let s = aggregate_stats(&root, &known, &std::collections::HashMap::new());
 
         assert_eq!(s.instances.len(), 2);
         let old = s.instances.iter().find(|i| i.name == "user_old").unwrap();
@@ -1324,7 +1397,7 @@ mod stats_tests {
         // 正常实例
         write_stats(&root.join("good"), r#"{"total_requests":1,"models":{"m":{"request_count":1,"prompt_tokens":9,"completion_tokens":1,"total_tokens":10}}}"#);
 
-        let s = aggregate_stats(&root, &["good".to_string()]);
+        let s = aggregate_stats(&root, &["good".to_string()], &std::collections::HashMap::new());
         assert_eq!(s.instances.len(), 1);
         assert_eq!(s.instances[0].name, "good");
         assert_eq!(s.total_requests, 1);
@@ -1337,9 +1410,58 @@ mod stats_tests {
         let _ = fs::remove_dir_all(&root);
         write_stats(&root.join("u"), r#"{"total_requests":2,"models":{"small":{"request_count":1,"prompt_tokens":1,"completion_tokens":1,"total_tokens":2},"big":{"request_count":1,"prompt_tokens":100,"completion_tokens":50,"total_tokens":150}}}"#);
 
-        let s = aggregate_stats(&root, &["u".to_string()]);
+        let s = aggregate_stats(&root, &["u".to_string()], &std::collections::HashMap::new());
         assert_eq!(s.instances[0].models[0].model, "big");
         assert_eq!(s.instances[0].models[1].model, "small");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_stats_gateway_nodes_resolved() {
+        let root = std::env::temp_dir().join("opencode2api-stats-test-gw-nodes");
+        let _ = fs::remove_dir_all(&root);
+        write_stats(&root.join("_unified-gateway"), r#"{"total_requests":2,"models":{"deepseek":{"request_count":2,"prompt_tokens":300,"completion_tokens":200,"total_tokens":500}}}"#);
+        fs::write(
+            root.join("_unified-gateway/node_stats.json"),
+            r#"{"total_requests":2,"nodes":{"127.0.0.1:28100":{"request_count":1,"prompt_tokens":100,"completion_tokens":50,"total_tokens":150},"127.0.0.1:28112":{"request_count":1,"prompt_tokens":200,"completion_tokens":150,"total_tokens":350}}}"#,
+        )
+        .unwrap();
+
+        let mut port_to_name = std::collections::HashMap::new();
+        port_to_name.insert(28100u16, "荷兰①".to_string());
+        port_to_name.insert(28112u16, "美国R1".to_string());
+        let s = aggregate_stats(&root, &[], &port_to_name);
+
+        assert_eq!(s.instances.len(), 1);
+        let gw = &s.instances[0];
+        assert_eq!(gw.name, "统一网关");
+        assert_eq!(gw.exists, true);
+        assert_eq!(gw.nodes.len(), 2);
+        // 按总计降序：美国R1(350) 在前
+        assert_eq!(gw.nodes[0].name, "美国R1");
+        assert_eq!(gw.nodes[0].addr, "127.0.0.1:28112");
+        assert_eq!(gw.nodes[0].total_tokens, 350);
+        assert_eq!(gw.nodes[1].name, "荷兰①");
+        assert_eq!(gw.nodes[1].total_tokens, 150);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_stats_gateway_nodes_unmapped_addr() {
+        let root = std::env::temp_dir().join("opencode2api-stats-test-gw-unmapped");
+        let _ = fs::remove_dir_all(&root);
+        write_stats(&root.join("_unified-gateway"), r#"{"total_requests":1,"models":{"m":{"request_count":1,"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}}"#);
+        // 端口不在映射表（实例已删除）→ 显示原始 addr
+        fs::write(
+            root.join("_unified-gateway/node_stats.json"),
+            r#"{"total_requests":1,"nodes":{"127.0.0.1:28999":{"request_count":1,"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}}"#,
+        )
+        .unwrap();
+
+        let s = aggregate_stats(&root, &[], &std::collections::HashMap::new());
+        let gw = &s.instances[0];
+        assert_eq!(gw.nodes.len(), 1);
+        assert_eq!(gw.nodes[0].name, "127.0.0.1:28999");
         let _ = fs::remove_dir_all(&root);
     }
 }
