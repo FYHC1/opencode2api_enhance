@@ -204,6 +204,34 @@ if (kind === 'delete' && !confirm(`确定释放选中的 ${names.length} 个实�
     }
   }
 
+  // 一键测试：对勾选的实例逐个探测连通性，汇总结果
+  const [testBusy, setTestBusy] = useState(false)
+  const doBatchTest = async () => {
+    const names = [...selected]
+    if (names.length === 0) {
+      toast('请先勾选实例')
+      return
+    }
+    setTestBusy(true)
+    try {
+      let ok = 0
+      let fail = 0
+      for (const n of names) {
+        try {
+          const r = await api.testInstance(n)
+          if (!r.ok) throw new Error(r.message)
+          ok++
+        } catch {
+          fail++
+        }
+      }
+      toast(`测试完成：成功 ${ok} 个${fail ? `，失败 ${fail}` : ''}`, fail === 0)
+      await load()
+    } finally {
+      setTestBusy(false)
+    }
+  }
+
   const copyText = async (text: string, label: string) => {
     try {
       await navigator.clipboard.writeText(text)
@@ -215,10 +243,11 @@ if (kind === 'delete' && !confirm(`确定释放选中的 ${names.length} 个实�
 
   return (
     <div className="p-6 space-y-4">
-      {/* 工具条：标题 + 操作按钮（原先样式一排） */}
+      {/* 工具条：标题 + 数量小字，右侧仅刷新 */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-<h2 className="text-lg font-semibold text-zinc-900">独享管理</h2>
+          <h2 className="text-lg font-semibold text-zinc-900">独享管理</h2>
+          <span className="text-[12px] text-zinc-400">{soloInstances.length} 个</span>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -229,28 +258,6 @@ if (kind === 'delete' && !confirm(`确定释放选中的 ${names.length} 个实�
             <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
             {refreshProgress ? `刷新 ${refreshProgress.done} / ${refreshProgress.total}` : '刷新'}
           </button>
-          <button
-            onClick={() => void batch('start')}
-            disabled={selected.size === 0 || batchBusy}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-white bg-green-600 hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {batchBusy ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />} 批量启动
-          </button>
-          <button
-            onClick={() => void batch('stop')}
-            disabled={selected.size === 0 || batchBusy}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-zinc-700 bg-white border border-zinc-200 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            <Square size={14} /> 批量停止
-          </button>
-
-          <button
-            onClick={() => void batch('delete')}
-            disabled={selected.size === 0}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-red-600 bg-red-50 hover:bg-red-100 disabled:opacity-40"
-          >
-            <Trash2 size={14} /> 批量删除
-          </button>
         </div>
       </div>
 
@@ -258,12 +265,32 @@ if (kind === 'delete' && !confirm(`确定释放选中的 ${names.length} 个实�
         <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm overflow-hidden">
           <div className="px-4 py-3 border-b border-zinc-100 flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <Server size={15} className="text-teal-600" />
+<Server size={15} className="text-teal-600" />
               <span className="text-[14px] font-semibold text-zinc-900">独享</span>
-              <span className="text-[12px] text-zinc-400">共 {soloInstances.length} 个</span>
             </div>
 
             <div className="flex items-center gap-2">
+              <button
+                onClick={() => void batch('start')}
+                disabled={selected.size === 0 || batchBusy}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-white bg-green-600 hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {batchBusy ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />} 批量启动
+              </button>
+              <button
+                onClick={() => void batch('stop')}
+                disabled={selected.size === 0 || batchBusy}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-zinc-700 bg-white border border-zinc-200 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <Square size={14} /> 批量停止
+              </button>
+              <button
+                onClick={() => void doBatchTest()}
+                disabled={selected.size === 0 || testBusy}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-teal-700 bg-teal-50 border border-teal-100 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {testBusy ? <Loader2 size={14} className="animate-spin" /> : <TestTube2 size={14} />} 一键测试
+              </button>
               <div
                 className={clsx(
                   'relative flex items-center rounded-lg border border-zinc-200 bg-white transition-all duration-200 overflow-hidden',
@@ -288,11 +315,10 @@ if (kind === 'delete' && !confirm(`确定释放选中的 ${names.length} 个实�
                 onChange={(e) => setFilter(e.target.value as typeof filter)}
                 className="px-2.5 py-1.5 rounded-lg border border-zinc-200 bg-white text-[12px] text-zinc-600 outline-none"
               >
-<option value="all">全部实例</option>
+                <option value="all">全部实例</option>
                 <option value="running">运行中</option>
                 <option value="stopped">已停止</option>
               </select>
-
             </div>
           </div>
           {filtered.length > 0 ? (
@@ -304,7 +330,7 @@ if (kind === 'delete' && !confirm(`确定释放选中的 ${names.length} 个实�
                 </th>
                 <th className="py-3 pl-2">名称 / 节点 IP</th>
                 <th className="py-3 pl-2">端口</th>
-                <th className="py-3 pl-2">API 地址</th>
+
                 <th className="py-3 pl-2">密钥</th>
                 <th className="py-3 pl-2">状态</th>
                 <th className="py-3 pl-2 pr-4 text-right">操作</th>
@@ -339,21 +365,11 @@ if (kind === 'delete' && !confirm(`确定释放选中的 ${names.length} 个实�
                       </div>
                     </td>
                     <td className="py-2.5 pl-2 text-zinc-500">{i.port}</td>
-                    <td className="py-2.5 pl-2">
+<td className="py-2.5 pl-2">
                       <button
-                        onClick={() => void copyText(`http://127.0.0.1:${i.port}/v1`, 'API 地址')}
-                        className="flex items-center gap-1 text-teal-700 hover:underline"
-                        title="点击复制"
-                      >
-                        <code className="text-[12px]">127.0.0.1:{i.port}/v1</code>
-                        <Copy size={11} />
-                      </button>
-                    </td>
-                    <td className="py-2.5 pl-2">
-                      <button
-                        onClick={() => void copyText(i.password || '', '密钥')}
+                        onClick={() => void copyText(`http://127.0.0.1:${i.port}/v1\n${i.password || ''}`, 'API 地址与密钥')}
                         className="flex items-center gap-1 text-zinc-600 hover:underline"
-                        title="点击复制"
+                        title="点击复制 API 地址与密钥"
                       >
                         <code className="text-[12px] text-zinc-400">{maskKey(i.password)}</code>
                         <Copy size={11} />
