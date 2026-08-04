@@ -1236,9 +1236,14 @@ fn aggregate_stats(runtime_dir: &std::path::Path, known_names: &[String]) -> Sta
         // 模型明细按总计降序
         models.sort_by(|a, b| b.total_tokens.cmp(&a.total_tokens));
 
-        let exists = known_names.contains(&name);
+        let exists = known_names.contains(&name) || name == "_unified-gateway";
+        let display_name = if name == "_unified-gateway" {
+            "统一网关".to_string()
+        } else {
+            name.clone()
+        };
         instances.push(InstanceStat {
-            name,
+            name: display_name,
             exists,
             requests,
             prompt_tokens,

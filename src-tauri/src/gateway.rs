@@ -129,6 +129,9 @@ impl GatewayManager {
         // A 化（关键）：只传 A 的 main.go 支持的 flag。
         // B 版本传 -force-free/-free-usage-file 会导致 A 的 go 进程 os.Exit(2) 秒退。
         let child = no_window(&mut Command::new(exe))
+            // 工作目录设为网关专属目录：Go 核心把 stats.json 写入当前工作目录，
+            // 不设置则落到应用 exe 目录，统计界面（只扫 runtime/）读不到。
+            .current_dir(self.gateway_dir())
             .arg("-port")
             .arg(UNIFIED_GATEWAY_PORT.to_string())
             .arg("-config")
