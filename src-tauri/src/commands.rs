@@ -80,12 +80,14 @@ pub fn sync_gateway(state: &tauri::State<'_, AppState>) {
 pub fn gateway_status(
     state: tauri::State<'_, AppState>,
 ) -> Result<crate::gateway::GatewayStatus, String> {
-    let total_instances = state
+let total_instances = state
         .manager
         .lock()
         .map_err(|_| "状态锁失败".to_string())?
         .list_instances()
-        .len();
+        .iter()
+        .filter(|i| i.join_gateway)
+        .count();
     let mut gateway = state
         .gateway
         .lock()
