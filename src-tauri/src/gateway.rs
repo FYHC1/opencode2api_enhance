@@ -138,6 +138,7 @@ impl GatewayManager {
             .arg(&self.config_path)
             .arg("-password")
             .arg(&self.password)
+            .arg("-gateway")
             .arg("-log-level")
             .arg("warn")
             .stdout(Stdio::from(stdout))

@@ -690,6 +690,7 @@ var (
 	reasoningEffortMap   = map[string]string{}
 	forceDisableThinking bool
 	debugMode            bool
+	gatewayMode          bool
 	configMu             sync.RWMutex
 	storedResponses      = map[string]StoredResponseState{}
 	storedResponsesMu    sync.RWMutex
@@ -891,7 +892,9 @@ func saveNodeStats() {
 }
 
 func recordNodeUsage(addr string, promptTokens, completionTokens, totalTokens int64) {
-	if addr == "" {
+	// 节点级统计只对统一网关进程（代理池路由）有意义；
+	// 直连实例走自身 sing-box，其记录无人读取，跳过以避免垃圾文件。
+	if addr == "" || !gatewayMode {
 		return
 	}
 	nodeStatsMu.Lock()
@@ -5060,6 +5063,7 @@ func main() {
 	flag.StringVar(&configPath, "config", "config.json", "配置文件路径")
 	flag.StringVar(&adminPassword, "password", "123456", "管理面板密码（留空则不启用登录验证）")
 	flag.BoolVar(&debugMode, "debug", false, "启用调试日志")
+	flag.BoolVar(&gatewayMode, "gateway", false, "统一网关模式（记录节点级统计）")
 	flag.StringVar(&logLevel, "log-level", "info", "日志级别: debug/info/warn/error")
 	flag.StringVar(&logFile, "log-file", "", "日志文件路径（留空输出到 stdout）")
 	flag.BoolVar(&showVersion, "version", false, "显示版本信息")
