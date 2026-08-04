@@ -2019,12 +2019,8 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Model = resolveModel(req.Model)
 	if req.Model == "" {
-		modelIDs := getModelIDs()
-		if len(modelIDs) > 0 {
-			req.Model = modelIDs[0]
-		} else {
-			req.Model = "deepseek-v4-flash-free"
-		}
+		http.Error(w, "model is required", http.StatusBadRequest)
+		return
 	}
 
 	// 多模态路由：检测到图片时转发到配置的上游
@@ -2706,6 +2702,10 @@ func claudeMessagesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claudeReq.Model = resolveModel(claudeReq.Model)
+	if claudeReq.Model == "" {
+		http.Error(w, `{"type":"error","error":{"type":"invalid_request_error","message":"model is required"}}`, http.StatusBadRequest)
+		return
+	}
 
 	// 多模态路由
 
@@ -3735,12 +3735,8 @@ func responsesHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if respReq.Model == "" {
-		modelIDs := getModelIDs()
-		if len(modelIDs) > 0 {
-			respReq.Model = modelIDs[0]
-		} else {
-			respReq.Model = "deepseek-v4-flash-free"
-		}
+		http.Error(w, "model is required", http.StatusBadRequest)
+		return
 	}
 
 	// 多模态路由

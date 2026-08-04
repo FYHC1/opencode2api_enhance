@@ -794,3 +794,59 @@ func TestGetStreamingHTTPClientRemovesTotalTimeout(t *testing.T) {
 	}
 }
 
+
+// ======================== F5 模型必填校验 ========================
+
+func TestChatCompletionsHandlerRequiresModel(t *testing.T) {
+	body := `{"messages":[{"role":"user","content":"hi"}]}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	chatCompletionsHandler(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "model is required") {
+		t.Fatalf("body = %q, want 'model is required'", rec.Body.String())
+	}
+}
+
+func TestChatCompletionsHandlerWithModelSucceeds(t *testing.T) {
+	transport := installFakeOpenCodeClient(t, []fakeUpstreamResponse{
+		{status: http.StatusOK, body: `{"id":"chatcmpl_test","choices":[]}`},
+	})
+	_ = transport
+	body := `{"model":"primary-model","messages":[{"role":"user","content":"hi"}]}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	chatCompletionsHandler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+}
+
+func TestClaudeMessagesHandlerRequiresModel(t *testing.T) {
+	body := `{"messages":[{"role":"user","content":"hi"}]}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+	claudeMessagesHandler(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "model is required") {
+		t.Fatalf("body = %q, want 'model is required'", rec.Body.String())
+	}
+}
+
+func TestResponsesHandlerRequiresModel(t *testing.T) {
+	body := `{"input":"hi"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
+	responsesHandler(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "model is required") {
+		t.Fatalf("body = %q, want 'model is required'", rec.Body.String())
+	}
+}
+
