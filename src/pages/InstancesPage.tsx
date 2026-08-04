@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import clsx from 'clsx'
-import { Plus, RefreshCw, Play, Square, Trash2, TestTube2, Copy, Loader2, Network, Search } from 'lucide-react'
+import { Plus, RefreshCw, Play, Square, Trash2, TestTube2, Copy, Loader2, Network, Search, Server } from 'lucide-react'
 import { api, type Instance } from '../lib/api'
 
 function statusBadge(st: Instance['status']): [string, string] {
@@ -314,45 +314,47 @@ if (kind === 'delete' && !confirm(`确定删除选中的 ${names.length} 个实�
         </div>
       </div>
 
-      {/* 筛选条：数量 + 搜索 + 筛选（表格上方、按钮下方） */}
-      <div className="flex items-center gap-3">
-        <span className="px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-500 text-xs font-medium">
-          {instances.length} 个
-        </span>
-        <div
-          className={clsx(
-            'relative flex items-center rounded-lg border border-zinc-200 bg-white transition-all duration-200 overflow-hidden',
-            searchFocus || search ? 'w-52' : 'w-9',
-          )}
-        >
-          <Search size={14} className="absolute left-2.5 text-zinc-400 pointer-events-none" />
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            onFocus={() => setSearchFocus(true)}
-            onBlur={() => setSearchFocus(false)}
-            placeholder="搜索名称 / 节点 / IP"
-            className={clsx(
-              'w-full bg-transparent py-1.5 pl-8 pr-2 text-[12px] outline-none placeholder:text-zinc-300 transition-opacity',
-              searchFocus || search ? 'opacity-100' : 'opacity-0',
-            )}
-          />
-        </div>
-        <select
-          value={filter}
-          onChange={(e) => setFilter(e.target.value as typeof filter)}
-          className="px-2.5 py-1.5 rounded-lg border border-zinc-200 bg-white text-[12px] text-zinc-600 outline-none"
-        >
-          <option value="all">全部实例</option>
-          <option value="running">运行中</option>
-          <option value="stopped">已停止</option>
-          <option value="pool">池成员</option>
-          <option value="solo">独享</option>
-        </select>
-      </div>
-
       {filtered.length > 0 && (
         <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm overflow-hidden">
+          <div className="px-4 py-3 border-b border-zinc-100 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Server size={15} className="text-teal-600" />
+              <span className="text-[14px] font-semibold text-zinc-900">独享</span>
+              <span className="text-[12px] text-zinc-400">共 {instances.length} 个</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div
+                className={clsx(
+                  'relative flex items-center rounded-lg border border-zinc-200 bg-white transition-all duration-200 overflow-hidden',
+                  searchFocus || search ? 'w-52' : 'w-9',
+                )}
+              >
+                <Search size={14} className="absolute left-2.5 text-zinc-400 pointer-events-none" />
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  onFocus={() => setSearchFocus(true)}
+                  onBlur={() => setSearchFocus(false)}
+                  placeholder="搜索名称 / 节点 / IP"
+                  className={clsx(
+                    'w-full bg-transparent py-1.5 pl-8 pr-2 text-[12px] outline-none placeholder:text-zinc-300 transition-opacity',
+                    searchFocus || search ? 'opacity-100' : 'opacity-0',
+                  )}
+                />
+              </div>
+              <select
+                value={filter}
+                onChange={(e) => setFilter(e.target.value as typeof filter)}
+                className="px-2.5 py-1.5 rounded-lg border border-zinc-200 bg-white text-[12px] text-zinc-600 outline-none"
+              >
+                <option value="all">全部实例</option>
+                <option value="running">运行中</option>
+                <option value="stopped">已停止</option>
+                <option value="pool">池成员</option>
+                <option value="solo">独享</option>
+              </select>
+            </div>
+          </div>
           <table className="w-full text-[13px]">
             <thead>
               <tr className="text-left text-zinc-400 border-b border-zinc-100">
