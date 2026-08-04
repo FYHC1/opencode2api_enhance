@@ -841,6 +841,74 @@ var (
 	tokenStatsPath = "stats.json"
 )
 
+// ======================== 节点 Token 统计 ========================
+// 网关/代理池模式下按实际选中的 SOCKS5 出口（节点）累计 token 统计，
+// 供统计界面展示「统一网关总体 + 各节点明细」。
+
+type NodeStat struct {
+	RequestCount     int64 `json:"request_count"`
+	PromptTokens     int64 `json:"prompt_tokens"`
+	CompletionTokens int64 `json:"completion_tokens"`
+	TotalTokens      int64 `json:"total_tokens"`
+}
+
+type NodeStatsData struct {
+	TotalRequests int64               `json:"total_requests"`
+	Nodes         map[string]*NodeStat `json:"nodes"`
+}
+
+var (
+	nodeStats     = &NodeStatsData{Nodes: map[string]*NodeStat{}}
+	nodeStatsMu   sync.Mutex
+	nodeStatsPath = "node_stats.json"
+)
+
+func loadNodeStats() {
+	data, err := os.ReadFile(nodeStatsPath)
+	if err != nil {
+		return
+	}
+	var st NodeStatsData
+	if err := json.Unmarshal(data, &st); err != nil {
+		return
+	}
+	nodeStatsMu.Lock()
+	if st.Nodes == nil {
+		st.Nodes = map[string]*NodeStat{}
+	}
+	nodeStats = &st
+	nodeStatsMu.Unlock()
+}
+
+func saveNodeStats() {
+	nodeStatsMu.Lock()
+	data, err := json.MarshalIndent(nodeStats, "", "  ")
+	nodeStatsMu.Unlock()
+	if err != nil {
+		return
+	}
+	os.WriteFile(nodeStatsPath, data, 0644)
+}
+
+func recordNodeUsage(addr string, promptTokens, completionTokens, totalTokens int64) {
+	if addr == "" {
+		return
+	}
+	nodeStatsMu.Lock()
+	nodeStats.TotalRequests++
+	ns, ok := nodeStats.Nodes[addr]
+	if !ok {
+		ns = &NodeStat{}
+		nodeStats.Nodes[addr] = ns
+	}
+	ns.RequestCount++
+	ns.PromptTokens += promptTokens
+	ns.CompletionTokens += completionTokens
+	ns.TotalTokens += totalTokens
+	nodeStatsMu.Unlock()
+	go saveNodeStats()
+}
+
 // ======================== 数据模型 ========================
 
 type OpenAIRequest struct {
@@ -1172,7 +1240,7 @@ func saveTokenStats() {
 	os.WriteFile(tokenStatsPath, data, 0644)
 }
 
-func recordTokenUsage(model string, promptTokens, completionTokens, totalTokens int64) {
+func recordTokenUsage(model string, promptTokens, completionTokens, totalTokens int64, proxyAddr string) {
 	tokenStatsMu.Lock()
 	tokenStats.TotalRequests++
 	ms, ok := tokenStats.Models[model]
@@ -1185,6 +1253,7 @@ func recordTokenUsage(model string, promptTokens, completionTokens, totalTokens 
 	ms.CompletionTokens += completionTokens
 	ms.TotalTokens += totalTokens
 	tokenStatsMu.Unlock()
+	recordNodeUsage(proxyAddr, promptTokens, completionTokens, totalTokens)
 	go saveTokenStats()
 }
 
@@ -1866,12 +1935,12 @@ const (
 	max401Retries      = 3
 )
 
-func callOpenCodeAPI(upstreamBody []byte, modelID string, auth UpstreamAuth) ([]byte, int, http.Header, error) {
+func callOpenCodeAPI(upstreamBody []byte, modelID string, auth UpstreamAuth) ([]byte, int, http.Header, string, error) {
 	initOCSession()
 
 	var bodyMap map[string]any
 	if err := json.Unmarshal(upstreamBody, &bodyMap); err != nil {
-		return nil, 500, nil, fmt.Errorf("invalid request body")
+		return nil, 500, nil, "", fmt.Errorf("invalid request body")
 	}
 	useGoEndpoint := auth.shouldUseGoEndpoint(modelID)
 
@@ -1881,6 +1950,7 @@ func callOpenCodeAPI(upstreamBody []byte, modelID string, auth UpstreamAuth) ([]
 	var lastBody []byte
 	var lastStatus int
 	var lastHeader http.Header
+	var lastProxyAddr string
 	maxRetries := maxRouteRetries()
 	for retryCount <= maxRetries {
 		up, err := buildOCRequestWithEndpoint(modelID, bodyMap, auth, useGoEndpoint)
@@ -1901,12 +1971,12 @@ func callOpenCodeAPI(upstreamBody []byte, modelID string, auth UpstreamAuth) ([]
 			b, readErr := io.ReadAll(resp.Body)
 			resp.Body.Close()
 			if readErr != nil {
-				return nil, 0, nil, readErr
+				return nil, 0, nil, "", readErr
 			}
 			if isAnthropicFormat(b) {
 				b = convertAnthropicToOpenAI(b, modelID)
 			}
-			return b, resp.StatusCode, resp.Header, nil
+			return b, resp.StatusCode, resp.Header, proxyAddr, nil
 		}
 		errBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
@@ -1915,6 +1985,7 @@ func callOpenCodeAPI(upstreamBody []byte, modelID string, auth UpstreamAuth) ([]
 		lastBody = errBody
 		lastStatus = resp.StatusCode
 		lastHeader = resp.Header
+		lastProxyAddr = proxyAddr
 		lastErr = fmt.Errorf("upstream error")
 		if shouldRetryUpstreamStatus(resp.StatusCode) {
 			client.CloseIdleConnections()
@@ -1933,22 +2004,23 @@ func callOpenCodeAPI(upstreamBody []byte, modelID string, auth UpstreamAuth) ([]
 		}
 		break
 	}
-	return lastBody, lastStatus, lastHeader, lastErr
+	return lastBody, lastStatus, lastHeader, lastProxyAddr, lastErr
 }
 
 
-func callOpenCodeAPIStream(upstreamBody []byte, modelID string, auth UpstreamAuth) (io.ReadCloser, int, http.Header, error) {
+func callOpenCodeAPIStream(upstreamBody []byte, modelID string, auth UpstreamAuth) (io.ReadCloser, int, http.Header, string, error) {
 	initOCSession()
 
 	var bodyMap map[string]any
 	if err := json.Unmarshal(upstreamBody, &bodyMap); err != nil {
-		return nil, 500, nil, fmt.Errorf("invalid request body")
+		return nil, 500, nil, "", fmt.Errorf("invalid request body")
 	}
 	useGoEndpoint := auth.shouldUseGoEndpoint(modelID)
 
 	var lastBody []byte
 	var lastStatus int
 	var lastHeader http.Header
+	var lastProxyAddr string
 	var retryCount int
 	var retry401Count int
 	maxRetries := maxRouteRetries()
@@ -1967,7 +2039,7 @@ func callOpenCodeAPIStream(upstreamBody []byte, modelID string, auth UpstreamAut
 		}
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			markSocks5Result(proxyAddr, resp.StatusCode, nil)
-			return resp.Body, resp.StatusCode, resp.Header, nil
+			return resp.Body, resp.StatusCode, resp.Header, proxyAddr, nil
 		}
 		errBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
@@ -1976,6 +2048,7 @@ func callOpenCodeAPIStream(upstreamBody []byte, modelID string, auth UpstreamAut
 		lastBody = errBody
 		lastStatus = resp.StatusCode
 		lastHeader = resp.Header
+		lastProxyAddr = proxyAddr
 		if shouldRetryUpstreamStatus(resp.StatusCode) {
 			client.CloseIdleConnections()
 			if resp.StatusCode == http.StatusUnauthorized {
@@ -1992,12 +2065,12 @@ func callOpenCodeAPIStream(upstreamBody []byte, modelID string, auth UpstreamAut
 			continue
 		}
 		// 不可重试的错误体供下游透传
-		return io.NopCloser(bytes.NewReader(lastBody)), lastStatus, lastHeader, nil
+		return io.NopCloser(bytes.NewReader(lastBody)), lastStatus, lastHeader, lastProxyAddr, nil
 	}
 	if lastStatus != 0 {
-		return io.NopCloser(bytes.NewReader(lastBody)), lastStatus, lastHeader, nil
+		return io.NopCloser(bytes.NewReader(lastBody)), lastStatus, lastHeader, lastProxyAddr, nil
 	}
-	return nil, 500, nil, fmt.Errorf("all models failed")
+	return nil, 500, nil, "", fmt.Errorf("all models failed")
 }
 
 
@@ -2063,7 +2136,7 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 	upstreamBody := buildUpstreamBody(&req)
 
 	if req.Stream {
-		upResp, status, _, err := callOpenCodeAPIStream(upstreamBody, req.Model, auth)
+		upResp, status, _, proxyAddr, err := callOpenCodeAPIStream(upstreamBody, req.Model, auth)
 		if err != nil || status < 200 || status >= 300 {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(status)
@@ -2119,7 +2192,7 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 					ct, _ := usage["completion_tokens"].(float64)
 					tt, _ := usage["total_tokens"].(float64)
 					if tt > 0 {
-						recordTokenUsage(req.Model, int64(pt), int64(ct), int64(tt))
+						recordTokenUsage(req.Model, int64(pt), int64(ct), int64(tt), proxyAddr)
 					}
 				}
 				continue
@@ -2131,7 +2204,7 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 				ct, _ := usage["completion_tokens"].(float64)
 				tt, _ := usage["total_tokens"].(float64)
 				if tt > 0 {
-					recordTokenUsage(req.Model, int64(pt), int64(ct), int64(tt))
+					recordTokenUsage(req.Model, int64(pt), int64(ct), int64(tt), proxyAddr)
 				}
 			}
 
@@ -2144,7 +2217,7 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respBody, status, _, err := callOpenCodeAPI(upstreamBody, req.Model, auth)
+	respBody, status, _, proxyAddr, err := callOpenCodeAPI(upstreamBody, req.Model, auth)
 	if err != nil || status < 200 || status >= 300 {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
@@ -2168,7 +2241,7 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 			ct, _ := u["completion_tokens"].(float64)
 			tt, _ := u["total_tokens"].(float64)
 			if tt > 0 {
-				recordTokenUsage(req.Model, int64(pt), int64(ct), int64(tt))
+				recordTokenUsage(req.Model, int64(pt), int64(ct), int64(tt), proxyAddr)
 			}
 		}
 	}
@@ -2756,7 +2829,7 @@ func claudeMessagesHandler(w http.ResponseWriter, r *http.Request) {
 	upstreamBody := buildUpstreamBody(&chatReq)
 
 	if claudeReq.Stream {
-		upResp, status, _, err := callOpenCodeAPIStream(upstreamBody, chatReq.Model, auth)
+		upResp, status, _, proxyAddr, err := callOpenCodeAPIStream(upstreamBody, chatReq.Model, auth)
 		if err != nil || status < 200 || status >= 300 {
 			errResp := map[string]any{
 				"type":  "error",
@@ -2768,11 +2841,11 @@ func claudeMessagesHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer upResp.Close()
-		claudeStreamHandler(w, upResp, claudeReq.Model, keepReasoning)
+		claudeStreamHandler(w, upResp, claudeReq.Model, keepReasoning, proxyAddr)
 		return
 	}
 
-	respBody, status, _, err := callOpenCodeAPI(upstreamBody, chatReq.Model, auth)
+	respBody, status, _, proxyAddr, err := callOpenCodeAPI(upstreamBody, chatReq.Model, auth)
 	if err != nil || status < 200 || status >= 300 {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
@@ -2794,7 +2867,7 @@ func claudeMessagesHandler(w http.ResponseWriter, r *http.Request) {
 			ct, _ := u["completion_tokens"].(float64)
 			tt, _ := u["total_tokens"].(float64)
 			if tt > 0 {
-				recordTokenUsage(claudeReq.Model, int64(pt), int64(ct), int64(tt))
+				recordTokenUsage(claudeReq.Model, int64(pt), int64(ct), int64(tt), proxyAddr)
 			}
 		}
 	}
@@ -2805,7 +2878,7 @@ func claudeMessagesHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(claudeRespBody)
 }
 
-func claudeStreamHandler(w http.ResponseWriter, respBody io.ReadCloser, model string, keepReasoning bool) {
+func claudeStreamHandler(w http.ResponseWriter, respBody io.ReadCloser, model string, keepReasoning bool, proxyAddr string) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -2829,7 +2902,7 @@ func claudeStreamHandler(w http.ResponseWriter, respBody io.ReadCloser, model st
 			ct, _ := fullUsage["completion_tokens"].(float64)
 			tt, _ := fullUsage["total_tokens"].(float64)
 			if tt > 0 {
-				recordTokenUsage(model, int64(pt), int64(ct), int64(tt))
+				recordTokenUsage(model, int64(pt), int64(ct), int64(tt), proxyAddr)
 			}
 		}
 	}()
@@ -3860,7 +3933,7 @@ func responsesHandler(w http.ResponseWriter, r *http.Request) {
 	upstreamBody := buildUpstreamBody(&chatReq)
 
 	if respReq.Stream {
-		upResp, status, _, err := callOpenCodeAPIStream(upstreamBody, chatReq.Model, auth)
+		upResp, status, _, proxyAddr, err := callOpenCodeAPIStream(upstreamBody, chatReq.Model, auth)
 		if err != nil || status < 200 || status >= 300 {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(status)
@@ -3881,11 +3954,11 @@ func responsesHandler(w http.ResponseWriter, r *http.Request) {
 			Body:       upResp,
 			Header:     make(http.Header),
 		}
-		responsesStreamHandler(w, r, resp, chatReq.Model, chatReq.Model, wantReasoning, respReq.Tools, respReq.ToolChoice, respReq)
+		responsesStreamHandler(w, r, resp, chatReq.Model, chatReq.Model, wantReasoning, respReq.Tools, respReq.ToolChoice, respReq, proxyAddr)
 		return
 	}
 
-	respBody, status, _, err := callOpenCodeAPI(upstreamBody, chatReq.Model, auth)
+	respBody, status, _, proxyAddr, err := callOpenCodeAPI(upstreamBody, chatReq.Model, auth)
 	if err != nil || status < 200 || status >= 300 {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
@@ -3914,7 +3987,7 @@ func responsesHandler(w http.ResponseWriter, r *http.Request) {
 			ct, _ := u["completion_tokens"].(float64)
 			tt, _ := u["total_tokens"].(float64)
 			if tt > 0 {
-				recordTokenUsage(chatReq.Model, int64(pt), int64(ct), int64(tt))
+				recordTokenUsage(chatReq.Model, int64(pt), int64(ct), int64(tt), proxyAddr)
 			}
 		}
 	}
@@ -3926,7 +3999,7 @@ func responsesHandler(w http.ResponseWriter, r *http.Request) {
 
 // ======================== Responses Stream Handler ========================
 
-func responsesStreamHandler(w http.ResponseWriter, _ *http.Request, resp *http.Response, model string, _ string, wantReasoning bool, tools []ResponsesTool, toolChoice any, originalReq ResponsesAPIRequest) {
+func responsesStreamHandler(w http.ResponseWriter, _ *http.Request, resp *http.Response, model string, _ string, wantReasoning bool, tools []ResponsesTool, toolChoice any, originalReq ResponsesAPIRequest, proxyAddr string) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -4422,7 +4495,7 @@ func responsesStreamHandler(w http.ResponseWriter, _ *http.Request, resp *http.R
 		ct, _ := totalUsage["completion_tokens"].(float64)
 		tt, _ := totalUsage["total_tokens"].(float64)
 		if tt > 0 {
-			recordTokenUsage(model, int64(pt), int64(ct), int64(tt))
+			recordTokenUsage(model, int64(pt), int64(ct), int64(tt), proxyAddr)
 		}
 	}
 
@@ -4645,6 +4718,10 @@ func adminStatsHandler(w http.ResponseWriter, r *http.Request) {
 		tokenStats = &TokenStatsData{Models: map[string]*ModelStats{}}
 		tokenStatsMu.Unlock()
 		saveTokenStats()
+		nodeStatsMu.Lock()
+		nodeStats = &NodeStatsData{Nodes: map[string]*NodeStat{}}
+		nodeStatsMu.Unlock()
+		saveNodeStats()
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	default:
@@ -5004,6 +5081,7 @@ func main() {
 
 
 	loadTokenStats()
+	loadNodeStats()
 	slog.Info("config loaded", "path", configPath)
 	initOCSession()
 	models, err := fetchModels()

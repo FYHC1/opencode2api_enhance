@@ -136,6 +136,15 @@ export type ModelStat = {
   total_tokens: number
 }
 
+export type GatewayNodeStat = {
+  name: string
+  addr: string
+  requests: number
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+}
+
 export type InstanceStat = {
   name: string
   /** 实例目录存在但实例列表中已无（已删除/历史实例）时为 false */
@@ -145,6 +154,8 @@ export type InstanceStat = {
   completion_tokens: number
   total_tokens: number
   models: ModelStat[]
+  /** 仅统一网关条目：按节点（SOCKS5 出口）拆分的调用统计 */
+  nodes?: GatewayNodeStat[]
 }
 
 export type StatsSummary = {

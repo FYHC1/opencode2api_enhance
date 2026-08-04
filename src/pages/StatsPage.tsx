@@ -129,17 +129,18 @@ export default function StatsPage({
             <tbody>
               {instances.map((ins) => {
                 const open = expanded.has(ins.name)
+                const hasDetail = (ins.models?.length ?? 0) > 0 || (ins.nodes?.length ?? 0) > 0
                 return (
                   <Fragment key={ins.name}>
                     <tr
-                      onClick={() => ins.models.length > 0 && toggleExpand(ins.name)}
+                      onClick={() => hasDetail && toggleExpand(ins.name)}
                       className={clsx(
                         'border-b border-zinc-50 hover:bg-zinc-50/60 transition-colors',
-                        ins.models.length > 0 ? 'cursor-pointer' : '',
+                        hasDetail ? 'cursor-pointer' : '',
                       )}
                     >
                       <td className="py-2.5 pr-3 font-medium text-zinc-800 flex items-center gap-1.5">
-                        {ins.models.length > 0 ? (
+                        {hasDetail ? (
                           open ? (
                             <ChevronDown size={14} className="text-zinc-400" />
                           ) : (
@@ -191,6 +192,36 @@ export default function StatsPage({
                               ))}
                             </tbody>
                           </table>
+
+                          {ins.nodes && ins.nodes.length > 0 && (
+                            <>
+                              <div className="mt-3 mb-1 text-[12px] font-medium text-zinc-500">
+                                调用节点明细（经统一网关路由）
+                              </div>
+                              <table className="w-full text-[12px]">
+                                <thead>
+                                  <tr className="text-left text-zinc-400">
+                                    <th className="py-1.5 pr-3 font-medium">节点</th>
+                                    <th className="py-1.5 pr-3 font-medium text-right">请求数</th>
+                                    <th className="py-1.5 pr-3 font-medium text-right">输入</th>
+                                    <th className="py-1.5 pr-3 font-medium text-right">输出</th>
+                                    <th className="py-1.5 font-medium text-right">总计</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {ins.nodes.map((n) => (
+                                    <tr key={n.addr} className="border-b border-zinc-100/60">
+                                      <td className="py-1.5 pr-3 text-zinc-700">{n.name}</td>
+                                      <td className="py-1.5 pr-3 text-right tabular-nums text-zinc-500">{fmt(n.requests)}</td>
+                                      <td className="py-1.5 pr-3 text-right tabular-nums text-zinc-500">{fmt(n.prompt_tokens)}</td>
+                                      <td className="py-1.5 pr-3 text-right tabular-nums text-zinc-500">{fmt(n.completion_tokens)}</td>
+                                      <td className="py-1.5 text-right tabular-nums font-medium text-zinc-700">{fmt(n.total_tokens)}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </>
+                          )}
                         </td>
                       </tr>
                     )}
