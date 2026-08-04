@@ -143,7 +143,10 @@ impl InstanceManager {
             bail!("实例 '{}' 已在运行", name);
         }
 
-        let password = self.instances[idx].password.clone();
+        let mut password = self.instances[idx].password.clone();
+        if password.is_empty() {
+            password = crate::config::Config::effective_default_password();
+        }
 
         // 1. 根据节点名查找 Clash 节点
         let nodes = clash_yaml::list_nodes_with_group()
@@ -389,7 +392,13 @@ let singbox_child = no_window(&mut Command::new(&singbox_bin))
     /// 启用 401 门禁后需带实例密钥（Authorization: Bearer <密码>），否则自检会 401。
     pub fn test_instance(&self, name: &str) -> Result<TestResult> {
         let port = self.prepare_test(name)?;
-        let auth = self.find_instance(name).map(|i| i.password.clone());
+        let auth = self.find_instance(name).map(|i| {
+            if i.password.is_empty() {
+                crate::config::Config::effective_default_password()
+            } else {
+                i.password.clone()
+            }
+        });
         Ok(probe_free_completion(name, port, auth.as_deref()))
     }
 
@@ -790,7 +799,11 @@ pub(crate) fn ensure_port_available(port: u16) -> Result<()> {
         .with_context(|| format!("本地端口 {} 已被占用", port))
 }
 
-
+/// 快速判断本地端口是否空闲：能 bind 就说明没被监听。
+/// 相比 wait_for_port 不需要等 200ms，适合端口建议/校验这种高频调用。
+pub(crate) fn is_port_free(port: u16) -> bool {
+    std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
+}
 /// 按 PID 终止进程（Windows 用 taskkill，其他平台用 sysinfo）
 pub fn kill_process(pid: u32) -> Result<()> {
     #[cfg(windows)]
@@ -1152,5 +1165,14 @@ mod tests {
         assert_eq!(updated[0].name, "dead");
         assert_eq!(updated[1].name, "alive");
         fs::remove_dir_all(temp_dir("reconcile_batch")).ok();
+    }
+
+    #[test]
+    fn test_is_port_free_reports_bound_port() {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(!is_port_free(port));
+        drop(listener);
+        assert!(is_port_free(port));
     }
 }

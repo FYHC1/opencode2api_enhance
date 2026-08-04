@@ -487,27 +487,6 @@ fn run_scan_loop(
         opencode: None,
     };
 
-    // 先起 opencode2api（等 sing-box 起来后再测；启动时端口可能短暂失败）
-    let oc_out = fs::File::create(log_dir.join("opencode2api.out.log"))?;
-    let oc_err = fs::File::create(log_dir.join("opencode2api.err.log"))?;
-let oc_child = no_window(&mut Command::new(&oc_bin))
-        .arg("-port")
-        .arg(api_port.to_string())
-        .arg("-config")
-        .arg(&oc_cfg_path)
-        .arg("-password")
-        .arg(password)
-        .stdout(Stdio::from(oc_out))
-        .stderr(Stdio::from(oc_err))
-        .spawn()
-        .context("启动探针 opencode2api 失败")?;
-    procs.opencode = Some(oc_child);
-
-    // 等 API 端口监听（不一定能 models 成功，只要进程起来）
-    if !instance::wait_for_port(api_port, Duration::from_secs(15)) {
-        bail!("探针 opencode2api 未能在 15s 内监听 :{}", api_port);
-    }
-
     for (i, node) in nodes.iter().enumerate() {
         if cancel.load(Ordering::SeqCst) {
             break;
@@ -518,16 +497,18 @@ let oc_child = no_window(&mut Command::new(&oc_bin))
             g.current_node = Some(node.name.clone());
         }
 
-let result = probe_one_node(
+        let result = probe_one_node(
             &mut procs,
             node,
             &singbox_bin,
+            &oc_bin,
+            &oc_cfg_path,
             &probe_dir,
             &log_dir,
             api_port,
             socks_port,
+            password,
             per_node_timeout,
-            Some(password),
         );
 
         if let Ok(mut g) = progress.lock() {
@@ -543,12 +524,14 @@ fn probe_one_node(
     procs: &mut ProbeProcs,
     node: &ClashNode,
     singbox_bin: &Path,
+    opencode_bin: &Path,
+    opencode_cfg: &Path,
     probe_dir: &Path,
     log_dir: &Path,
     api_port: u16,
     socks_port: u16,
+    password: &str,
     per_node_timeout: Duration,
-    auth_token: Option<&str>,
 ) -> ProbeResult {
     let start = Instant::now();
     let base = |ok: bool, category: &str, message: String, status: Option<u16>, models: Option<usize>| {
@@ -607,9 +590,7 @@ let child = match no_window(&mut Command::new(singbox_bin))
     let socks_wait = Duration::from_secs(8).min(per_node_timeout);
     if !instance::wait_for_port(socks_port, socks_wait) {
         // 读一下 err 日志给提示
-        let hint = fs::read_to_string(log_dir.join("singbox.err.log"))
-            .unwrap_or_default();
-        let hint = hint.chars().rev().take(300).collect::<String>().chars().rev().collect::<String>();
+        let hint = tail_of_file(&log_dir.join("singbox.err.log"), 300);
         let cat = if hint.to_lowercase().contains("tls")
             || hint.contains("certificate")
             || hint.contains("handshake")
@@ -638,11 +619,73 @@ let child = match no_window(&mut Command::new(singbox_bin))
     // 稍等出口握手
     thread::sleep(Duration::from_millis(400));
 
+    // 每个节点都重启 opencode2api：Go 端 modelsCache 一旦被某个可用节点填满就会永久命中，
+    // 后续节点即使代理完全不通也会拿到 HTTP 200（假阳性）。重启让启动期的
+    // fetchModels() 成为对当前节点的真实探测。
+    procs.kill_opencode_only();
+
+    let oc_out = match fs::File::create(log_dir.join("opencode2api.out.log")) {
+        Ok(f) => f,
+        Err(e) => return base(false, "other", format!("日志文件失败: {}", e), None, None),
+    };
+    let oc_err = match fs::File::create(log_dir.join("opencode2api.err.log")) {
+        Ok(f) => f,
+        Err(e) => return base(false, "other", format!("日志文件失败: {}", e), None, None),
+    };
+    let oc_child = match no_window(&mut Command::new(opencode_bin))
+        .arg("-port")
+        .arg(api_port.to_string())
+        .arg("-config")
+        .arg(opencode_cfg)
+        .arg("-password")
+        .arg(password)
+        .stdout(Stdio::from(oc_out))
+        .stderr(Stdio::from(oc_err))
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            return base(
+                false,
+                "other",
+                format!("启动 opencode2api 失败: {}", e),
+                None,
+                None,
+            );
+        }
+    };
+    procs.opencode = Some(oc_child);
+
+    // opencode2api 会在启动时同步拉取模型列表，之后才 listen；
+    // 端口迟迟不监听基本等于当前节点无法访问上游。
+    let remain = per_node_timeout.saturating_sub(start.elapsed());
+    let api_wait = remain
+        .max(Duration::from_secs(5))
+        .min(Duration::from_secs(20));
+    if !instance::wait_for_port(api_port, api_wait) {
+        let hint = tail_of_file(&log_dir.join("opencode2api.out.log"), 300);
+        return base(
+            false,
+            "upstream",
+            format!(
+                "opencode2api :{} 未在 {}s 内就绪（上游不可达）。{}",
+                api_port,
+                api_wait.as_secs(),
+                if hint.is_empty() {
+                    String::new()
+                } else {
+                    format!("日志: {}", truncate_str(&hint, 180))
+                }
+            ),
+            None,
+            None,
+        );
+    }
+
     let remain = per_node_timeout.saturating_sub(start.elapsed());
     let http_timeout = remain.max(Duration::from_secs(2)).min(Duration::from_secs(12));
 
-    // F2: 免费额度实测——先取模型目录，再发 1 token 最小请求，能出 choices 才算可用
-    match instance::probe_free_completion_response(api_port, auth_token, http_timeout) {
+    match instance::probe_free_completion_response(api_port, Some(password), http_timeout) {
         Ok((status, body)) => {
             if instance::is_probe_completion_success(status, &body) {
                 let model_count = count_models(&body);
@@ -873,6 +916,16 @@ fn truncate_str(s: &str, max: usize) -> String {
     t
 }
 
+/// 读取文件尾部最多 max_chars 个字符，用于错误提示。
+fn tail_of_file(path: &Path, max_chars: usize) -> String {
+    let s = fs::read_to_string(path).unwrap_or_default();
+    let mut chars: Vec<char> = s.chars().collect();
+    if chars.len() > max_chars {
+        chars = chars.split_off(chars.len() - max_chars);
+    }
+    chars.into_iter().collect::<String>().trim().to_string()
+}
+
 /// 同步执行完整扫描（CLI 用），返回结果列表。
 pub fn scan_nodes_sync(
     binary_dir: PathBuf,
@@ -923,25 +976,6 @@ pub fn scan_nodes_sync(
         opencode: None,
     };
 
-    let oc_out = fs::File::create(log_dir.join("opencode2api.out.log"))?;
-    let oc_err = fs::File::create(log_dir.join("opencode2api.err.log"))?;
-let oc_child = no_window(&mut Command::new(&oc_bin))
-        .arg("-port")
-        .arg(api_port.to_string())
-        .arg("-config")
-        .arg(&oc_cfg_path)
-.arg("-password")
-        .arg(&password)
-        .stdout(Stdio::from(oc_out))
-        .stderr(Stdio::from(oc_err))
-        .spawn()
-        .context("启动探针 opencode2api 失败")?;
-    procs.opencode = Some(oc_child);
-
-    if !instance::wait_for_port(api_port, Duration::from_secs(15)) {
-        bail!("探针 opencode2api 未能监听 :{}", api_port);
-    }
-
     let timeout = Duration::from_secs(per_node_timeout_secs.max(3));
     for (i, node) in nodes.iter().enumerate() {
         if cancel.load(Ordering::SeqCst) {
@@ -954,16 +988,18 @@ let oc_child = no_window(&mut Command::new(&oc_bin))
             on_progress(&g.snapshot());
         }
 
-let result = probe_one_node(
+        let result = probe_one_node(
             &mut procs,
             node,
             &singbox_bin,
+            &oc_bin,
+            &oc_cfg_path,
             &probe_dir,
             &log_dir,
             api_port,
             socks_port,
+            &password,
             timeout,
-            Some(&password),
         );
 
         {
@@ -980,4 +1016,34 @@ let result = probe_one_node(
     g.finished_ms = Some(now_ms());
     g.current_node = None;
     Ok(g.results.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn test_kill_opencode_only_preserves_singbox() {
+        let mut procs = ProbeProcs {
+            singbox: Some(spawn_sleeper()),
+            opencode: Some(spawn_sleeper()),
+        };
+        procs.kill_opencode_only();
+        assert!(procs.opencode.is_none());
+        assert!(procs.singbox.is_some());
+        let mut child = procs.singbox.take().unwrap();
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    #[cfg(windows)]
+    fn spawn_sleeper() -> Child {
+        Command::new("powershell.exe")
+            .args(["-NoProfile", "-Command", "Start-Sleep -Seconds 30"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn sleeper")
+    }
 }
