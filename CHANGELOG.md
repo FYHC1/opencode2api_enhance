@@ -1,21 +1,31 @@
 # Changelog
 
-## 0.1.0（桌面化改造）
+## v1.0.0（2026-08-04）
 
-- 由 Go 代理网关改造为 **Tauri 2 桌面应用**「opencode2api 管理器」（Windows exe，纯桌面）
-- 完整迁移 `opencode2api_enhance` 的多实例管理器功能：Clash 外部控制取节点、节点扫描、实例增删启停/批量、sing-box 出口
-- 前端重写为 React + Tailwind，参照 Windsurf Account Manager 浅色官网风格：无边框窗口、自定义标题栏、侧边栏三页（实例/节点扫描/设置）、系统托盘常驻
-- Rust 后端采用 AM 架构：`main.rs` 薄壳 + `lib.rs`（AppState/command/托盘）+ 功能域模块（clash_yaml/singbox/opencode_cfg/instance/probe/embed/commands）
-- 移除：axum Web 服务、CLI、Docker/CI/多平台发布设施、tauri-plugin-shell
-- 内嵌 opencode2api 与 sing-box 二进制（`include_bytes!`），运行时自释放
-- 配置与数据存 `%APPDATA%\opencode2api-manager\`
-- 新增便携打包脚本与使用说明
+### 亮点
 
-## Unreleased
+首个正式版：在 A 多实例管理的基础上，融合 B 的 7 项核心能力，形成「独享实例 + 统一实例池」双容器管理模型。
 
-- Projectized the provided Go program.
-- Added Go module metadata, local build targets, and release packaging script.
-- Added CI and tag-driven multi-platform release automation.
-- Changed release automation to parallel matrix builds with a final publish job.
-- Added README, API, configuration, deployment, release, contribution, and security docs.
-- Added build metadata and `-version` flag.
+### 🆕 新增功能
+
+- **统一网关**：实例池聚合入口 `127.0.0.1:18080`，failover / round_robin 两种路由模式，一键启停
+- **免费额度实测健康检查**：启动即探测免费模型可用性（名称含 `-free` 或为 `big-pickle`）
+- **配置热更新**：修改运行配置不重启进程、不打断进行中的 SSE 流
+- **模型必填校验**：chat / claude / responses 缺 model 一律返回 400
+- **同模型失败重试**：同一模型路由失败自动重试；代理池健康检查 + 坏代理自动冷却
+- **批量并行启停**：多 worker 并行，批量操作大幅提速；节点扫描并行探测
+
+### 🎨 界面与体验
+
+- 三页边界清晰：**独享**（仅独享实例启停/测试/释放）/ **实例池**（池成员启停、一键测试、释放、网关管理）/ **节点池**（扫描 + 独享或进池批量添加）
+- 搜索、状态筛选、一键测试、密钥一键复制（API 地址 + 密钥合并复制）
+- 移除即释放：自动关闭实例并释放节点，无中间态
+
+### 🛠 其他
+
+- GitHub Actions 自动构建 Windows NSIS 安装包并发布 Release
+- 完整合并交付文档（见 docs/ 与 .tokeny/plans/）
+
+### 🙏 致谢
+
+感谢 **opencode2api_enhance_2**（[作者 GitHub](待补充地址)）——本版本「统一网关、免费额度实测健康检查、代理池健康检查、配置热更新、模型必填、同模型重试、批量并行启停」等核心能力均移植自该项目，是本次合并的基石。

@@ -55,6 +55,17 @@ jobs:
         shell: bash
         run: npm install
 
+      # 从 CHANGELOG.md 提取第一个「## v」版本块作为 Release 正文
+      - name: Extract release body from CHANGELOG
+        id: changelog
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const content = fs.readFileSync('CHANGELOG.md', 'utf8');
+            const m = content.match(/## v[\s\S]*?(?=\n## |$)/);
+            core.setOutput('body', m ? m[0].trim() : '');
+
       - name: Build & release (Tauri NSIS)
         uses: tauri-apps/tauri-action@v0
         env:
@@ -62,6 +73,6 @@ jobs:
         with:
           tagName: app-v__VERSION__
           releaseName: "opencode2api v__VERSION__"
-          releaseBody: ${{ github.event.head_commit.message }}
+          releaseBody: ${{ steps.changelog.outputs.body }}
           releaseDraft: false
           prerelease: false
