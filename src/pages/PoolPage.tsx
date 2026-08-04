@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import clsx from 'clsx'
-import { Copy, Loader2, Power, RefreshCw, ShieldCheck, Network, Search } from 'lucide-react'
+import { Copy, Loader2, Power, RefreshCw, ShieldCheck, Network, Search, Play, Square, TestTube2 } from 'lucide-react'
 import { api, type GatewayStatus, type Instance } from '../lib/api'
 
 function statusBadge(st: Instance['status']): [string, string] {
@@ -23,6 +23,9 @@ export default function PoolPage({
   const [kickBusy, setKickBusy] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [searchFocus, setSearchFocus] = useState(false)
+  // 单行操作忙态；全部操作忙态（start / stop / test）
+  const [rowBusy, setRowBusy] = useState<Record<string, 'start' | 'stop' | 'test'>>({})
+  const [allBusy, setAllBusy] = useState<'start' | 'stop' | 'test' | null>(null)
 
   // 池成员 = 已入池（join_gateway=true）的实例；支持前端搜索（名称/节点/IP/端口）
   const members = instances
@@ -102,6 +105,65 @@ export default function PoolPage({
       toast(String(e), false)
     } finally {
       setKickBusy(null)
+    }
+  }
+
+  // 单行操作：启动 / 停止 / 测试（与实例页行为一致）
+  const doRowOp = async (name: string, op: 'start' | 'stop' | 'test') => {
+    setRowBusy((prev) => ({ ...prev, [name]: op }))
+    try {
+      if (op === 'start') {
+        await api.startInstance(name)
+        toast(`已启动实例 ${name}`)
+      } else if (op === 'stop') {
+        await api.stopInstance(name)
+        toast(`已停止实例 ${name}`)
+      } else {
+        const r = await api.testInstance(name)
+        if (r.ok) toast(`「${name}」测试通过：${r.message}（${r.latency_ms}ms）`)
+        else toast(`「${name}」测试失败：${r.message}`, false)
+      }
+      await load()
+    } catch (e) {
+      toast(String(e), false)
+    } finally {
+      setRowBusy((prev) => {
+        const next = { ...prev }
+        delete next[name]
+        return next
+      })
+    }
+  }
+
+  // 全部操作：一键启动 / 一键停止 / 一键测试全部池成员
+  const doAll = async (kind: 'start' | 'stop' | 'test') => {
+    const names = members.map((i) => i.name)
+    if (names.length === 0) {
+      toast('池中暂无成员')
+      return
+    }
+    setAllBusy(kind)
+    try {
+      let ok = 0
+      let fail = 0
+      for (const n of names) {
+        try {
+          if (kind === 'start') await api.startInstance(n)
+          else if (kind === 'stop') await api.stopInstance(n)
+          else {
+            const r = await api.testInstance(n)
+            if (!r.ok) throw new Error(r.message)
+          }
+          ok++
+        } catch {
+          fail++
+        }
+      }
+      const label = kind === 'start' ? '启动' : kind === 'stop' ? '停止' : '测试'
+      toast(`池成员${label}完成：成功 ${ok} 个${fail ? `，失败 ${fail}` : ''}`, fail === 0)
+      await load()
+    } finally {
+      setAllBusy(null)
     }
   }
 
@@ -246,24 +308,47 @@ export default function PoolPage({
             <span className="text-[14px] font-semibold text-zinc-900">池成员</span>
             <span className="text-[12px] text-zinc-400">已入池的实例会聚合到统一网关地址，未入池实例保持独享</span>
           </div>
-          <div
-            className={clsx(
-              'relative flex items-center rounded-lg border border-zinc-200 bg-white transition-all duration-200 overflow-hidden',
-              searchFocus || search ? 'w-52' : 'w-9',
-            )}
-          >
-            <Search size={14} className="absolute left-2.5 text-zinc-400 pointer-events-none" />
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              onFocus={() => setSearchFocus(true)}
-              onBlur={() => setSearchFocus(false)}
-              placeholder="搜索池成员"
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => void doAll('start')}
+              disabled={members.length === 0 || !!allBusy}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-white bg-green-600 hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {allBusy === 'start' ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />} 全部启动
+            </button>
+            <button
+              onClick={() => void doAll('stop')}
+              disabled={members.length === 0 || !!allBusy}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-zinc-700 bg-white border border-zinc-200 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {allBusy === 'stop' ? <Loader2 size={14} className="animate-spin" /> : <Square size={14} />} 全部停止
+            </button>
+            <button
+              onClick={() => void doAll('test')}
+              disabled={members.length === 0 || !!allBusy}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-teal-700 bg-teal-50 border border-teal-100 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {allBusy === 'test' ? <Loader2 size={14} className="animate-spin" /> : <TestTube2 size={14} />} 一键测试
+            </button>
+            <div
               className={clsx(
-                'w-full bg-transparent py-1.5 pl-8 pr-2 text-[12px] outline-none placeholder:text-zinc-300 transition-opacity',
-                searchFocus || search ? 'opacity-100' : 'opacity-0',
+                'relative flex items-center rounded-lg border border-zinc-200 bg-white transition-all duration-200 overflow-hidden',
+                searchFocus || search ? 'w-52' : 'w-9',
               )}
-            />
+            >
+              <Search size={14} className="absolute left-2.5 text-zinc-400 pointer-events-none" />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                onFocus={() => setSearchFocus(true)}
+                onBlur={() => setSearchFocus(false)}
+                placeholder="搜索池成员"
+                className={clsx(
+                  'w-full bg-transparent py-1.5 pl-8 pr-2 text-[12px] outline-none placeholder:text-zinc-300 transition-opacity',
+                  searchFocus || search ? 'opacity-100' : 'opacity-0',
+                )}
+              />
+            </div>
           </div>
         </div>
 {members.length > 0 ? (
@@ -302,12 +387,38 @@ export default function PoolPage({
                     <td className="py-2.5 pl-2">
                       <span className={clsx('inline-block px-2 py-0.5 rounded-full text-xs font-medium', cls)}>{label}</span>
                     </td>
-                    <td className="py-2.5 pl-2 pr-4">
-                      <div className="flex items-center justify-end">
+<td className="py-2.5 pl-2 pr-4">
+                      <div className="flex items-center justify-end gap-1.5">
+                        {i.status === 'Running' ? (
+                          <button
+                            onClick={() => void doRowOp(i.name, 'stop')}
+                            disabled={!!rowBusy[i.name]}
+                            className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[12px] text-zinc-700 bg-zinc-100 hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {rowBusy[i.name] === 'stop' ? <Loader2 size={12} className="animate-spin" /> : null}
+                            {rowBusy[i.name] === 'stop' ? '停止中…' : '停止'}
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => void doRowOp(i.name, 'start')}
+                            disabled={!!rowBusy[i.name]}
+                            className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[12px] text-white bg-green-600 hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {rowBusy[i.name] === 'start' ? <Loader2 size={12} className="animate-spin" /> : null}
+                            {rowBusy[i.name] === 'start' ? '启动中…' : '启动'}
+                          </button>
+                        )}
+                        <button
+                          onClick={() => void doRowOp(i.name, 'test')}
+                          disabled={!!rowBusy[i.name]}
+                          className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[12px] text-teal-700 bg-teal-50 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <TestTube2 size={12} /> 测试
+                        </button>
                         <button
                           onClick={() => void doKick(i.name)}
-                          disabled={kickBusy === i.name}
-                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[12px] text-red-600 bg-red-50 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+                          disabled={kickBusy === i.name || !!rowBusy[i.name]}
+                          className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[12px] text-red-600 bg-red-50 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
                         >
                           {kickBusy === i.name ? <Loader2 size={12} className="animate-spin" /> : null}
                           {kickBusy === i.name ? '移出中…' : '移出池'}

@@ -149,20 +149,9 @@ export default function NodesPage({
     setAdding(true)
     try {
       const r = await api.batchAdd(items, 18100, true)
-      if (addTarget === 'pool' && r.added.length > 0) {
-        // 进池：先主动启动实例（网关只收运行中的池成员），再逐个打 join_gateway 标记
-        for (const a of r.added) {
-          try {
-            await api.startInstance(a.name)
-            await api.setJoinGateway(a.name, true)
-          } catch {
-            /* 单条失败不阻断整体 */
-          }
-        }
-      }
       toast(
         `成功添加 ${r.added_count} 个实例` +
-          (addTarget === 'pool' && r.added.length > 0 ? '（已启动并入池）' : '') +
+          (addTarget === 'pool' ? '（已标记入池）' : '') +
           (r.error_count ? `，失败 ${r.error_count}` : ''),
         r.error_count === 0,
       )
