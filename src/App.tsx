@@ -1,16 +1,18 @@
 import { useState } from 'react'
 import clsx from 'clsx'
-import { Server, Radar, Settings, BarChart3 } from 'lucide-react'
+import { Server, Layers, Radar, Settings, BarChart3 } from 'lucide-react'
 import { TitleBar } from './components/TitleBar'
 import InstancesPage from './pages/InstancesPage'
+import PoolPage from './pages/PoolPage'
 import NodesPage from './pages/NodesPage'
 import SettingsPage from './pages/SettingsPage'
 import StatsPage from './pages/StatsPage'
 
-type Tab = 'instances' | 'nodes' | 'settings' | 'stats'
+type Tab = 'instances' | 'pool' | 'nodes' | 'settings' | 'stats'
 
 const NAV: { id: Tab; label: string; icon: typeof Server }[] = [
   { id: 'instances', label: '实例', icon: Server },
+  { id: 'pool', label: '实例池', icon: Layers },
   { id: 'nodes', label: '节点扫描', icon: Radar },
   { id: 'stats', label: '统计', icon: BarChart3 },
   { id: 'settings', label: '设置', icon: Settings },
@@ -53,6 +55,7 @@ export default function App() {
         {/* 内容区 */}
         <main className="flex-1 min-w-0 overflow-y-auto">
           {tab === 'instances' && <InstancesPage toast={showToast} />}
+          {tab === 'pool' && <PoolPage toast={showToast} />}
           {tab === 'nodes' && <NodesPage toast={showToast} />}
           {tab === 'stats' && <StatsPage toast={showToast} />}
           {tab === 'settings' && <SettingsPage toast={showToast} />}

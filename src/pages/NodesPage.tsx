@@ -138,6 +138,8 @@ export default function NodesPage({
   const scanBtnDisabled = selected.size === 0 || scanning
 
   // 一键添加选中为实例：端口后端自动分配、密钥随机生成（sk- 开头），无需用户填写
+  const [addTarget, setAddTarget] = useState<'solo' | 'pool'>('solo')
+
   const doAddSelected = async () => {
     const items = [...selected].map((node) => ({ node }))
     if (items.length === 0) {
@@ -147,6 +149,16 @@ export default function NodesPage({
     setAdding(true)
     try {
       const r = await api.batchAdd(items, 18100, true)
+      if (addTarget === 'pool' && r.added.length > 0) {
+        // 进池：逐个打上 join_gateway 标记（Rust 无批量入池命令，逐个调用）
+        for (const a of r.added) {
+          try {
+            await api.setJoinGateway(a.name, true)
+          } catch {
+            /* 单条失败不阻断整体 */
+          }
+        }
+      }
       toast(
         `成功添加 ${r.added_count} 个实例` + (r.error_count ? `，失败 ${r.error_count}` : ''),
         r.error_count === 0,
@@ -196,6 +208,28 @@ export default function NodesPage({
               <Radar size={14} /> 扫描选中节点（{selected.size}）
             </button>
           )}
+          <div className="flex items-center rounded-lg border border-zinc-200 bg-white p-0.5">
+            <button
+              onClick={() => setAddTarget('solo')}
+              className={clsx(
+                'px-2.5 py-1 rounded-md text-[12px] transition-colors',
+                addTarget === 'solo' ? 'bg-zinc-900 text-white' : 'text-zinc-500 hover:bg-zinc-100',
+              )}
+              title="添加为独享实例（一人一实例，默认）"
+            >
+              独享
+            </button>
+            <button
+              onClick={() => setAddTarget('pool')}
+              className={clsx(
+                'px-2.5 py-1 rounded-md text-[12px] transition-colors',
+                addTarget === 'pool' ? 'bg-zinc-900 text-white' : 'text-zinc-500 hover:bg-zinc-100',
+              )}
+              title="添加进实例池（聚合到统一网关）"
+            >
+              进池
+            </button>
+          </div>
           <button
             onClick={() => void doAddSelected()}
             disabled={selected.size === 0 || scanning || adding}

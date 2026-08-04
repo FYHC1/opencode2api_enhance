@@ -120,6 +120,17 @@ pub fn gateway_set_route_mode(
         .map_err(|e| format!("切换路由模式失败: {}", e))
 }
 
+/// 关闭统一网关：停止网关进程、清空池（实例的 join_gateway 标记保留，重启后可恢复）。
+#[tauri::command]
+pub fn gateway_stop(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let mut gateway = state
+        .gateway
+        .lock()
+        .map_err(|_| "网关锁失败".to_string())?;
+    gateway.stop();
+    Ok(())
+}
+
 /// 切换实例是否加入统一网关池（join_gateway），并同步网关。
 #[tauri::command]
 pub fn set_join_gateway(

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import clsx from 'clsx'
-import { Plus, RefreshCw, Play, Square, Trash2, TestTube2, Copy, Loader2 } from 'lucide-react'
+import { Plus, RefreshCw, Play, Square, Trash2, TestTube2, Copy, Loader2, Network } from 'lucide-react'
 import { api, type Instance } from '../lib/api'
 
 function statusBadge(st: Instance['status']): [string, string] {
@@ -154,6 +154,24 @@ export default function InstancesPage({
     }
   }
 
+  const [joinBusy, setJoinBusy] = useState<Record<string, boolean>>({})
+  const doJoin = async (name: string, join: boolean) => {
+    setJoinBusy((prev) => ({ ...prev, [name]: true }))
+    try {
+      await api.setJoinGateway(name, join)
+      toast(join ? `已将实例 ${name} 移入实例池` : `已将实例 ${name} 移出实例池（恢复独享）`)
+      await load()
+    } catch (e) {
+      toast(String(e), false)
+    } finally {
+      setJoinBusy((prev) => {
+        const next = { ...prev }
+        delete next[name]
+        return next
+      })
+    }
+  }
+
   const batch = async (kind: 'start' | 'stop' | 'delete') => {
     const names = [...selected]
     if (names.length === 0) {
@@ -303,8 +321,15 @@ if (kind === 'delete' && !confirm(`确定删除选中的 ${names.length} 个实�
                         <Copy size={11} />
                       </button>
                     </td>
-                    <td className="py-2.5 pl-2">
-                      <span className={clsx('inline-block px-2 py-0.5 rounded-full text-xs font-medium', cls)}>{label}</span>
+<td className="py-2.5 pl-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className={clsx('inline-block px-2 py-0.5 rounded-full text-xs font-medium', cls)}>{label}</span>
+                        {i.join_gateway && (
+                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-teal-50 text-teal-700 border border-teal-100" title="已加入实例池">
+                            <Network size={10} /> 池
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="py-2.5 pl-2 pr-4">
                       <div className="flex items-center justify-end gap-1.5">
@@ -329,6 +354,20 @@ if (kind === 'delete' && !confirm(`确定删除选中的 ${names.length} 个实�
                         )}
                         <button onClick={() => void doTest(i.name)} className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[12px] text-teal-700 bg-teal-50 hover:bg-teal-100">
                           <TestTube2 size={12} /> 测试
+                        </button>
+                        <button
+                          onClick={() => void doJoin(i.name, !i.join_gateway)}
+                          disabled={!!joinBusy[i.name]}
+                          className={clsx(
+                            'flex items-center gap-1 px-2.5 py-1 rounded-lg text-[12px] disabled:cursor-not-allowed disabled:opacity-60',
+                            i.join_gateway
+                              ? 'text-amber-700 bg-amber-50 hover:bg-amber-100'
+                              : 'text-teal-700 bg-teal-50 hover:bg-teal-100',
+                          )}
+                          title={i.join_gateway ? '移出实例池（恢复独享）' : '加入实例池（聚合到统一网关）'}
+                        >
+                          {joinBusy[i.name] ? <Loader2 size={12} className="animate-spin" /> : <Network size={12} />}
+                          {joinBusy[i.name] ? '处理中…' : i.join_gateway ? '移出池' : '移入池'}
                         </button>
                         <button onClick={() => void doRemove(i.name)} className="px-2.5 py-1 rounded-lg text-[12px] text-red-600 bg-red-50 hover:bg-red-100">
                           删除

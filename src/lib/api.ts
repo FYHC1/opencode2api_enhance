@@ -18,6 +18,8 @@ export type Instance = {
   singbox_port: number
   pid: number | null
   singbox_pid: number | null
+  /** 是否加入统一网关池（默认 false = 独享实例） */
+  join_gateway: boolean
   status: InstanceStatus
 }
 
@@ -105,6 +107,23 @@ export type BinariesInfo = {
   bin_dir: string
   oc_exists: boolean
   sb_exists: boolean
+}
+
+// ─── 统一网关（实例池） ─────────────────────────────────────────────
+
+export type GatewayStatus = {
+  running: boolean
+  address: string
+  port: number
+  api_key: string
+  running_instances: number
+  total_instances: number
+  message: string
+  route_mode: 'failover' | 'round_robin'
+  free_models: string[]
+  free_models_updated_at: number | null
+  free_models_loading: boolean
+  free_models_error: string | null
 }
 
 // ─── Token 统计（按实例） ─────────────────────────────────────────────
@@ -196,4 +215,10 @@ export const api = {
 
   // Token 统计（按实例）
   getStats: () => invoke<StatsSummary>('get_stats'),
+
+  // 统一网关（实例池）
+  gatewayStatus: () => invoke<GatewayStatus>('gateway_status'),
+  gatewaySetRouteMode: (mode: 'failover' | 'round_robin') => invoke<void>('gateway_set_route_mode', { mode }),
+  gatewayStop: () => invoke<void>('gateway_stop'),
+  setJoinGateway: (name: string, join: boolean) => invoke<void>('set_join_gateway', { name, join }),
 }
