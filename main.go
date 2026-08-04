@@ -198,10 +198,14 @@ const socks5RR = "__round_robin__"
 
 var socks5RRIndex uint32
 
+// routeMode 代理池/网关路由模式：failover（默认，成功不动游标、失败才切换）| round_robin
+var routeMode = "failover"
+
 var (
 	socks5Client     *http.Client // 缓存的 SOCKS5 客户端
 	socks5ClientAddr string       // 缓存对应的代理地址
 )
+
 
 // ======================== 代理健康池 ========================
 
@@ -283,8 +287,22 @@ func getHTTPClientWithProxy() (*http.Client, string) {
 		if len(socks5Proxies) == 0 {
 			return httpClient, ""
 		}
-		start := int(atomic.AddUint32(&socks5RRIndex, 1) % uint32(len(socks5Proxies)))
-		proxy = pickHealthyProxy(socks5Proxies, start)
+		if routeMode == "round_robin" {
+			// round_robin：每次请求推进游标
+			start := int(atomic.AddUint32(&socks5RRIndex, 1) % uint32(len(socks5Proxies)))
+			proxy = pickHealthyProxy(socks5Proxies, start)
+		} else {
+			// failover（默认）：成功不动游标，失败（冷却）才切下一个健康代理
+			start := int(atomic.LoadUint32(&socks5RRIndex) % uint32(len(socks5Proxies)))
+			proxy = pickHealthyProxy(socks5Proxies, start)
+			// 游标推进到实际选中的代理（若起始代理冷却被跳过则切换）
+			for i := range socks5Proxies {
+				if socks5Proxies[i].Addr == proxy.Addr {
+					atomic.StoreUint32(&socks5RRIndex, uint32(i))
+					break
+				}
+			}
+		}
 		useRR = true
 	} else {
 		if socks5Client != nil && socks5ClientAddr == activeSocks5 {
@@ -876,6 +894,8 @@ type AppConfig struct {
 	ForceDisableThinking bool              `json:"force_disable_thinking"`
 	Socks5Proxies        []Socks5Proxy     `json:"socks5_proxies,omitempty"`
 	ActiveSocks5         string            `json:"active_socks5,omitempty"`
+	// RouteMode 网关/代理池路由模式：failover（默认，成功不动游标，失败才切换）| round_robin
+	RouteMode string `json:"route_mode,omitempty"`
 }
 
 // ======================== Claude Messages API 类型 ========================
@@ -1015,6 +1035,11 @@ func applyConfig(cfg AppConfig) {
 		reasoningEffortMap = cfg.ReasoningEffortMap
 	}
 	forceDisableThinking = cfg.ForceDisableThinking
+
+	if cfg.RouteMode == "round_robin" || cfg.RouteMode == "failover" {
+		routeMode = cfg.RouteMode
+	}
+
 
 	socks5Mu.Lock()
 	proxiesChanged := false
@@ -1784,10 +1809,11 @@ func (auth UpstreamAuth) shouldUseGoEndpoint(modelID string) bool {
 	}
 }
 
-// isFreeModel 判断模型是否属于免费模型（以 -free 结尾）
+// isFreeModel 判断模型是否属于免费模型（以 -free 结尾，或官方动态返回的真实免费模型 big-pickle）
 func isFreeModel(modelID string) bool {
-	return strings.HasSuffix(modelID, "-free")
+	return strings.HasSuffix(modelID, "-free") || strings.EqualFold(modelID, "big-pickle")
 }
+
 
 func buildOCRequest(modelID string, bodyMap map[string]any, auth UpstreamAuth) (*http.Request, error) {
 	return buildOCRequestWithEndpoint(modelID, bodyMap, auth, auth.shouldUseGoEndpoint(modelID))
