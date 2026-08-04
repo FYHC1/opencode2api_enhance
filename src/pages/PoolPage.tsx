@@ -266,10 +266,9 @@ export default function PoolPage({
             />
           </div>
         </div>
-        {members.length > 0 ? (
-          <div className="max-h-[600px] overflow-y-auto">
+{members.length > 0 ? (
           <table className="w-full text-[13px]">
-            <thead className="sticky top-0 z-10 bg-white">
+            <thead>
               <tr className="text-left text-zinc-400 border-b border-zinc-100">
                 <th className="py-3 pl-4">名称 / 节点 IP</th>
                 <th className="py-3 pl-2">端口</th>
@@ -320,7 +319,6 @@ export default function PoolPage({
               })}
             </tbody>
           </table>
-          </div>
         ) : (
           <div className="flex flex-col items-center justify-center py-16 text-zinc-400">
             <p className="text-[13px] mb-1">暂无池成员</p>

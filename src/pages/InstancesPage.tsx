@@ -256,63 +256,26 @@ if (kind === 'delete' && !confirm(`确定删除选中的 ${names.length} 个实�
 
   return (
     <div className="p-6 space-y-4">
-      {/* 工具条：标题行 + 批量操作行 */}
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <h2 className="text-lg font-semibold text-zinc-900">实例管理</h2>
-            <span className="px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-500 text-xs font-medium">
-              {instances.length} 个
-            </span>
-            <div
-              className={clsx(
-                'relative flex items-center rounded-lg border border-zinc-200 bg-white transition-all duration-200 overflow-hidden',
-                searchFocus || search ? 'w-52' : 'w-9',
-              )}
-            >
-              <Search size={14} className="absolute left-2.5 text-zinc-400 pointer-events-none" />
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                onFocus={() => setSearchFocus(true)}
-                onBlur={() => setSearchFocus(false)}
-                placeholder="搜索名称 / 节点 / IP"
-                className={clsx(
-                  'w-full bg-transparent py-1.5 pl-8 pr-2 text-[12px] outline-none placeholder:text-zinc-300 transition-opacity',
-                  searchFocus || search ? 'opacity-100' : 'opacity-0',
-                )}
-              />
-            </div>
-            <select
-              value={filter}
-              onChange={(e) => setFilter(e.target.value as typeof filter)}
-              className="px-2.5 py-1.5 rounded-lg border border-zinc-200 bg-white text-[12px] text-zinc-600 outline-none"
-            >
-              <option value="all">全部实例</option>
-              <option value="running">运行中</option>
-              <option value="stopped">已停止</option>
-              <option value="pool">池成员</option>
-              <option value="solo">独享</option>
-            </select>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => void doRefresh()}
-              disabled={refreshing}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-zinc-700 bg-white border border-zinc-200 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-70"
-            >
-              <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
-              {refreshProgress ? `刷新 ${refreshProgress.done} / ${refreshProgress.total}` : '刷新'}
-            </button>
-            <button
-              onClick={() => setAddOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-white bg-zinc-900 hover:bg-zinc-700"
-            >
-              <Plus size={14} /> 添加实例
-            </button>
-          </div>
+      {/* 工具条：标题 + 操作按钮（原先样式一排） */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <h2 className="text-lg font-semibold text-zinc-900">实例管理</h2>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => void doRefresh()}
+            disabled={refreshing}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-zinc-700 bg-white border border-zinc-200 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-70"
+          >
+            <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
+            {refreshProgress ? `刷新 ${refreshProgress.done} / ${refreshProgress.total}` : '刷新'}
+          </button>
+          <button
+            onClick={() => setAddOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-white bg-zinc-900 hover:bg-zinc-700"
+          >
+            <Plus size={14} /> 添加实例
+          </button>
           <button
             onClick={() => void batch('start')}
             disabled={selected.size === 0 || batchBusy}
@@ -351,11 +314,47 @@ if (kind === 'delete' && !confirm(`确定删除选中的 ${names.length} 个实�
         </div>
       </div>
 
+      {/* 筛选条：数量 + 搜索 + 筛选（表格上方、按钮下方） */}
+      <div className="flex items-center gap-3">
+        <span className="px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-500 text-xs font-medium">
+          {instances.length} 个
+        </span>
+        <div
+          className={clsx(
+            'relative flex items-center rounded-lg border border-zinc-200 bg-white transition-all duration-200 overflow-hidden',
+            searchFocus || search ? 'w-52' : 'w-9',
+          )}
+        >
+          <Search size={14} className="absolute left-2.5 text-zinc-400 pointer-events-none" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onFocus={() => setSearchFocus(true)}
+            onBlur={() => setSearchFocus(false)}
+            placeholder="搜索名称 / 节点 / IP"
+            className={clsx(
+              'w-full bg-transparent py-1.5 pl-8 pr-2 text-[12px] outline-none placeholder:text-zinc-300 transition-opacity',
+              searchFocus || search ? 'opacity-100' : 'opacity-0',
+            )}
+          />
+        </div>
+        <select
+          value={filter}
+          onChange={(e) => setFilter(e.target.value as typeof filter)}
+          className="px-2.5 py-1.5 rounded-lg border border-zinc-200 bg-white text-[12px] text-zinc-600 outline-none"
+        >
+          <option value="all">全部实例</option>
+          <option value="running">运行中</option>
+          <option value="stopped">已停止</option>
+          <option value="pool">池成员</option>
+          <option value="solo">独享</option>
+        </select>
+      </div>
+
       {filtered.length > 0 && (
         <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm overflow-hidden">
-          <div className="max-h-[600px] overflow-y-auto">
           <table className="w-full text-[13px]">
-            <thead className="sticky top-0 z-10 bg-white">
+            <thead>
               <tr className="text-left text-zinc-400 border-b border-zinc-100">
                 <th className="py-3 pl-4 w-8">
                   <input type="checkbox" checked={selectedAll} onChange={toggleAll} className="accent-zinc-900" />
@@ -475,7 +474,6 @@ if (kind === 'delete' && !confirm(`确定删除选中的 ${names.length} 个实�
               })}
             </tbody>
           </table>
-          </div>
         </div>
       )}
 
