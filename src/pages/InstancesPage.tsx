@@ -314,7 +314,7 @@ if (kind === 'delete' && !confirm(`确定删除选中的 ${names.length} 个实�
         </div>
       </div>
 
-      {filtered.length > 0 && (
+      {instances.length > 0 && (
         <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm overflow-hidden">
           <div className="px-4 py-3 border-b border-zinc-100 flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -355,6 +355,7 @@ if (kind === 'delete' && !confirm(`确定删除选中的 ${names.length} 个实�
               </select>
             </div>
           </div>
+          {filtered.length > 0 ? (
           <table className="w-full text-[13px]">
             <thead>
               <tr className="text-left text-zinc-400 border-b border-zinc-100">
@@ -476,6 +477,11 @@ if (kind === 'delete' && !confirm(`确定删除选中的 ${names.length} 个实�
               })}
             </tbody>
           </table>
+          ) : (
+          <div className="flex flex-col items-center justify-center py-16 text-zinc-400">
+            <p className="text-[13px]">没有匹配「{search || filter}」的实例，试试调整搜索或筛选条件</p>
+          </div>
+          )}
         </div>
       )}
 
@@ -483,12 +489,6 @@ if (kind === 'delete' && !confirm(`确定删除选中的 ${names.length} 个实�
         <div className="flex flex-col items-center justify-center py-24 text-zinc-400">
           <p className="text-base mb-2">暂无实例</p>
           <p className="text-[13px]">在「节点扫描」页勾选节点批量添加，或点击「添加实例」</p>
-        </div>
-      )}
-
-      {instances.length > 0 && filtered.length === 0 && (
-        <div className="flex flex-col items-center justify-center py-16 text-zinc-400">
-          <p className="text-[13px]">没有匹配「{search || filter}」的实例，试试调整搜索或筛选条件</p>
         </div>
       )}
 
