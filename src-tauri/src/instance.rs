@@ -54,6 +54,7 @@ pub struct InstanceManager {
     pub config_path: PathBuf,
     pub binary_dir: PathBuf,
     pub runtime_dir: PathBuf,
+    persist_state: bool,
 }
 
 impl InstanceManager {
@@ -63,8 +64,21 @@ impl InstanceManager {
             config_path,
             binary_dir,
             runtime_dir,
+            persist_state: true,
         }
     }
+
+    /// 临时 manager：不持久化共享状态，供并行启动任务的 worker 安全使用。
+    pub fn new_ephemeral(binary_dir: PathBuf, runtime_dir: PathBuf) -> Self {
+        Self {
+            instances: Vec::new(),
+            config_path: PathBuf::new(),
+            binary_dir,
+            runtime_dir,
+            persist_state: false,
+        }
+    }
+
 
     pub fn add_instance(
         &mut self,
@@ -112,7 +126,7 @@ impl InstanceManager {
         Ok(())
     }
 
-    pub fn start_instance(&mut self, name: &str) -> Result<()> {
+    pub fn start_instance_inner(&mut self, name: &str) -> Result<()> {
         let idx = self
             .instances
             .iter()
@@ -142,6 +156,7 @@ impl InstanceManager {
 
         self.instances[idx].status = InstanceStatus::Starting;
         self.save()?;
+
 
         // 2. 生成并启动 sing-box
         let singbox_cfg = singbox::build_singbox_config(node, self.instances[idx].singbox_port)
@@ -241,6 +256,84 @@ let singbox_child = no_window(&mut Command::new(&singbox_bin))
         Ok(())
     }
 
+    /// 短锁标记实例为 Starting 并返回快照（放锁后供并行 worker 启动）。
+    pub fn mark_starting(&mut self, name: &str) -> Result<Instance> {
+        let idx = self
+            .instances
+            .iter()
+            .position(|instance| instance.name == name)
+            .context("实例不存在")?;
+        if matches!(
+            self.instances[idx].status,
+            InstanceStatus::Running | InstanceStatus::Starting | InstanceStatus::Stopping
+        ) {
+            bail!("实例 '{}' 正在忙", name);
+        }
+        let mut instance = self.instances[idx].clone();
+        instance.status = InstanceStatus::Starting;
+        instance.pid = None;
+        instance.singbox_pid = None;
+        self.instances[idx] = instance.clone();
+        Ok(instance)
+    }
+
+    /// 短锁回写并行启动结果。
+    pub fn apply_start_result(
+        &mut self,
+        name: &str,
+        result: std::result::Result<Instance, String>,
+    ) -> Result<()> {
+        let idx = self
+            .instances
+            .iter()
+            .position(|instance| instance.name == name)
+            .context("实例不存在")?;
+        match result {
+            Ok(mut instance) => {
+                instance.status = InstanceStatus::Running;
+                self.instances[idx] = instance;
+                Ok(())
+            }
+            Err(error) => {
+                self.instances[idx].status = InstanceStatus::Error(error.clone());
+                self.instances[idx].pid = None;
+                self.instances[idx].singbox_pid = None;
+                bail!("{}", error)
+            }
+        }
+    }
+
+    /// 短锁标记实例为 Stopping 并取出 PID（放锁后供并行 worker 杀进程）。
+    pub fn prepare_stop(&mut self, name: &str) -> Result<(Option<u32>, Option<u32>)> {
+        let idx = self
+            .instances
+            .iter()
+            .position(|instance| instance.name == name)
+            .context("实例不存在")?;
+        if matches!(
+            self.instances[idx].status,
+            InstanceStatus::Starting | InstanceStatus::Stopping
+        ) {
+            bail!("实例 '{}' 正在忙", name);
+        }
+        let pids = (self.instances[idx].pid, self.instances[idx].singbox_pid);
+        self.instances[idx].status = InstanceStatus::Stopping;
+        Ok(pids)
+    }
+
+    /// 短锁回写停止完成状态。
+    pub fn finish_stop(&mut self, name: &str) -> Result<()> {
+        let instance = self
+            .instances
+            .iter_mut()
+            .find(|instance| instance.name == name)
+            .context("实例不存在")?;
+        instance.status = InstanceStatus::Stopped;
+        instance.pid = None;
+        instance.singbox_pid = None;
+        Ok(())
+    }
+
     pub fn stop_instance(&mut self, name: &str) -> Result<()> {
         let idx = self
             .instances
@@ -305,12 +398,20 @@ let singbox_child = no_window(&mut Command::new(&singbox_bin))
     }
 
     fn save(&self) -> Result<()> {
+        if !self.persist_state {
+            return Ok(());
+        }
         let data = serde_json::to_string_pretty(&self.instances)
             .context("序列化实例失败")?;
         fs::write(&self.config_path, data)
             .context("写入实例文件失败")?;
         Ok(())
     }
+
+    pub fn save_state(&self) -> Result<()> {
+        self.save()
+    }
+
 
     pub fn load(&mut self) -> Result<()> {
         if self.config_path.exists() {
@@ -332,6 +433,26 @@ pub struct TestResult {
     pub model_count: Option<usize>,
     pub message: String,
     pub latency_ms: u64,
+}
+
+/// 使用临时 manager 并行启动实例（不持有共享 InstanceManager 锁）。
+/// 启动完成后由调用方通过 apply_start_result 回写结果。
+pub fn start_instance_process(
+    instance: Instance,
+    binary_dir: &PathBuf,
+    runtime_dir: &PathBuf,
+) -> std::result::Result<Instance, String> {
+    let mut manager = InstanceManager::new_ephemeral(binary_dir.clone(), runtime_dir.clone());
+    let name = instance.name.clone();
+    manager.instances.push(instance);
+    manager
+        .start_instance_inner(&name)
+        .map_err(|error| error.to_string())?;
+    manager
+        .instances
+        .into_iter()
+        .next()
+        .ok_or_else(|| "启动后实例消失".to_string())
 }
 
 /// 对指定端口探测 `GET /v1/models`（可在锁外 / spawn_blocking 中调用）。
@@ -640,10 +761,69 @@ mod tests {
     #[test]
     fn test_start_not_found() {
         let mut manager = new_manager("startnf");
-        let r = manager.start_instance("nobody");
+        let r = manager.start_instance_inner("nobody");
         assert!(r.is_err());
         fs::remove_dir_all(temp_dir("startnf")).ok();
     }
+
+    #[test]
+    fn test_mark_starting_and_apply_result() {
+        let mut manager = new_manager("markstart");
+        manager
+            .add_instance("u1".to_string(), 8088, "n".to_string(), "".to_string(), "".to_string())
+            .unwrap();
+
+        // mark_starting：状态 → Starting，返回快照
+        let snap = manager.mark_starting("u1").unwrap();
+        assert_eq!(snap.status, InstanceStatus::Starting);
+        assert_eq!(manager.instances[0].status, InstanceStatus::Starting);
+
+        // 忙状态不能重复标记
+        assert!(manager.mark_starting("u1").is_err());
+
+        // apply_start_result 成功 → Running
+        let mut done = snap.clone();
+        done.pid = Some(4242);
+        done.singbox_pid = Some(4243);
+        manager.apply_start_result("u1", Ok(done)).unwrap();
+        assert_eq!(manager.instances[0].status, InstanceStatus::Running);
+        assert_eq!(manager.instances[0].pid, Some(4242));
+
+        // apply_start_result 失败 → Error
+        assert!(
+            manager
+                .apply_start_result("u1", Err("启动失败".to_string()))
+                .is_err()
+        );
+        assert!(matches!(
+            manager.instances[0].status,
+            InstanceStatus::Error(_)
+        ));
+        assert_eq!(manager.instances[0].pid, None);
+        fs::remove_dir_all(temp_dir("markstart")).ok();
+    }
+
+    #[test]
+    fn test_prepare_stop_and_finish_stop() {
+        let mut manager = new_manager("prepstop");
+        manager
+            .add_instance("u1".to_string(), 8089, "n".to_string(), "".to_string(), "".to_string())
+            .unwrap();
+        manager.instances[0].status = InstanceStatus::Running;
+        manager.instances[0].pid = Some(9999);
+        manager.instances[0].singbox_pid = Some(8888);
+
+        let pids = manager.prepare_stop("u1").unwrap();
+        assert_eq!(pids, (Some(9999), Some(8888)));
+        assert_eq!(manager.instances[0].status, InstanceStatus::Stopping);
+
+        manager.finish_stop("u1").unwrap();
+        assert_eq!(manager.instances[0].status, InstanceStatus::Stopped);
+        assert_eq!(manager.instances[0].pid, None);
+        assert_eq!(manager.instances[0].singbox_pid, None);
+        fs::remove_dir_all(temp_dir("prepstop")).ok();
+    }
+
 
     #[test]
     fn test_reconcile_marks_dead_running_as_stopped() {

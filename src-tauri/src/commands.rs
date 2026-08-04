@@ -8,9 +8,12 @@ use crate::probe::{DEFAULT_PROBE_API_PORT, DEFAULT_PROBE_SOCKS_PORT};
 use crate::AppState;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::thread;
 use std::time::Duration;
+
 
 // ======================== 路径与共享状态 ========================
 
@@ -271,9 +274,29 @@ pub fn remove_instance(state: tauri::State<'_, AppState>, name: String) -> Resul
 pub async fn start_instance(state: tauri::State<'_, AppState>, name: String) -> Result<(), String> {
     let manager = Arc::clone(&state.manager);
     tauri::async_runtime::spawn_blocking(move || {
+        // 短锁：标记 Starting 并取出实例快照
+        let (instance, binary_dir, runtime_dir) = {
+            let mut mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
+            let _ = mgr.load();
+            let instance = mgr
+                .mark_starting(&name)
+                .map_err(|error| error.to_string())?;
+            (instance, mgr.binary_dir.clone(), mgr.runtime_dir.clone())
+        };
+        // 放锁：执行实际启动（临时 manager，不持共享锁）
+        let outcome =
+            crate::instance::start_instance_process(instance, &binary_dir, &runtime_dir);
+        // 短锁：回写结果
         let mut mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
-        let _ = mgr.load();
-        mgr.start_instance(&name).map_err(|e| e.to_string())
+        let apply_result = mgr.apply_start_result(&name, outcome);
+        let save_result = mgr.save_state().map_err(|error| error.to_string());
+        match apply_result {
+            Ok(()) => save_result,
+            Err(error) => {
+                let _ = save_result;
+                Err(error.to_string())
+            }
+        }
     })
     .await
     .map_err(|e| e.to_string())?
@@ -283,9 +306,27 @@ pub async fn start_instance(state: tauri::State<'_, AppState>, name: String) -> 
 pub async fn stop_instance(state: tauri::State<'_, AppState>, name: String) -> Result<(), String> {
     let manager = Arc::clone(&state.manager);
     tauri::async_runtime::spawn_blocking(move || {
+        // 短锁：标记 Stopping 并取出 PID
+        let (pid, singbox_pid) = {
+            let mut mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
+            let _ = mgr.load();
+            let pids = mgr
+                .prepare_stop(&name)
+                .map_err(|error| error.to_string())?;
+            mgr.save_state().map_err(|error| error.to_string())?;
+            pids
+        };
+        // 放锁：杀进程
+        if let Some(pid) = pid {
+            let _ = crate::instance::kill_process(pid);
+        }
+        if let Some(singbox_pid) = singbox_pid {
+            let _ = crate::instance::kill_process(singbox_pid);
+        }
+        // 短锁：回写停止状态
         let mut mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
-        let _ = mgr.load();
-        mgr.stop_instance(&name).map_err(|e| e.to_string())
+        mgr.finish_stop(&name).map_err(|error| error.to_string())?;
+        mgr.save_state().map_err(|error| error.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -446,6 +487,84 @@ fn batch_op_response(
     }
 }
 
+// 并行启动 worker（4 并发）：用临时 manager 启动，不持有共享锁
+fn run_parallel_start_jobs(
+    jobs: Vec<Instance>,
+    binary_dir: PathBuf,
+    runtime_dir: PathBuf,
+) -> Vec<(String, std::result::Result<Instance, String>)> {
+    if jobs.is_empty() {
+        return Vec::new();
+    }
+    let worker_count = jobs.len().min(4);
+    let queue = Arc::new(std::sync::Mutex::new(VecDeque::from_iter(jobs)));
+    let results = Arc::new(std::sync::Mutex::new(Vec::new()));
+    thread::scope(|scope| {
+        for _ in 0..worker_count {
+            let queue = Arc::clone(&queue);
+            let results = Arc::clone(&results);
+            let binary_dir = binary_dir.clone();
+            let runtime_dir = runtime_dir.clone();
+            scope.spawn(move || {
+                loop {
+                    let job = queue.lock().ok().and_then(|mut queue| queue.pop_front());
+                    let Some(instance) = job else { break };
+                    let name = instance.name.clone();
+                    let result = crate::instance::start_instance_process(
+                        instance,
+                        &binary_dir,
+                        &runtime_dir,
+                    );
+                    if let Ok(mut results) = results.lock() {
+                        results.push((name, result));
+                    }
+                }
+            });
+        }
+    });
+    results
+        .lock()
+        .map(|results| results.clone())
+        .unwrap_or_default()
+}
+
+// 并行停止 worker（8 并发）：直接按 PID 杀进程
+fn run_parallel_stop_jobs(jobs: Vec<(String, Option<u32>, Option<u32>)>) -> Vec<String> {
+    if jobs.is_empty() {
+        return Vec::new();
+    }
+    let worker_count = jobs.len().min(8);
+    let queue = Arc::new(std::sync::Mutex::new(VecDeque::from_iter(jobs)));
+    let completed = Arc::new(std::sync::Mutex::new(Vec::new()));
+    thread::scope(|scope| {
+        for _ in 0..worker_count {
+            let queue = Arc::clone(&queue);
+            let completed = Arc::clone(&completed);
+            scope.spawn(move || {
+                loop {
+                    let job = queue.lock().ok().and_then(|mut queue| queue.pop_front());
+                    let Some((name, pid, singbox_pid)) = job else {
+                        break;
+                    };
+                    if let Some(pid) = pid {
+                        let _ = crate::instance::kill_process(pid);
+                    }
+                    if let Some(pid) = singbox_pid {
+                        let _ = crate::instance::kill_process(pid);
+                    }
+                    if let Ok(mut completed) = completed.lock() {
+                        completed.push(name);
+                    }
+                }
+            });
+        }
+    });
+    completed
+        .lock()
+        .map(|completed| completed.clone())
+        .unwrap_or_default()
+}
+
 #[tauri::command]
 pub async fn batch_start(
     state: tauri::State<'_, AppState>,
@@ -453,11 +572,66 @@ pub async fn batch_start(
 ) -> Result<BatchOpResult, String> {
     let manager = Arc::clone(&state.manager);
     tauri::async_runtime::spawn_blocking(move || {
-        let mut mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
-        let _ = mgr.load();
-        Ok(batch_op_response(names, |name| {
-            mgr.start_instance(name)
-        }))
+        let mut unique_names = Vec::new();
+        let mut seen = HashSet::new();
+        for name in names {
+            if seen.insert(name.clone()) {
+                unique_names.push(name);
+            }
+        }
+
+        // 短锁：标记全部实例为 Starting
+        let (jobs, mut errors, binary_dir, runtime_dir) = {
+            let mut mgr = manager
+                .lock()
+                .map_err(|_| "状态锁失败".to_string())?;
+            let _ = mgr.load();
+            let mut jobs = Vec::new();
+            let mut errs = serde_json::Map::new();
+            for name in unique_names {
+                match mgr.mark_starting(&name) {
+                    Ok(instance) => jobs.push(instance),
+                    Err(error) => {
+                        errs.insert(name, json!(error.to_string()));
+                    }
+                }
+            }
+            mgr.save_state().map_err(|error| error.to_string())?;
+            (jobs, errs, mgr.binary_dir.clone(), mgr.runtime_dir.clone())
+        };
+
+        // 放锁：并行启动（4 worker）
+        let outcomes = run_parallel_start_jobs(jobs, binary_dir, runtime_dir);
+
+        // 短锁：回写结果
+        let mut success = Vec::new();
+        {
+            let mut mgr = manager
+                .lock()
+                .map_err(|_| "状态锁失败".to_string())?;
+            for (name, outcome) in outcomes {
+                match outcome {
+                    Ok(instance) => match mgr.apply_start_result(&name, Ok(instance)) {
+                        Ok(()) => success.push(name),
+                        Err(error) => {
+                            errors.insert(name, json!(error.to_string()));
+                        }
+                    },
+                    Err(error) => {
+                        let _ = mgr.apply_start_result(&name, Err(error.clone()));
+                        errors.insert(name, json!(error));
+                    }
+                }
+            }
+            mgr.save_state().map_err(|error| error.to_string())?;
+        }
+
+        Ok(BatchOpResult {
+            success_count: success.len(),
+            error_count: errors.len(),
+            success,
+            errors,
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -470,9 +644,60 @@ pub async fn batch_stop(
 ) -> Result<BatchOpResult, String> {
     let manager = Arc::clone(&state.manager);
     tauri::async_runtime::spawn_blocking(move || {
-        let mut mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
-        let _ = mgr.load();
-        Ok(batch_op_response(names, |name| mgr.stop_instance(name)))
+        let mut unique_names = Vec::new();
+        let mut seen = HashSet::new();
+        for name in names {
+            if seen.insert(name.clone()) {
+                unique_names.push(name);
+            }
+        }
+
+        // 短锁：标记全部实例为 Stopping，取出 PID
+        let (jobs, mut errors) = {
+            let mut mgr = manager
+                .lock()
+                .map_err(|_| "状态锁失败".to_string())?;
+            let _ = mgr.load();
+            let mut jobs = Vec::new();
+            let mut errs = serde_json::Map::new();
+            for name in unique_names {
+                match mgr.prepare_stop(&name) {
+                    Ok((pid, singbox_pid)) => jobs.push((name, pid, singbox_pid)),
+                    Err(error) => {
+                        errs.insert(name, json!(error.to_string()));
+                    }
+                }
+            }
+            mgr.save_state().map_err(|error| error.to_string())?;
+            (jobs, errs)
+        };
+
+        // 放锁：并行杀进程（8 worker）
+        let completed = run_parallel_stop_jobs(jobs);
+
+        // 短锁：回写停止状态
+        let mut success = Vec::new();
+        {
+            let mut mgr = manager
+                .lock()
+                .map_err(|_| "状态锁失败".to_string())?;
+            for name in completed {
+                match mgr.finish_stop(&name) {
+                    Ok(()) => success.push(name),
+                    Err(error) => {
+                        errors.insert(name, json!(error.to_string()));
+                    }
+                }
+            }
+            mgr.save_state().map_err(|error| error.to_string())?;
+        }
+
+        Ok(BatchOpResult {
+            success_count: success.len(),
+            error_count: errors.len(),
+            success,
+            errors,
+        })
     })
     .await
     .map_err(|e| e.to_string())?
