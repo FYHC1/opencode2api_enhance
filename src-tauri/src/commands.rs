@@ -350,7 +350,7 @@ let mut mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
             .find_instance(&name_owned)
             .map(|i| i.password.clone());
         drop(mgr); // 探测在锁外进行，避免长阻塞
-        Ok(crate::instance::probe_models(&name_owned, port, auth.as_deref()))
+        Ok(crate::instance::probe_free_completion(&name_owned, port, auth.as_deref()))
     })
     .await
     .map_err(|e| e.to_string())?

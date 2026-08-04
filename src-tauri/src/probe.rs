@@ -1,4 +1,4 @@
-//! 节点探针：固定一套 sing-box + opencode2api，串行切换节点并测 `/v1/models`。
+//! 节点探针：sing-box + opencode2api 实测节点，支持并发扫描。
 
 use crate::clash_yaml::{self, ClashNode};
 use crate::instance::{self, kill_process, no_window};
@@ -18,6 +18,9 @@ use std::time::{Duration, Instant};
 pub const DEFAULT_PROBE_API_PORT: u16 = 19090;
 /// 探针默认 sing-box SOCKS 端口
 pub const DEFAULT_PROBE_SOCKS_PORT: u16 = 29090;
+/// 并发扫描最大 worker 数
+const MAX_SCAN_CONCURRENCY: usize = 4;
+
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -161,7 +164,7 @@ impl ScanController {
         let running = Arc::clone(&self.running);
 
         thread::spawn(move || {
-            let result = run_scan_loop(
+            let result = run_scan_loop_parallel(
                 &binary_dir,
                 &runtime_dir,
                 &password,
@@ -269,7 +272,18 @@ impl ProbeProcs {
         // 给端口释放一点时间
         thread::sleep(Duration::from_millis(300));
     }
+
+    fn kill_opencode_only(&mut self) {
+        if let Some(mut c) = self.opencode.take() {
+            let pid = c.id();
+            let _ = c.kill();
+            let _ = c.wait();
+            let _ = kill_process(pid);
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
 }
+
 
 fn resolve_bin(dir: &Path, name: &str) -> Result<PathBuf> {
     let exe = dir.join(format!("{}.exe", name));
@@ -283,6 +297,168 @@ fn resolve_bin(dir: &Path, name: &str) -> Result<PathBuf> {
     bail!("未找到可执行文件: {} 或 {}", exe.display(), plain.display());
 }
 
+// ======================== F7b 并发扫描 ========================
+
+/// 为并发 worker 分配互不冲突的 (API, SOCKS) 端口对。
+fn choose_probe_port_pairs(
+    api_port: u16,
+    socks_port: u16,
+    count: usize,
+) -> Result<Vec<(u16, u16)>> {
+    let api_start = api_port.max(1024);
+    let socks_start = socks_port.max(1024);
+    let mut pairs = Vec::with_capacity(count);
+    for offset in 0..512u16 {
+        if pairs.len() == count {
+            return Ok(pairs);
+        }
+        let Some(api) = api_start.checked_add(offset) else {
+            break;
+        };
+        let Some(socks) = socks_start.checked_add(offset) else {
+            break;
+        };
+        if api == socks
+            || pairs
+                .iter()
+                .any(|(a, s)| *a == api || *s == api || *a == socks || *s == socks)
+        {
+            continue;
+        }
+        if instance::ensure_port_available(api).is_ok()
+            && instance::ensure_port_available(socks).is_ok()
+        {
+            pairs.push((api, socks));
+        }
+    }
+    bail!("无法为并发节点扫描找到 {} 组空闲 API/SOCKS 端口", count)
+}
+
+/// 在 worker 专属目录启动一个探测 opencode2api 进程（绑定独立端口）。
+fn start_probe_opencode(
+    procs: &mut ProbeProcs,
+    oc_bin: &Path,
+    oc_cfg_path: &Path,
+    log_dir: &Path,
+    api_port: u16,
+    password: &str,
+) -> Result<()> {
+    procs.kill_opencode_only();
+    instance::ensure_port_available(api_port)
+        .with_context(|| format!("探测 API 端口 {} 仍被旧进程占用", api_port))?;
+    let oc_out = fs::File::create(log_dir.join("opencode2api.out.log"))?;
+    let oc_err = fs::File::create(log_dir.join("opencode2api.err.log"))?;
+    let child = no_window(&mut Command::new(oc_bin))
+        .arg("-port")
+        .arg(api_port.to_string())
+        .arg("-config")
+        .arg(oc_cfg_path)
+        .arg("-password")
+        .arg(password)
+        .stdout(Stdio::from(oc_out))
+        .stderr(Stdio::from(oc_err))
+        .spawn()
+        .context("启动探测 opencode2api 失败")?;
+    procs.opencode = Some(child);
+    if !instance::wait_for_port(api_port, Duration::from_secs(15)) {
+        procs.kill_opencode_only();
+        bail!("探测 opencode2api 在 15s 内未监听 :{}", api_port);
+    }
+    Ok(())
+}
+
+/// 并发扫描：N 个 worker 各持独立端口对与进程，分摊节点列表。
+fn run_scan_loop_parallel(
+    binary_dir: &Path,
+    runtime_dir: &Path,
+    password: &str,
+    api_port: u16,
+    socks_port: u16,
+    nodes: &[ClashNode],
+    per_node_timeout: Duration,
+    progress: &Arc<Mutex<ScanProgress>>,
+    cancel: &Arc<AtomicBool>,
+) -> Result<()> {
+    let worker_count = nodes.len().min(MAX_SCAN_CONCURRENCY).max(1);
+    let port_pairs = choose_probe_port_pairs(api_port, socks_port, worker_count)?;
+    let probe_root = runtime_dir.join("_probe");
+    fs::create_dir_all(&probe_root).context("创建并发探测目录失败")?;
+    let singbox_bin = resolve_bin(binary_dir, "sing-box")?;
+    let oc_bin = resolve_bin(binary_dir, "opencode2api")?;
+
+    let mut worker_dirs = Vec::with_capacity(worker_count);
+    for (worker_index, (_, socks_port)) in port_pairs.iter().enumerate() {
+        let worker_dir = probe_root.join(format!("worker-{:02}", worker_index + 1));
+        fs::create_dir_all(worker_dir.join("logs"))?;
+        let oc_cfg = opencode_cfg::build_opencode_config(*socks_port)?;
+        fs::write(worker_dir.join("opencode2api.json"), oc_cfg)?;
+        worker_dirs.push(worker_dir);
+    }
+
+    thread::scope(|scope| -> Result<()> {
+        let mut handles = Vec::with_capacity(worker_count);
+        for worker_index in 0..worker_count {
+            let worker_dir = worker_dirs[worker_index].clone();
+            let (worker_api_port, worker_socks_port) = port_pairs[worker_index];
+            let progress = Arc::clone(progress);
+            let cancel = Arc::clone(cancel);
+            let singbox_bin = singbox_bin.clone();
+            let oc_bin = oc_bin.clone();
+            handles.push(scope.spawn(move || -> Result<()> {
+                let log_dir = worker_dir.join("logs");
+                let oc_cfg_path = worker_dir.join("opencode2api.json");
+                for (node_index, node) in nodes.iter().enumerate() {
+                    if node_index % worker_count != worker_index {
+                        continue;
+                    }
+                    if cancel.load(Ordering::SeqCst) {
+                        break;
+                    }
+
+                    let mut procs = ProbeProcs {
+                        singbox: None,
+                        opencode: None,
+                    };
+                    let result = probe_one_node_parallel(
+                        &mut procs,
+                        node,
+                        &singbox_bin,
+                        &oc_bin,
+                        &worker_dir,
+                        &log_dir,
+                        &oc_cfg_path,
+                        worker_api_port,
+                        worker_socks_port,
+                        per_node_timeout,
+                        password,
+                    );
+                    procs.kill_all();
+
+                    if let Ok(mut state) = progress.lock() {
+                        state.current += 1;
+                        state.current_node = Some(node.name.clone());
+                        state.results.push(result);
+                    }
+                }
+                Ok(())
+            }));
+        }
+
+        for handle in handles {
+            handle
+                .join()
+                .map_err(|_| anyhow::anyhow!("并发节点探测线程异常退出"))??;
+        }
+        Ok(())
+    })?;
+
+    if let Ok(mut state) = progress.lock() {
+        state.current_node = None;
+    }
+    Ok(())
+}
+
+#[allow(dead_code)] // 保留串行扫描实现（低并发回归用）
 fn run_scan_loop(
     binary_dir: &Path,
     runtime_dir: &Path,
@@ -465,22 +641,25 @@ let child = match no_window(&mut Command::new(singbox_bin))
     let remain = per_node_timeout.saturating_sub(start.elapsed());
     let http_timeout = remain.max(Duration::from_secs(2)).min(Duration::from_secs(12));
 
-match instance::http_get_json(api_port, "/v1/models", http_timeout, auth_token) {
+    // F2: 免费额度实测——先取模型目录，再发 1 token 最小请求，能出 choices 才算可用
+    match instance::probe_free_completion_response(api_port, auth_token, http_timeout) {
         Ok((status, body)) => {
-            if (200..300).contains(&status) {
+            if instance::is_probe_completion_success(status, &body) {
                 let model_count = count_models(&body);
                 base(
                     true,
                     "ok",
                     match model_count {
                         Some(n) => format!("可用，models={}", n),
-                        None => "可用（models 返回成功）".into(),
+                        None => "可用（免费模型最小请求成功）".into(),
                     },
                     Some(status),
                     model_count,
                 )
             } else {
-                let cat = if status == 503 || status == 502 || status == 504 {
+                let cat = if (200..300).contains(&status) {
+                    "invalid_response"
+                } else if status == 503 || status == 502 || status == 504 {
                     "upstream"
                 } else {
                     "other"
@@ -505,6 +684,178 @@ match instance::http_get_json(api_port, "/v1/models", http_timeout, auth_token) 
         }
     }
 }
+
+/// 并行版单节点探测：worker 专属目录 + 独立 opencode 进程（F7b）。
+fn probe_one_node_parallel(
+    procs: &mut ProbeProcs,
+    node: &ClashNode,
+    singbox_bin: &Path,
+    oc_bin: &Path,
+    probe_dir: &Path,
+    log_dir: &Path,
+    oc_cfg_path: &Path,
+    api_port: u16,
+    socks_port: u16,
+    per_node_timeout: Duration,
+    password: &str,
+) -> ProbeResult {
+    let start = Instant::now();
+    let base = |ok: bool, category: &str, message: String, status: Option<u16>, models: Option<usize>| {
+        ProbeResult {
+            node: node.name.clone(),
+            node_type: node.node_type.clone(),
+            server: node.server.clone(),
+            port: node.port,
+            ok,
+            category: category.to_string(),
+            status_code: status,
+            model_count: models,
+            message,
+            latency_ms: start.elapsed().as_millis() as u64,
+        }
+    };
+
+    // 生成 sing-box 配置
+    let cfg = match singbox::build_singbox_config(node, socks_port) {
+        Ok(c) => c,
+        Err(e) => {
+            return base(false, "config", format!("生成配置失败: {}", e), None, None);
+        }
+    };
+    let cfg_path = probe_dir.join("singbox.json");
+    if let Err(e) = fs::write(&cfg_path, &cfg) {
+        return base(false, "config", format!("写入配置失败: {}", e), None, None);
+    }
+
+    // 重启 sing-box
+    procs.kill_singbox_only();
+    if let Err(e) = instance::ensure_port_available(socks_port) {
+        return base(
+            false,
+            "local",
+            format!("SOCKS 端口 {} 仍被旧进程占用: {}", socks_port, e),
+            None,
+            None,
+        );
+    }
+
+    let sb_out = match fs::File::create(log_dir.join("singbox.out.log")) {
+        Ok(f) => f,
+        Err(e) => return base(false, "other", format!("日志文件失败: {}", e), None, None),
+    };
+    let sb_err = match fs::File::create(log_dir.join("singbox.err.log")) {
+        Ok(f) => f,
+        Err(e) => return base(false, "other", format!("日志文件失败: {}", e), None, None),
+    };
+
+    let child = match no_window(&mut Command::new(singbox_bin))
+        .args(["run", "-c"])
+        .arg(&cfg_path)
+        .stdout(Stdio::from(sb_out))
+        .stderr(Stdio::from(sb_err))
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            return base(false, "other", format!("启动 sing-box 失败: {}", e), None, None);
+        }
+    };
+    procs.singbox = Some(child);
+
+    let socks_wait = Duration::from_secs(8).min(per_node_timeout);
+    if !instance::wait_for_port(socks_port, socks_wait) {
+        // 读一下 err 日志给提示
+        let hint = fs::read_to_string(log_dir.join("singbox.err.log"))
+            .unwrap_or_default();
+        let hint = hint.chars().rev().take(300).collect::<String>().chars().rev().collect::<String>();
+        let cat = if hint.to_lowercase().contains("tls")
+            || hint.contains("certificate")
+            || hint.contains("handshake")
+        {
+            "tls"
+        } else {
+            "socks"
+        };
+        return base(
+            false,
+            cat,
+            format!(
+                "sing-box SOCKS :{} 未就绪。{}",
+                socks_port,
+                if hint.is_empty() {
+                    String::new()
+                } else {
+                    format!("日志: {}", truncate_str(&hint, 180))
+                }
+            ),
+            None,
+            None,
+        );
+    }
+
+    // 稍等出口握手
+    thread::sleep(Duration::from_millis(400));
+
+    // 并行 worker 各自启动独立 opencode（绑定本 worker 专属端口）
+    if let Err(e) = start_probe_opencode(procs, oc_bin, oc_cfg_path, log_dir, api_port, password)
+    {
+        return base(
+            false,
+            "local",
+            format!("探测 API 进程启动失败: {}", e),
+            None,
+            None,
+        );
+    }
+
+    let remain = per_node_timeout.saturating_sub(start.elapsed());
+    let http_timeout = remain.max(Duration::from_secs(2)).min(Duration::from_secs(12));
+
+    // F2: 免费额度实测——先取模型目录，再发 1 token 最小请求，能出 choices 才算可用
+    match instance::probe_free_completion_response(api_port, Some(password), http_timeout) {
+        Ok((status, body)) => {
+            if instance::is_probe_completion_success(status, &body) {
+                let model_count = count_models(&body);
+                base(
+                    true,
+                    "ok",
+                    match model_count {
+                        Some(n) => format!("可用，models={}", n),
+                        None => "可用（免费模型最小请求成功）".into(),
+                    },
+                    Some(status),
+                    model_count,
+                )
+            } else {
+                let cat = if (200..300).contains(&status) {
+                    "invalid_response"
+                } else if status == 503 || status == 502 || status == 504 {
+                    "upstream"
+                } else {
+                    "other"
+                };
+                base(
+                    false,
+                    cat,
+                    format!("HTTP {}，{}", status, truncate_str(&body, 160)),
+                    Some(status),
+                    None,
+                )
+            }
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            let cat = if msg.contains("timed out") || msg.contains("超时") {
+                "timeout"
+            } else {
+                "other"
+            };
+            base(false, cat, format!("请求失败: {}", msg), None, None)
+        }
+    }
+}
+
+
 
 fn count_models(body: &str) -> Option<usize> {
     let v: serde_json::Value = serde_json::from_str(body).ok()?;

@@ -5,7 +5,7 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::thread;
@@ -379,12 +379,12 @@ let singbox_child = no_window(&mut Command::new(&singbox_bin))
         Ok(inst.port)
     }
 
-/// 对运行中的实例请求 `GET /v1/models`，快速验活。
+    /// 对运行中的实例执行真实免费模型最小请求，判断免费额度是否可用（F2）。
     /// 启用 401 门禁后需带实例密钥（Authorization: Bearer <密码>），否则自检会 401。
     pub fn test_instance(&self, name: &str) -> Result<TestResult> {
         let port = self.prepare_test(name)?;
         let auth = self.find_instance(name).map(|i| i.password.clone());
-        Ok(probe_models(name, port, auth.as_deref()))
+        Ok(probe_free_completion(name, port, auth.as_deref()))
     }
 
     #[allow(dead_code)]
@@ -501,6 +501,133 @@ pub fn probe_models(name: &str, port: u16, auth_token: Option<&str>) -> TestResu
     }
 }
 
+// ======================== F2 免费额度实测健康检查 ========================
+
+/// 实测请求的 2xx 判定：仅当响应带非空 choices 才算可用。
+pub(crate) fn is_probe_completion_success(status: u16, body: &str) -> bool {
+    if !(200..300).contains(&status) {
+        return false;
+    }
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
+        return false;
+    };
+    value
+        .get("choices")
+        .and_then(|choices| choices.as_array())
+        .is_some_and(|choices| !choices.is_empty())
+}
+
+fn is_probe_free_model(model: &str) -> bool {
+    let id = model.trim().to_ascii_lowercase();
+    id.ends_with("-free")
+        || id == "big-pickle"
+        || matches!(
+            id.as_str(),
+            "deepseek-v4-flash"
+                | "mimo-v2.5"
+                | "ling-3.0-flash"
+                | "nemotron-3-ultra"
+                | "north-mini-code"
+                | "laguna-s-2.1"
+        )
+}
+
+fn select_probe_free_model(body: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    let data = value.get("data")?.as_array()?;
+    let mut first = None;
+    for item in data {
+        let Some(id) = item.get("id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        if !is_probe_free_model(id) {
+            continue;
+        }
+        if first.is_none() {
+            first = Some(id.to_string());
+        }
+        if id.to_ascii_lowercase().ends_with("-free") || id.eq_ignore_ascii_case("big-pickle") {
+            return Some(id.to_string());
+        }
+    }
+    first
+}
+
+/// 先验证模型目录，再发送一个仅生成 1 token 的免费模型请求。
+/// 返回的 status/body 与普通 HTTP 探测一致，供扫描器复用并保持错误分类一致。
+pub(crate) fn probe_free_completion_response(
+    port: u16,
+    auth_token: Option<&str>,
+    timeout: Duration,
+) -> Result<(u16, String)> {
+    if timeout.is_zero() {
+        bail!("probe timeout must be positive");
+    }
+    // Keep the models lookup and completion request within the caller's total
+    // budget instead of giving each phase an independent minimum timeout.
+    let mut models_timeout = (timeout / 2).min(Duration::from_secs(4));
+    if models_timeout.is_zero() {
+        models_timeout = timeout;
+    }
+    let (models_status, models_body) =
+        http_get_json(port, "/v1/models", models_timeout, auth_token)?;
+    if !(200..300).contains(&models_status) {
+        return Ok((models_status, models_body));
+    }
+
+    let Some(model) = select_probe_free_model(&models_body) else {
+        return Ok((503, "models 接口成功，但没有可测试的免费模型".to_string()));
+    };
+
+    let remaining = timeout.saturating_sub(models_timeout);
+    let request_body = serde_json::json!({
+        "model": model,
+        "messages": [{"role": "user", "content": "Reply with OK"}],
+        "max_tokens": 1,
+        "stream": false
+    });
+    let request_body =
+        serde_json::to_string(&request_body).context("生成免费模型测试请求失败")?;
+    http_post_json(
+        port,
+        "/v1/chat/completions",
+        &request_body,
+        remaining,
+        auth_token,
+    )
+}
+
+/// 对当前节点执行真实的免费模型最小请求。
+/// 仅 models 接口成功不能证明上游可用，因此扫描和实例测试都必须经过这里。
+pub fn probe_free_completion(name: &str, port: u16, auth_token: Option<&str>) -> TestResult {
+    let start = Instant::now();
+    match probe_free_completion_response(port, auth_token, Duration::from_secs(10)) {
+        Ok((status, body)) => TestResult {
+            name: name.to_string(),
+            port,
+            ok: is_probe_completion_success(status, &body),
+            status_code: Some(status),
+            model_count: None,
+            message: if is_probe_completion_success(status, &body) {
+                "免费模型最小请求成功".to_string()
+            } else {
+                format!("免费模型请求 HTTP {}：{}", status, truncate(&body, 240))
+            },
+            latency_ms: start.elapsed().as_millis() as u64,
+        },
+        Err(e) => TestResult {
+            name: name.to_string(),
+            port,
+            ok: false,
+            status_code: None,
+            model_count: None,
+            message: format!("免费模型请求失败: {}", e),
+            latency_ms: start.elapsed().as_millis() as u64,
+        },
+    }
+}
+
+
 fn truncate(s: &str, max: usize) -> String {
     let mut t: String = s.chars().take(max).collect();
     if s.chars().count() > max {
@@ -572,6 +699,58 @@ pub(crate) fn http_get_json(
     Ok((status, body.trim().to_string()))
 }
 
+/// 向本机实例发简单 HTTP/1.1 POST（F2 免费模型实测用），返回 (status, body)。
+pub(crate) fn http_post_json(
+    port: u16,
+    path: &str,
+    body: &str,
+    timeout: Duration,
+    auth_token: Option<&str>,
+) -> Result<(u16, String)> {
+    let addr = format!("127.0.0.1:{}", port);
+    let mut stream =
+        TcpStream::connect(&addr).with_context(|| format!("无法连接 {}", addr))?;
+    stream
+        .set_read_timeout(Some(timeout))
+        .context("设置读超时失败")?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(5)))
+        .context("设置写超时失败")?;
+
+    let auth_line = match auth_token.filter(|t| !t.is_empty()) {
+        Some(t) => format!("Authorization: Bearer {}\r\n", t),
+        None => String::new(),
+    };
+    let req = format!(
+        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\nAccept: application/json\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{}User-Agent: opencode2api-manager/0.1\r\n\r\n{}",
+        body.as_bytes().len(),
+        auth_line,
+        body
+    );
+    stream
+        .write_all(req.as_bytes())
+        .context("发送 HTTP POST 请求失败")?;
+
+    let mut buf = Vec::new();
+    stream
+        .read_to_end(&mut buf)
+        .context("读取 HTTP POST 响应失败")?;
+    let raw = String::from_utf8_lossy(&buf);
+    let (header, resp_body) = raw
+        .split_once("\r\n\r\n")
+        .or_else(|| raw.split_once("\n\n"))
+        .unwrap_or((raw.as_ref(), ""));
+
+    let status = header
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1)?.parse::<u16>().ok())
+        .unwrap_or(0);
+
+    Ok((status, resp_body.trim().to_string()))
+}
+
+
 /// 等待本地 TCP 端口可连接
 pub(crate) fn wait_for_port(port: u16, timeout: Duration) -> bool {
     let addr = format!("127.0.0.1:{}", port);
@@ -584,6 +763,15 @@ pub(crate) fn wait_for_port(port: u16, timeout: Duration) -> bool {
     }
     false
 }
+
+/// 校验本地端口空闲（用于并发扫描端口对分配）。
+pub(crate) fn ensure_port_available(port: u16) -> Result<()> {
+    let addr = format!("127.0.0.1:{}", port);
+    TcpListener::bind(&addr)
+        .map(|_| ())
+        .with_context(|| format!("本地端口 {} 已被占用", port))
+}
+
 
 /// 按 PID 终止进程（Windows 用 taskkill，其他平台用 sysinfo）
 pub fn kill_process(pid: u32) -> Result<()> {
@@ -726,6 +914,38 @@ mod tests {
             dir.join("runtime"),
         )
     }
+
+    // ======================== F2 免费模型选择 ========================
+
+    #[test]
+    fn test_select_probe_free_model_prefers_free_suffix() {
+        let body = r#"{"data":[{"id":"gpt-4o"},{"id":"deepseek-v4-flash-free"},{"id":"big-pickle"}]}"#;
+        let got = select_probe_free_model(body);
+        assert_eq!(got.as_deref(), Some("deepseek-v4-flash-free"));
+    }
+
+    #[test]
+    fn test_select_probe_free_model_falls_back_to_known_free() {
+        let body = r#"{"data":[{"id":"gpt-4o"},{"id":"big-pickle"}]}"#;
+        let got = select_probe_free_model(body);
+        assert_eq!(got.as_deref(), Some("big-pickle"));
+    }
+
+    #[test]
+    fn test_select_probe_free_model_none_when_no_free() {
+        let body = r#"{"data":[{"id":"gpt-4o"},{"id":"gpt-4-turbo"}]}"#;
+        assert!(select_probe_free_model(body).is_none());
+    }
+
+    #[test]
+    fn test_is_probe_completion_success_requires_choices() {
+        assert!(is_probe_completion_success(200, r#"{"choices":[{"index":0}]}"#));
+        assert!(!is_probe_completion_success(200, r#"{"choices":[]}"#));
+        assert!(!is_probe_completion_success(200, r#"{"error":"rate limited"}"#));
+        assert!(!is_probe_completion_success(429, r#"{"choices":[{"index":0}]}"#));
+        assert!(!is_probe_completion_success(503, ""));
+    }
+
 
     #[test]
     fn test_add_instance() {
