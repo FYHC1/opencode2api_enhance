@@ -148,17 +148,21 @@ export default function PoolPage({
     try {
       let ok = 0
       let fail = 0
-      for (const n of names) {
-        try {
-          if (kind === 'start') await api.startInstance(n)
-          else if (kind === 'stop') await api.stopInstance(n)
-          else {
+      if (kind === 'start' || kind === 'stop') {
+        // 复用 Rust 并行命令（batch_start 4 worker / batch_stop 8 worker），避免前端串行
+        const r = kind === 'start' ? await api.batchStart(names) : await api.batchStop(names)
+        ok = r.success_count
+        fail = r.error_count
+      } else {
+        // 测试无批量命令，逐个探测
+        for (const n of names) {
+          try {
             const r = await api.testInstance(n)
             if (!r.ok) throw new Error(r.message)
+            ok++
+          } catch {
+            fail++
           }
-          ok++
-        } catch {
-          fail++
         }
       }
       const label = kind === 'start' ? '启动' : kind === 'stop' ? '停止' : '测试'
