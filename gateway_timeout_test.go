@@ -212,6 +212,13 @@ func TestStreamWithResumeNormal(t *testing.T) {
 	if !strings.Contains(outStr, "}\n\n") {
 		t.Fatalf("expected '}\\n\\n' between events, got: %q", outStr)
 	}
+	// 节点/模型标识前缀：首个内容 chunk 前应插入 🤖 节点 · 模型
+	if !strings.Contains(outStr, "🤖") {
+		t.Fatalf("expected node/model label 🤖 in output, got: %q", outStr)
+	}
+	if !strings.Contains(outStr, "· m") {
+		t.Fatalf("expected model name in label, got: %q", outStr)
+	}
 }
 
 // buildResumeBody 对非法 JSON 应原样返回

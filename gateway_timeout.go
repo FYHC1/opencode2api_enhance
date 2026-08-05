@@ -359,6 +359,8 @@ func streamWithResume(w http.ResponseWriter, r *http.Request, upstreamBody []byt
 		ttft := timeoutCfg.RandomTTFT()
 		silence := timeoutCfg.RandomSilence()
 		gotFirst := false
+		// 当前节点是否已插入过「🤖 节点 · 模型」标识前缀（每节点仅一次）
+		prefixDone := false
 
 		// 常驻读 goroutine：阻塞读转 channel，主循环 select timer
 		type lineResult struct {
@@ -471,6 +473,34 @@ func streamWithResume(w http.ResponseWriter, r *http.Request, upstreamBody []byt
 					}
 				}
 				sseDebugf("[%s] FWD>> %q", reqID, out)
+				// 节点/模型标识：每个节点首个内容 chunk 前插入「🤖 节点 · 模型」前缀，
+				// 用户可感知当前由哪个节点/模型回答、以及何时切换（切换后新节点重新加前缀）。
+				// 前缀独立成行（\n\n 分隔），不影响后续内容阅读。
+				if !prefixDone && strings.HasPrefix(out, "data: ") {
+					var outObj map[string]any
+					if json.Unmarshal([]byte(out[6:]), &outObj) == nil {
+						if chs, ok := outObj["choices"].([]any); ok && len(chs) > 0 {
+							if first, ok := chs[0].(map[string]any); ok {
+								if delta, ok := first["delta"].(map[string]any); ok {
+									if c, ok := delta["content"].(string); ok && c != "" {
+										nodeLabel := proxyAddr
+										if nodeLabel == "" {
+											nodeLabel = "未知节点"
+										}
+										delta["content"] = fmt.Sprintf("\n\n🤖 %s · %s\n\n%s", nodeLabel, model, c)
+										first["delta"] = delta
+										chs[0] = first
+										outObj["choices"] = chs
+										if nb, err := json.Marshal(outObj); err == nil {
+											out = "data: " + string(nb)
+										}
+										prefixDone = true
+									}
+								}
+							}
+						}
+					}
+				}
 				// 标准 SSE：每个事件以 \n\n 结尾（事件间空行分隔）。
 				// 之前只写单个 \n，导致严格的 OpenAI 兼容客户端把连续两行当成一个事件，
 				// 第二行 JSON 报 "Unexpected non-whitespace character after JSON"。
