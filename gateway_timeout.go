@@ -314,7 +314,7 @@ type resumeStreamResult struct {
 //   - initial: 初始上游响应（可能为 nil，此时直接尝试重连）
 //   - keepReasoning: 是否保留 reasoning 内容
 //   - callRec: 调用日志记录（追加事件）
-func streamWithResume(w http.ResponseWriter, r *http.Request, upstreamBody []byte, model string, auth UpstreamAuth, initial io.ReadCloser, keepReasoning bool, callRec *CallRecord) resumeStreamResult {
+func streamWithResume(w http.ResponseWriter, r *http.Request, upstreamBody []byte, model string, auth UpstreamAuth, initial io.ReadCloser, initialProxyAddr string, keepReasoning bool, callRec *CallRecord) resumeStreamResult {
 	reqID := ""
 	if callRec != nil {
 		reqID = callRec.ReqID
@@ -332,9 +332,9 @@ func streamWithResume(w http.ResponseWriter, r *http.Request, upstreamBody []byt
 
 	// 已尝试过的代理地址：流中断后标记冷却，重连时强制换节点（failover 默认成功不动游标）
 	triedAddrs := map[string]bool{}
-	// 当前活动的上游响应；attempt 0 用 initial，后续用重连结果
+	// 当前活动的上游响应；attempt 0 用 initial（其代理地址为 initialProxyAddr），后续用重连结果
 	upResp := initial
-	proxyAddr := ""
+	proxyAddr := initialProxyAddr
 	doneSeen := false
 
 	for attempt <= maxResume {

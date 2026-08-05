@@ -190,7 +190,7 @@ func TestStreamWithResumeNormal(t *testing.T) {
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
 	callRec := &CallRecord{ReqID: "test-1", Model: "m"}
-	res := streamWithResume(rr, req, body, "m", UpstreamAuth{Mode: AuthRoutePublic}, resp.Body, false, callRec)
+	res := streamWithResume(rr, req, body, "m", UpstreamAuth{Mode: AuthRoutePublic}, resp.Body, "127.0.0.1:28100", false, callRec)
 	if !res.OK {
 		t.Fatalf("expected OK, got %+v", res)
 	}
@@ -218,6 +218,13 @@ func TestStreamWithResumeNormal(t *testing.T) {
 	}
 	if !strings.Contains(outStr, "· m") {
 		t.Fatalf("expected model name in label, got: %q", outStr)
+	}
+	// 首次连接的前缀应显示实际节点地址（而非"未知节点"）
+	if !strings.Contains(outStr, "127.0.0.1:28100") {
+		t.Fatalf("expected node addr in label (not 未知节点), got: %q", outStr)
+	}
+	if strings.Contains(outStr, "未知节点") {
+		t.Fatalf("should not show 未知节点 when addr known, got: %q", outStr)
 	}
 }
 
@@ -254,7 +261,7 @@ func TestStreamWithResumeSwitchOnInterrupt(t *testing.T) {
 	callRec := &CallRecord{ReqID: "test-2", Model: "m"}
 
 	// initial 为 nil → 直接走第一次 callOpenCodeAPIStream
-	res := streamWithResume(rr, req, body, "m", UpstreamAuth{Mode: AuthRoutePublic}, nil, false, callRec)
+	res := streamWithResume(rr, req, body, "m", UpstreamAuth{Mode: AuthRoutePublic}, nil, "", false, callRec)
 	if !res.OK {
 		t.Fatalf("expected OK after resume, got %+v", res)
 	}

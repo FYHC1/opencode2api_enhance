@@ -2231,7 +2231,7 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Connection", "keep-alive")
 		w.WriteHeader(http.StatusOK)
 		// 流内超时 + 断点续写切换（阶段1验证过的核心逻辑）
-		res := streamWithResume(w, r, upstreamBody, req.Model, auth, upResp, keepReasoning, &callRec)
+		res := streamWithResume(w, r, upstreamBody, req.Model, auth, upResp, proxyAddr, keepReasoning, &callRec)
 		callRec.DurationMS = time.Since(startTime).Milliseconds()
 		if res.PromptTok > 0 || res.Completion > 0 {
 			callRec.PromptTok = res.PromptTok
