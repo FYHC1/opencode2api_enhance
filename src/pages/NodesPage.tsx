@@ -151,7 +151,7 @@ export default function NodesPage({
     setAdding(true)
     setAdding(true)
     try {
-      const r = await api.batchAdd(items, 18100, true)
+      const r = await api.batchAdd(items, undefined, true)
       if (addTarget === 'pool' && r.added.length > 0) {
         // 进池：只打 join_gateway 标记（不自动启动，启停由实例池页控制）
         for (const a of r.added) {

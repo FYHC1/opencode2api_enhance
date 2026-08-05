@@ -14,9 +14,15 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-/// 探针默认 API 端口（尽量避开常用 18090 等）
+/// 探针默认 API 端口：debug 构建（tauri dev）用 39090 段，release 构建用生产 19090（与 main/web 探针段隔离）
+#[cfg(debug_assertions)]
+pub const DEFAULT_PROBE_API_PORT: u16 = 39090;
+#[cfg(not(debug_assertions))]
 pub const DEFAULT_PROBE_API_PORT: u16 = 19090;
-/// 探针默认 sing-box SOCKS 端口
+/// 探针默认 sing-box SOCKS 端口：debug 构建用 49090 段，release 构建用生产 29090
+#[cfg(debug_assertions)]
+pub const DEFAULT_PROBE_SOCKS_PORT: u16 = 49090;
+#[cfg(not(debug_assertions))]
 pub const DEFAULT_PROBE_SOCKS_PORT: u16 = 29090;
 /// 并发扫描最大 worker 数
 const MAX_SCAN_CONCURRENCY: usize = 4;
@@ -1021,6 +1027,21 @@ pub fn scan_nodes_sync(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 探针端口三环境隔离：debug 构建（tauri dev）用 39090/49090 段，release 构建用生产 19090/29090
+    #[test]
+    fn probe_ports_isolated_by_build() {
+        #[cfg(debug_assertions)]
+        {
+            assert_eq!(DEFAULT_PROBE_API_PORT, 39090);
+            assert_eq!(DEFAULT_PROBE_SOCKS_PORT, 49090);
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            assert_eq!(DEFAULT_PROBE_API_PORT, 19090);
+            assert_eq!(DEFAULT_PROBE_SOCKS_PORT, 29090);
+        }
+    }
 
     #[cfg(windows)]
     #[test]

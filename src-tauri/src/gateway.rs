@@ -11,7 +11,11 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-pub const UNIFIED_GATEWAY_PORT: u16 = 18082;
+/// 统一网关端口：debug 构建（tauri dev）用 21080 段（与 main 18080、web 22080 隔离），release 构建用生产 18080
+#[cfg(debug_assertions)]
+pub const UNIFIED_GATEWAY_PORT: u16 = 21080;
+#[cfg(not(debug_assertions))]
+pub const UNIFIED_GATEWAY_PORT: u16 = 18080;
 const UNIFIED_GATEWAY_KEY: &str = "sk-unified-local";
 
 #[derive(Debug, Clone, Serialize)]
@@ -348,3 +352,17 @@ fn fetch_gateway_models(port: u16, password: &str) -> Result<Vec<String>> {
 
 // 已移除：节点健康轮询（NodeHealth / node_health / fetch_node_health）。
 // 坏池节点由 Go 侧 pickHealthyProxy 在路由层跳过，无需 Rust 轮询展示。
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 网关端口三环境隔离：debug 构建（tauri dev）用 21080，release 构建用生产 18080
+    #[test]
+    fn gateway_port_isolated_by_build() {
+        #[cfg(debug_assertions)]
+        assert_eq!(UNIFIED_GATEWAY_PORT, 21080);
+        #[cfg(not(debug_assertions))]
+        assert_eq!(UNIFIED_GATEWAY_PORT, 18080);
+    }
+}
