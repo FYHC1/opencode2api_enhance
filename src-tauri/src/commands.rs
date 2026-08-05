@@ -262,7 +262,10 @@ fn gen_sk_key() -> String {
     out
 }
 
-/// 停止全部运行中的实例（应用退出时调用）
+/// 停止全部实例（应用退出时调用）：
+/// 遍历所有实例，只要有 pid（opencode2api / sing-box）就尽力杀掉，
+/// 不依赖状态记录——即使状态因异常退出显示为 Stopped，残留进程也会被清理，
+/// 确保实例占用的端口（API 端口 / sing-box 端口）在软件退出后全部释放。
 pub fn stop_all_instances(state: &tauri::State<'_, AppState>) {
     let Ok(mut mgr) = state.manager.lock() else { return };
     let _ = mgr.load();
@@ -270,7 +273,9 @@ pub fn stop_all_instances(state: &tauri::State<'_, AppState>) {
         .list_instances()
         .iter()
         .filter(|i| {
-            i.status == crate::instance::InstanceStatus::Running
+            i.pid.is_some()
+                || i.singbox_pid.is_some()
+                || i.status == crate::instance::InstanceStatus::Running
                 || i.status == crate::instance::InstanceStatus::Starting
         })
         .map(|i| i.name.clone())
