@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import clsx from 'clsx'
 import { Copy, Loader2, Power, RefreshCw, ShieldCheck, Network, Search, Play, Square, TestTube2, Trash2 } from 'lucide-react'
-import { api, type GatewayStatus, type Instance } from '../lib/api'
+import { api, type GatewayStatus, type Instance, type NodeHealth } from '../lib/api'
 
 function statusBadge(st: Instance['status']): [string, string] {
   if (st === 'Running') return ['bg-green-50 text-green-700', '健康']
@@ -11,6 +11,16 @@ function statusBadge(st: Instance['status']): [string, string] {
   return ['bg-zinc-100 text-zinc-500', '未知']
 }
 
+/** 坏池标签：根据实例 singbox 端口匹配网关健康状态，返回红字原因（无则空） */
+function badPoolLabel(inst: Instance, nodeHealth: NodeHealth[]): string {
+  const h = nodeHealth.find((n) => {
+    // addr 形如 "127.0.0.1:28100"，取端口
+    const port = n.addr?.split(':').pop()
+    return port && String(inst.singbox_port) === port && n.bad_reason
+  })
+  return h?.bad_reason ?? ''
+}
+
 export default function PoolPage({
   toast,
 }: {
@@ -18,6 +28,7 @@ export default function PoolPage({
 }) {
   const [gw, setGw] = useState<GatewayStatus | null>(null)
   const [instances, setInstances] = useState<Instance[]>([])
+  const [nodeHealth, setNodeHealth] = useState<NodeHealth[]>([])
   const [stopping, setStopping] = useState(false)
   const [routeBusy, setRouteBusy] = useState(false)
   const [kickBusy, setKickBusy] = useState<string | null>(null)
@@ -43,9 +54,10 @@ export default function PoolPage({
 
   const load = useCallback(async () => {
     try {
-      const [g, ins] = await Promise.all([api.gatewayStatus(), api.listInstances()])
+      const [g, ins, health] = await Promise.all([api.gatewayStatus(), api.listInstances(), api.getNodeHealth()])
       setGw(g)
       setInstances(ins)
+      setNodeHealth(health)
     } catch (e) {
       /* 轮询静默失败，保留上次状态 */
     }
@@ -392,6 +404,13 @@ export default function PoolPage({
                     <td className="py-2.5 pl-2 text-zinc-500">{i.port}</td>
                     <td className="py-2.5 pl-2">
                       <span className={clsx('inline-block px-2 py-0.5 rounded-full text-xs font-medium', cls)}>{label}</span>
+                      {badPoolLabel(i, nodeHealth) && (
+                        <div className="mt-1">
+                          <span className="inline-block px-2 py-0.5 rounded-md text-[11px] font-medium bg-red-50 text-red-600 border border-red-200">
+                            {badPoolLabel(i, nodeHealth)}
+                          </span>
+                        </div>
+                      )}
                     </td>
 <td className="py-2.5 pl-2 pr-4">
                       <div className="flex items-center justify-end gap-1.5">

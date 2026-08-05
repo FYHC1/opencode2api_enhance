@@ -1248,6 +1248,91 @@ pub fn get_call_log(limit: Option<usize>) -> Vec<crate::call_log::CallLogRecord>
     crate::call_log::read_call_log(&path, max)
 }
 
+/// 节点健康视图（供实例池表格展示坏池红字标签）
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct NodeHealthView {
+    pub addr: String,
+    pub bad_reason: String,
+    pub bad_count: i32,
+    pub instance_name: String,
+    pub joined: bool,
+    pub running: bool,
+}
+
+/// 轮询网关节点健康（/api/node-status），发现坏节点（401/402/429/503 连续 3 次）
+/// 自动停止对应实例（防止继续被网关选中重试），并返回健康列表供前端显示。
+#[tauri::command]
+pub fn get_node_health(state: tauri::State<'_, AppState>) -> Vec<NodeHealthView> {
+    let health = state
+        .gateway
+        .lock()
+        .map(|g| g.node_health())
+        .unwrap_or_default();
+    if health.is_empty() {
+        return Vec::new();
+    }
+
+    // 构建 singbox 端口 → 实例映射
+    let instances: Vec<crate::instance::Instance> = state
+        .manager
+        .lock()
+        .map(|m| m.list_instances().to_vec())
+        .unwrap_or_default();
+    let port_to_name: std::collections::HashMap<u16, String> = instances
+        .iter()
+        .map(|i| (i.singbox_port, i.name.clone()))
+        .collect();
+    let mut views = Vec::with_capacity(health.len());
+    let mut to_stop: Vec<String> = Vec::new();
+
+    for h in &health {
+        // addr 形如 "127.0.0.1:28100"，取端口匹配实例
+        let port: Option<u16> = h
+            .addr
+            .rsplit(':')
+            .next()
+            .and_then(|p| p.parse().ok());
+        let (name, joined, running) = match port.and_then(|p| port_to_name.get(&p)) {
+            Some(n) => {
+                let inst = instances.iter().find(|i| &i.name == n);
+                let joined = inst.map(|i| i.join_gateway).unwrap_or(false);
+                let running = inst
+                    .map(|i| {
+                        i.status == crate::instance::InstanceStatus::Running
+                            || i.status == crate::instance::InstanceStatus::Starting
+                    })
+                    .unwrap_or(false);
+                (n.clone(), joined, running)
+            }
+            None => (String::new(), false, false),
+        };
+        views.push(NodeHealthView {
+            addr: h.addr.clone(),
+            bad_reason: h.bad_reason.clone(),
+            bad_count: h.bad_count,
+            instance_name: name.clone(),
+            joined,
+            running,
+        });
+        // 坏节点且对应实例在池中 → 自动停止，防止网关继续选中重试
+        if !h.bad_reason.is_empty() && joined && running {
+            to_stop.push(name);
+        }
+    }
+
+    // 停止坏实例（逐个，锁外避免死锁）
+    if !to_stop.is_empty() {
+        if let Ok(mut mgr) = state.manager.lock() {
+            let _ = mgr.load();
+            for n in &to_stop {
+                eprintln!("[node-health] 节点进入坏池，自动停止实例: {}", n);
+                let _ = mgr.stop_instance(n);
+            }
+        }
+    }
+    views
+}
+
 /// 聚合逻辑（独立函数便于单元测试）：遍历 runtime_dir 各子目录读取 stats.json。
 /// port_to_name 提供 sing-box 端口 → 实例名映射，用于把统一网关 node_stats.json
 /// 中的 SOCKS5 出口地址（127.0.0.1:281xx）解析为实例名。

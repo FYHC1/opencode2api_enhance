@@ -339,3 +339,58 @@ fn fetch_gateway_models(port: u16, password: &str) -> Result<Vec<String>> {
     models.dedup();
     Ok(models)
 }
+
+/// 节点健康状态（对应 Go 网关 /api/node-status 返回）
+#[derive(Debug, Clone, serde::Deserialize, Serialize)]
+pub struct NodeHealth {
+    pub addr: String,
+    #[serde(default)]
+    pub bad_reason: String,
+    #[serde(default)]
+    pub bad_count: i32,
+    #[serde(default)]
+    pub failures: i32,
+    #[serde(default)]
+    pub cooldown_until_unix: i64,
+}
+
+impl GatewayManager {
+    /// 轮询网关 /api/node-status，返回代理池各节点健康状态。
+    /// 网关未启动或请求失败时返回空列表（不报错，由调用方决定）。
+    pub fn node_health(&self) -> Vec<NodeHealth> {
+        let address = format!("127.0.0.1:{}", UNIFIED_GATEWAY_PORT);
+        let mut stream = match TcpStream::connect_timeout(
+            &address.parse().unwrap_or_else(|_| "127.0.0.1:18081".parse().unwrap()),
+            Duration::from_secs(2),
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+        let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+        let request = format!(
+            "GET /api/node-status HTTP/1.1\r\nHost: {}\r\nAuthorization: Bearer {}\r\nConnection: close\r\n\r\n",
+            address, self.password
+        );
+        if stream.write_all(request.as_bytes()).is_err() {
+            return Vec::new();
+        }
+        let mut response = Vec::new();
+        if stream.read_to_end(&mut response).is_err() {
+            return Vec::new();
+        }
+        let response = String::from_utf8_lossy(&response);
+        let Some((headers, body)) = response.split_once("\r\n\r\n") else {
+            return Vec::new();
+        };
+        let status = headers
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .and_then(|code| code.parse::<u16>().ok());
+        match status {
+            Some(200) => serde_json::from_str(body).unwrap_or_default(),
+            _ => Vec::new(),
+        }
+    }
+}
