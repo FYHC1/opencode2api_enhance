@@ -5221,7 +5221,7 @@ func main() {
 	http.HandleFunc("/logout", loggingMiddleware(logoutHandler))
 	http.HandleFunc("/api/config", loggingMiddleware(requireAuth(adminConfigHandler)))
 	http.HandleFunc("/api/stats", loggingMiddleware(requireAuth(adminStatsHandler)))
-	http.HandleFunc("/api/node-status", loggingMiddleware(requireAuth(nodeStatusHandler)))
+	http.HandleFunc("/api/node-status", loggingMiddleware(apiKeyAuthMiddleware(nodeStatusHandler)))
 	http.HandleFunc("/api/reload", loggingMiddleware(requireAuth(reloadHandler)))
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

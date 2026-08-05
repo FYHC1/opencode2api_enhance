@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -201,6 +202,7 @@ func splitJSONLines(b []byte) [][]byte {
 
 var (
 	timeoutCfg     = DefaultTimeoutConfig()
+	timeoutCfgMu   sync.RWMutex // 保护 timeoutCfg（热加载写 / 流式读 并发）
 	callLog        = NewEventLog(DefaultCallLogMax)
 	callLogPath    = "call_log.jsonl"
 	callLogMu      sync.RWMutex
@@ -217,12 +219,15 @@ var (
 
 // sseDebugf 追加一行到 sse_debug.log，并在调试模式（-debug 或环境变量 OPCODE2API_SSE_DEBUG=1）
 // 下输出到控制台。控制台输出便于在 tauri dev 终端观察实际收发的 SSE 流（排查 IDE 解析问题）。
+// 整个函数（含文件写入）受开关控制：生产环境不产生 sse_debug.log，避免日志膨胀与原始流落盘。
 func sseDebugf(format string, args ...any) {
-	msg := fmt.Sprintf(format, args...)
-	if debugMode || os.Getenv("OPCODE2API_SSE_DEBUG") == "1" {
-		// 输出到控制台（带时间戳）
-		fmt.Printf("[sse-debug] %s %s\n", time.Now().Format("15:04:05.000"), msg)
+	enabled := debugMode || os.Getenv("OPCODE2API_SSE_DEBUG") == "1"
+	if !enabled {
+		return
 	}
+	msg := fmt.Sprintf(format, args...)
+	// 输出到控制台（带时间戳）
+	fmt.Printf("[sse-debug] %s %s\n", time.Now().Format("15:04:05.000"), msg)
 	sseDebugMu.Lock()
 	defer sseDebugMu.Unlock()
 	if sseDebugFile == nil {
@@ -259,13 +264,18 @@ func recordCall(rec CallRecord) {
 	if !callLogEnabled {
 		return
 	}
-	if err := callLog.Append(rec); err != nil {
+	// callLog 指针可能被热加载替换（setTimeoutConfigFromApp），加锁读取
+	callLogMu.RLock()
+	l := callLog
+	callLogMu.RUnlock()
+	if err := l.Append(rec); err != nil {
 		slog.Error("call log append failed", "error", err)
 	}
 }
 
 // setTimeoutConfigFromApp 从 AppConfig 读取区间配置并应用（热加载）
 func setTimeoutConfigFromApp(cfg AppConfig) {
+	timeoutCfgMu.Lock()
 	if cfg.TTFTMinMS > 0 && cfg.TTFTMaxMS >= cfg.TTFTMinMS {
 		timeoutCfg.TTFTRange = [2]time.Duration{
 			time.Duration(cfg.TTFTMinMS) * time.Millisecond,
@@ -281,6 +291,7 @@ func setTimeoutConfigFromApp(cfg AppConfig) {
 	if cfg.ProbeMin > 0 && cfg.ProbeMax >= cfg.ProbeMin {
 		timeoutCfg.ProbeRange = [2]int{cfg.ProbeMin, cfg.ProbeMax}
 	}
+	timeoutCfgMu.Unlock()
 	if cfg.CallLogMax > 0 {
 		callLogMu.Lock()
 		callLog = NewEventLog(cfg.CallLogMax)
@@ -358,8 +369,11 @@ func streamWithResume(w http.ResponseWriter, r *http.Request, upstreamBody []byt
 		}
 
 		reader := bufio.NewReader(upResp)
+		// 快照读超时配置（RLock 防止与热加载写并发）
+		timeoutCfgMu.RLock()
 		ttft := timeoutCfg.RandomTTFT()
 		silence := timeoutCfg.RandomSilence()
+		timeoutCfgMu.RUnlock()
 		gotFirst := false
 		// 当前节点是否已插入过「🤖 节点 · 模型」标识前缀（每节点仅一次）
 		prefixDone := false
@@ -389,6 +403,7 @@ func streamWithResume(w http.ResponseWriter, r *http.Request, upstreamBody []byt
 
 		var lastUsage map[string]any
 		interrupted := false
+		clientGone := false // 客户端主动断开：不惩罚节点、不续写
 
 	readLoop:
 		for {
@@ -455,9 +470,8 @@ func streamWithResume(w http.ResponseWriter, r *http.Request, upstreamBody []byt
 								if c, ok := delta["content"].(string); ok {
 									accumulated += c
 								}
-								if rc, ok := delta["reasoning_content"].(string); ok {
-									accumulated += rc
-								}
+								// reasoning_content 不拼入 accumulated：续写时仅把可见内容
+								// 作为 assistant 上下文，避免思维链泄露到续写消息/用户可见内容
 							}
 						}
 					}
@@ -529,6 +543,7 @@ func streamWithResume(w http.ResponseWriter, r *http.Request, upstreamBody []byt
 					}
 				}
 				interrupted = true
+				clientGone = true
 				res.ErrMsg = "client disconnected"
 				break readLoop
 			}
@@ -556,6 +571,14 @@ func streamWithResume(w http.ResponseWriter, r *http.Request, upstreamBody []byt
 
 		if !interrupted {
 			res.OK = true
+			res.DoneAt = time.Now()
+			return res
+		}
+
+		// 客户端主动断开：不惩罚节点、不续写重连（避免浪费上游配额 + 误伤健康节点）
+		if clientGone {
+			res.OK = false
+			res.ErrMsg = "client disconnected"
 			res.DoneAt = time.Now()
 			return res
 		}
@@ -688,14 +711,19 @@ func watchParentProcess() {
 		for range ticker.C {
 			proc, err := os.FindProcess(pid)
 			if err != nil {
+				// Windows：FindProcess 通过 OpenProcess 探测，PID 不存在时返回错误
 				slog.Warn("parent process lookup failed, exiting gateway", "pid", pid)
-				os.Exit(0)
-			}
-			// Signal(0) 探测进程是否存活（Windows 下返回错误表示进程已退出）
-			if err := proc.Signal(syscall.Signal(0)); err != nil {
-				slog.Warn("parent process exited, gateway shutting down", "pid", pid)
 				closeSSEDebug()
 				os.Exit(0)
+			}
+			// 非 Windows：Signal(0) 探测存活（Windows 下 Signal(0) 恒返回 EWINDOWS 错误，
+			// 不可用于存活判断，已由上方 FindProcess 覆盖）
+			if runtime.GOOS != "windows" {
+				if err := proc.Signal(syscall.Signal(0)); err != nil {
+					slog.Warn("parent process exited, gateway shutting down", "pid", pid)
+					closeSSEDebug()
+					os.Exit(0)
+				}
 			}
 		}
 	}()
