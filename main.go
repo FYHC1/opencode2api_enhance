@@ -198,8 +198,11 @@ const socks5RR = "__round_robin__"
 
 var socks5RRIndex uint32
 
-// routeMode 代理池/网关路由模式：failover（默认，成功不动游标、失败才切换）| round_robin
-var routeMode = "failover"
+// routeMode 代理池/网关路由模式：
+//   - smart（默认）：failover 游标逻辑 + 健康计数/坏池/超时切换完整容错
+//   - failover：成功不动游标、失败才切换（无健康计数附加层）
+//   - round_robin：轮询分发
+var routeMode = "smart"
 
 var (
 	socks5Client     *http.Client // 缓存的 SOCKS5 客户端
@@ -326,7 +329,8 @@ func getHTTPClientWithProxy() (*http.Client, string) {
 			start := int(atomic.AddUint32(&socks5RRIndex, 1) % uint32(len(socks5Proxies)))
 			proxy = pickHealthyProxy(socks5Proxies, start)
 		} else {
-			// failover（默认）：成功不动游标，失败（冷却）才切下一个健康代理
+			// failover / smart（默认）：成功不动游标，失败（冷却）才切下一个健康代理
+			// smart 额外启用健康计数/坏池/超时切换（附加层，与游标逻辑无关）
 			start := int(atomic.LoadUint32(&socks5RRIndex) % uint32(len(socks5Proxies)))
 			proxy = pickHealthyProxy(socks5Proxies, start)
 			// 游标推进到实际选中的代理（若起始代理冷却被跳过则切换）
@@ -1156,7 +1160,7 @@ func applyConfig(cfg AppConfig) {
 	}
 	forceDisableThinking = cfg.ForceDisableThinking
 
-	if cfg.RouteMode == "round_robin" || cfg.RouteMode == "failover" {
+	if cfg.RouteMode == "round_robin" || cfg.RouteMode == "failover" || cfg.RouteMode == "smart" {
 		routeMode = cfg.RouteMode
 	}
 	setTimeoutConfigFromApp(cfg)

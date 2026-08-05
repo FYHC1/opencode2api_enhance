@@ -61,7 +61,7 @@ impl GatewayManager {
             password: UNIFIED_GATEWAY_KEY.to_string(),
             child: None,
             ports: Vec::new(),
-            route_mode: "failover".to_string(),
+            route_mode: "smart".to_string(),
             last_error: None,
             restart_not_before: None,
             model_catalog: Arc::new(Mutex::new(ModelCatalog::default())),

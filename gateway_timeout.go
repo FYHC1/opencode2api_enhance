@@ -23,10 +23,10 @@ import (
 
 // 区间默认值（生产）
 const (
-	DefaultTTFTMin    = 15 * time.Second
-	DefaultTTFTMax    = 25 * time.Second
-	DefaultSilenceMin = 30 * time.Second
-	DefaultSilenceMax = 60 * time.Second
+	DefaultTTFTMin    = 10 * time.Second
+	DefaultTTFTMax    = 10 * time.Second
+	DefaultSilenceMin = 5 * time.Second
+	DefaultSilenceMax = 5 * time.Second
 	DefaultProbeMin   = 2
 	DefaultProbeMax   = 3
 	// DefaultCallLogMax 日志保留上限（条），前端设置页可改

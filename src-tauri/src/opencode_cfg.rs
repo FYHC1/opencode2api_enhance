@@ -63,10 +63,10 @@ pub fn build_opencode_router_config(
         .collect();
     // 流内超时切换区间配置：从 manager 配置读取，未设置用默认值（毫秒）
     let cfg = crate::config::Config::load().unwrap_or_default();
-    let ttft_min = cfg.timeout_ttft_min_ms.unwrap_or(15000);
-    let ttft_max = cfg.timeout_ttft_max_ms.unwrap_or(25000);
-    let silence_min = cfg.timeout_silence_min_ms.unwrap_or(30000);
-    let silence_max = cfg.timeout_silence_max_ms.unwrap_or(60000);
+    let ttft_min = cfg.timeout_ttft_min_ms.unwrap_or(10000);
+    let ttft_max = cfg.timeout_ttft_max_ms.unwrap_or(10000);
+    let silence_min = cfg.timeout_silence_min_ms.unwrap_or(5000);
+    let silence_max = cfg.timeout_silence_max_ms.unwrap_or(5000);
     let probe_min = cfg.failover_probe_min.unwrap_or(2);
     let probe_max = cfg.failover_probe_max.unwrap_or(3);
     let call_log_max = cfg.call_log_max.unwrap_or(5000);

@@ -13,32 +13,16 @@ import (
 	"time"
 )
 
-func TestTimeoutConfigRandomRange(t *testing.T) {
+func TestTimeoutConfigDefaults(t *testing.T) {
 	cfg := DefaultTimeoutConfig()
-	seen := map[time.Duration]bool{}
-	for i := 0; i < 200; i++ {
-		v := cfg.RandomTTFT()
-		if v < cfg.TTFTRange[0] || v > cfg.TTFTRange[1] {
-			t.Fatalf("TTFT %v out of range %v-%v", v, cfg.TTFTRange[0], cfg.TTFTRange[1])
-		}
-		seen[v] = true
+	// 默认模式：首字超时固定 10s、静默固定 5s（区间 min=max，不再随机）
+	if cfg.RandomTTFT() != 10*time.Second {
+		t.Fatalf("TTFT default should be 10s, got %v", cfg.RandomTTFT())
 	}
-	if len(seen) < 5 {
-		t.Fatalf("TTFT not random: only %d distinct", len(seen))
+	if cfg.RandomSilence() != 5*time.Second {
+		t.Fatalf("silence default should be 5s, got %v", cfg.RandomSilence())
 	}
-	// 静默区间同测
-	seen2 := map[time.Duration]bool{}
-	for i := 0; i < 200; i++ {
-		v := cfg.RandomSilence()
-		if v < cfg.SilenceRange[0] || v > cfg.SilenceRange[1] {
-			t.Fatalf("silence %v out of range", v)
-		}
-		seen2[v] = true
-	}
-	if len(seen2) < 5 {
-		t.Fatalf("silence not random: only %d distinct", len(seen2))
-	}
-	// 探测数
+	// 探测数区间
 	for i := 0; i < 50; i++ {
 		n := cfg.RandomProbeN()
 		if n < cfg.ProbeRange[0] || n > cfg.ProbeRange[1] {

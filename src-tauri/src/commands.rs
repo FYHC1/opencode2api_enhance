@@ -86,14 +86,15 @@ let total_instances = state
     Ok(gateway.status(total_instances))
 }
 
-/// 切换网关路由模式（failover / round_robin）：写入网关配置并重启网关进程。
+/// 切换网关路由模式（smart / failover / round_robin）：写入网关配置并重启网关进程。
+/// smart（默认）= failover 游标 + 健康计数/坏池/超时切换完整容错。
 #[tauri::command]
 pub fn gateway_set_route_mode(
     state: tauri::State<'_, AppState>,
     mode: String,
 ) -> Result<(), String> {
-    if mode != "failover" && mode != "round_robin" {
-        return Err("路由模式仅支持 failover / round_robin".to_string());
+    if mode != "smart" && mode != "failover" && mode != "round_robin" {
+        return Err("路由模式仅支持 smart / failover / round_robin".to_string());
     }
     let instances = state
         .manager
@@ -1014,10 +1015,10 @@ pub fn config_get() -> Result<ConfigView, String> {
         has_password: !cfg.default_password.is_empty(),
         clash_external_url: cfg.clash_external_url,
         has_clash_token: !cfg.clash_auth_token.is_empty(),
-        timeout_ttft_min_ms: cfg.timeout_ttft_min_ms.unwrap_or(15000),
-        timeout_ttft_max_ms: cfg.timeout_ttft_max_ms.unwrap_or(25000),
-        timeout_silence_min_ms: cfg.timeout_silence_min_ms.unwrap_or(30000),
-        timeout_silence_max_ms: cfg.timeout_silence_max_ms.unwrap_or(60000),
+        timeout_ttft_min_ms: cfg.timeout_ttft_min_ms.unwrap_or(10000),
+        timeout_ttft_max_ms: cfg.timeout_ttft_max_ms.unwrap_or(10000),
+        timeout_silence_min_ms: cfg.timeout_silence_min_ms.unwrap_or(5000),
+        timeout_silence_max_ms: cfg.timeout_silence_max_ms.unwrap_or(5000),
         failover_probe_min: cfg.failover_probe_min.unwrap_or(2),
         failover_probe_max: cfg.failover_probe_max.unwrap_or(3),
         call_log_max: cfg.call_log_max.unwrap_or(5000),

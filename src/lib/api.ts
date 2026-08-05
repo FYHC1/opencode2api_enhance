@@ -151,7 +151,7 @@ export type GatewayStatus = {
   running_instances: number
   total_instances: number
   message: string
-  route_mode: 'failover' | 'round_robin'
+  route_mode: 'smart' | 'failover' | 'round_robin'
   free_models: string[]
   free_models_updated_at: number | null
   free_models_loading: boolean
@@ -265,7 +265,7 @@ export const api = {
 
   // 统一网关（实例池）
   gatewayStatus: () => invoke<GatewayStatus>('gateway_status'),
-  gatewaySetRouteMode: (mode: 'failover' | 'round_robin') => invoke<void>('gateway_set_route_mode', { mode }),
+  gatewaySetRouteMode: (mode: 'smart' | 'failover' | 'round_robin') => invoke<void>('gateway_set_route_mode', { mode }),
   gatewayStop: () => invoke<void>('gateway_stop'),
   setJoinGateway: (name: string, join: boolean) => invoke<void>('set_join_gateway', { name, join }),
 }

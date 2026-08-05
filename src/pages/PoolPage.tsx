@@ -81,12 +81,13 @@ export default function PoolPage({
     }
   }
 
-  const doSetRouteMode = async (mode: 'failover' | 'round_robin') => {
+  const doSetRouteMode = async (mode: 'smart' | 'failover' | 'round_robin') => {
     if (!gw || gw.route_mode === mode) return
     setRouteBusy(true)
     try {
       await api.gatewaySetRouteMode(mode)
-      toast(`已切换路由模式：${mode === 'failover' ? 'failover（失败才切换）' : 'round_robin（轮询分发）'}`)
+      const label = mode === 'smart' ? 'smart（默认：故障转移+健康计数+超时切换）' : mode === 'failover' ? 'failover（失败才切换）' : 'round_robin（轮询分发）'
+      toast(`已切换路由模式：${label}`)
       await load()
     } catch (e) {
       toast(String(e), false)
@@ -284,14 +285,14 @@ export default function PoolPage({
         <div>
           <h3 className="text-[14px] font-semibold text-zinc-900 mb-0.5">路由模式</h3>
           <p className="text-[12px] text-zinc-400">
-            failover：当前实例失败才切下一个健康实例（推荐）；round_robin：轮询分发到池内实例。
+            smart（默认）：故障转移+健康计数+超时切换；failover：失败才切换；round_robin：轮询分发。
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {['failover', 'round_robin'].map((m) => (
+          {(['smart', 'failover', 'round_robin'] as const).map((m) => (
             <button
               key={m}
-              onClick={() => void doSetRouteMode(m as 'failover' | 'round_robin')}
+              onClick={() => void doSetRouteMode(m)}
               disabled={!running || routeBusy}
               className={clsx(
                 'px-4 py-1.5 rounded-lg text-[13px] border transition-colors disabled:cursor-not-allowed disabled:opacity-50',
@@ -300,7 +301,7 @@ export default function PoolPage({
                   : 'text-zinc-600 bg-white border-zinc-200 hover:bg-zinc-50',
               )}
             >
-              {m === 'failover' ? 'failover' : 'round_robin'}
+              {m === 'smart' ? 'smart（默认）' : m}
             </button>
           ))}
         </div>

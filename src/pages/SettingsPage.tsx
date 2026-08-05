@@ -13,10 +13,10 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
 
   // 网关超时切换区间表单
   const [timeoutForm, setTimeoutForm] = useState({
-    timeout_ttft_min_ms: 15000,
-    timeout_ttft_max_ms: 25000,
-    timeout_silence_min_ms: 30000,
-    timeout_silence_max_ms: 60000,
+    timeout_ttft_min_ms: 10000,
+    timeout_ttft_max_ms: 10000,
+    timeout_silence_min_ms: 5000,
+    timeout_silence_max_ms: 5000,
     failover_probe_min: 2,
     failover_probe_max: 3,
     call_log_max: 5000,
@@ -187,7 +187,7 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
             />
             <span className="text-zinc-500 text-xs">毫秒</span>
           </div>
-          <p className="text-zinc-500 text-xs">建流后等待首个内容块，超时则判定异常并切换。默认 15000~25000</p>
+          <p className="text-zinc-500 text-xs">建流后等待首个内容块，超时则判定异常并切换。默认 10s</p>
         </div>
 
         {/* 块间静默超时 */}
@@ -211,7 +211,7 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
             />
             <span className="text-zinc-500 text-xs">毫秒</span>
           </div>
-          <p className="text-zinc-500 text-xs">两个数据块之间无数据，判定卡死并切换。默认 30000~60000</p>
+          <p className="text-zinc-500 text-xs">两个数据块之间无数据，判定卡死并切换。默认 5s</p>
         </div>
 
         {/* 切换前并行探测数 */}
