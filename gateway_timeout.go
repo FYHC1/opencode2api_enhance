@@ -1,10 +1,15 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log/slog"
 	"math/rand/v2"
+	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -242,4 +247,281 @@ func setTimeoutConfigFromApp(cfg AppConfig) {
 		callLog.SetPath(callLogPath)
 		callLogMu.Unlock()
 	}
+}
+
+// ======================== 流内超时 + 断点续写切换 ========================
+// 阶段1实验验证过的核心逻辑落地：SSE 读循环加 TTFT/静默计时，
+// 超时或流中断时把已吐内容作为上下文续写，重新请求上游（自动换健康代理）。
+
+// resumeStreamResult 描述一次流式转发的最终结果
+type resumeStreamResult struct {
+	OK         bool   // 是否成功完成（读到 [DONE] 或 EOF）
+	Switched   bool   // 是否发生过节点切换
+	PromptTok  int64  // 最终 usage
+	Completion int64
+	ErrMsg     string
+	DoneAt     time.Time
+}
+
+// streamWithResume 从初始上游响应开始，带 TTFT/静默超时地读取 SSE 并转发。
+// 超时/中断时续写重试（最多 maxResume 次）。返回结果供调用方记录日志。
+//
+// 参数：
+//   - w: 客户端响应写入器
+//   - r: 客户端请求（用于取消上下文）
+//   - upstreamBody: 原始上游请求体（续写时基于它构造新 body）
+//   - model: 模型 ID
+//   - auth: 上游鉴权
+//   - initial: 初始上游响应（可能为 nil，此时直接尝试重连）
+//   - keepReasoning: 是否保留 reasoning 内容
+//   - callRec: 调用日志记录（追加事件）
+func streamWithResume(w http.ResponseWriter, r *http.Request, upstreamBody []byte, model string, auth UpstreamAuth, initial io.ReadCloser, keepReasoning bool, callRec *CallRecord) resumeStreamResult {
+	maxResume := maxRouteRetries() // 复用现有重试上限
+	if maxResume > 3 {
+		maxResume = 3 // 续写重试上限，避免无限循环
+	}
+	attempt := 0
+	res := resumeStreamResult{DoneAt: time.Now()}
+	accumulated := ""
+	// 已有部分内容时，通过续写 body 重连
+	currentBody := upstreamBody
+
+	// 当前活动的上游响应；attempt 0 用 initial，后续用重连结果
+	upResp := initial
+	proxyAddr := ""
+	doneSeen := false
+
+	for attempt <= maxResume {
+		// 若需要重连（initial 为 nil 或上次超时）
+		if upResp == nil {
+			var err error
+			upResp, _, _, proxyAddr, err = callOpenCodeAPIStream(currentBody, model, auth)
+			if err != nil {
+				res.ErrMsg = err.Error()
+				callRec.Events = append(callRec.Events, CallEvent{Type: "connect_error", Node: proxyAddr, Detail: err.Error(), At: time.Now()})
+				attempt++
+				continue
+			}
+			callRec.Events = append(callRec.Events, CallEvent{Type: "connect_ok", Node: proxyAddr, Detail: "reconnected", At: time.Now()})
+			callRec.Nodes = append(callRec.Nodes, proxyAddr)
+		}
+
+		reader := bufio.NewReader(upResp)
+		ttft := timeoutCfg.RandomTTFT()
+		silence := timeoutCfg.RandomSilence()
+		gotFirst := false
+
+		// 常驻读 goroutine：阻塞读转 channel，主循环 select timer
+		type lineResult struct {
+			line string
+			err  error
+		}
+		lineCh := make(chan lineResult, 1)
+		readDone := make(chan struct{})
+		stopRead := make(chan struct{})
+		go func() {
+			defer close(readDone)
+			for {
+				ln, er := reader.ReadString('\n')
+				select {
+				case lineCh <- lineResult{ln, er}:
+				case <-stopRead:
+					return
+				}
+				if er != nil {
+					return
+				}
+			}
+		}()
+
+		var lastUsage map[string]any
+		interrupted := false
+
+	readLoop:
+		for {
+			dur := silence
+			if !gotFirst {
+				dur = ttft
+			}
+			timer := time.NewTimer(dur)
+			select {
+			case resLine := <-lineCh:
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				if resLine.err != nil {
+					if resLine.err == io.EOF {
+						// 正常 EOF：若见过 [DONE] 视为成功，否则视为中断
+						if !doneSeen {
+							interrupted = true
+							res.ErrMsg = "EOF without [DONE]"
+							callRec.Events = append(callRec.Events, CallEvent{Type: "stream_interrupt", Node: proxyAddr, Detail: "EOF without [DONE]", At: time.Now()})
+						}
+						break readLoop
+					}
+					interrupted = true
+					res.ErrMsg = resLine.err.Error()
+					callRec.Events = append(callRec.Events, CallEvent{Type: "stream_error", Node: proxyAddr, Detail: resLine.err.Error(), At: time.Now()})
+					break readLoop
+				}
+				line := strings.TrimSpace(resLine.line)
+				if line == "" {
+					continue
+				}
+				if strings.HasPrefix(line, "data: [DONE]") || line == "[DONE]" {
+					doneSeen = true
+					w.Write([]byte("data: [DONE]\n\n"))
+					flushWriter(w)
+					interrupted = false
+					break readLoop
+				}
+				if !strings.HasPrefix(line, "data: ") {
+					// 非 data 行原样转发（如 event:/id:）
+					w.Write([]byte(resLine.line))
+					if f, ok := w.(http.Flusher); ok {
+						f.Flush()
+					}
+					continue
+				}
+				dataStr := line[6:]
+				// 累积内容（续写用）——从原始 JSON 提取
+				var obj map[string]any
+				if json.Unmarshal([]byte(dataStr), &obj) == nil {
+					if u, ok := obj["usage"].(map[string]any); ok {
+						lastUsage = u
+					}
+					if chs, ok := obj["choices"].([]any); ok && len(chs) > 0 {
+						if first, ok := chs[0].(map[string]any); ok {
+							if delta, ok := first["delta"].(map[string]any); ok {
+								if c, ok := delta["content"].(string); ok {
+									accumulated += c
+								}
+								if rc, ok := delta["reasoning_content"].(string); ok {
+									accumulated += rc
+								}
+							}
+						}
+					}
+				}
+				if !gotFirst {
+					gotFirst = true
+				}
+				// 转发：复用现有转换（清洗 delta/usage/cost 字段），保持协议兼容
+				out, chunkUsage := convertStreamChunkWithUsage(line, keepReasoning)
+				if chunkUsage != nil {
+					if tt, _ := chunkUsage["total_tokens"].(float64); tt > 0 {
+						lastUsage = chunkUsage
+					}
+				}
+				w.Write([]byte(out))
+				w.Write([]byte("\n"))
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+			case <-timer.C:
+				if !gotFirst {
+					res.ErrMsg = fmt.Sprintf("TTFT timeout (%v)", ttft)
+					callRec.Events = append(callRec.Events, CallEvent{Type: "ttft_timeout", Node: proxyAddr, Detail: res.ErrMsg, At: time.Now()})
+				} else {
+					res.ErrMsg = fmt.Sprintf("silence timeout (%v)", silence)
+					callRec.Events = append(callRec.Events, CallEvent{Type: "silence_timeout", Node: proxyAddr, Detail: res.ErrMsg, At: time.Now()})
+				}
+				interrupted = true
+				break readLoop
+			case <-r.Context().Done():
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				interrupted = true
+				res.ErrMsg = "client disconnected"
+				break readLoop
+			}
+		}
+
+		// 关闭当前流：先通知读 goroutine 退出，再关连接，最后等 goroutine 结束
+		close(stopRead)
+		upResp.Close()
+		<-readDone
+
+		if lastUsage != nil {
+			if pt, _ := lastUsage["prompt_tokens"].(float64); pt > 0 {
+				res.PromptTok = int64(pt)
+			}
+			if ct, _ := lastUsage["completion_tokens"].(float64); ct > 0 {
+				res.Completion = int64(ct)
+			}
+		}
+
+		if !interrupted {
+			res.OK = true
+			res.DoneAt = time.Now()
+			return res
+		}
+
+		// 中断：记录切换事件，续写重试
+		res.Switched = true
+		attempt++
+		if attempt > maxResume {
+			res.OK = false
+			res.ErrMsg = "所有候选节点均失败，回复中断"
+			callRec.Events = append(callRec.Events, CallEvent{Type: "all_failed", Node: proxyAddr, Detail: res.ErrMsg, At: time.Now()})
+			return res
+		}
+		callRec.Events = append(callRec.Events, CallEvent{Type: "switch", Node: proxyAddr, Detail: fmt.Sprintf("switching (resume, accumulated=%d chars)", len(accumulated)), At: time.Now()})
+		// 续写 body：原 messages + assistant(已吐内容) + user(请继续)
+		if len(accumulated) > 0 {
+			var bodyMap map[string]any
+			if json.Unmarshal(currentBody, &bodyMap) == nil {
+				msgs, _ := bodyMap["messages"].([]any)
+				msgs = append(msgs,
+					map[string]any{"role": "assistant", "content": accumulated},
+					map[string]any{"role": "user", "content": "请继续上面的回复，从中断处接着写。"},
+				)
+				bodyMap["messages"] = msgs
+				if b, err := json.Marshal(bodyMap); err == nil {
+					currentBody = b
+				}
+			}
+		}
+		// 向客户端发一条切换提示（可观察）
+		w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"[已切换节点，续写]\"}}]}\n\n"))
+		flushWriter(w)
+		// 下一轮重连
+		upResp = nil
+	}
+
+	res.OK = false
+	res.ErrMsg = "所有候选节点均失败，回复中断"
+	return res
+}
+
+func flushWriter(w http.ResponseWriter) {
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// buildResumeBody 供测试使用的续写 body 构造（独立于 streamWithResume 内部逻辑）
+func buildResumeBody(body []byte, accumulated string) []byte {
+	var bodyMap map[string]any
+	if json.Unmarshal(body, &bodyMap) != nil {
+		return body
+	}
+	msgs, _ := bodyMap["messages"].([]any)
+	msgs = append(msgs,
+		map[string]any{"role": "assistant", "content": accumulated},
+		map[string]any{"role": "user", "content": "请继续上面的回复，从中断处接着写。"},
+	)
+	bodyMap["messages"] = msgs
+	b, err := json.Marshal(bodyMap)
+	if err != nil {
+		return body
+	}
+	return b
 }

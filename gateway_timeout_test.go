@@ -1,8 +1,14 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -123,4 +129,148 @@ func TestSetTimeoutConfigFromApp(t *testing.T) {
 	timeoutCfg = DefaultTimeoutConfig()
 	callLog = NewEventLog(DefaultCallLogMax)
 	_ = os.Remove("call_log.jsonl")
+}
+
+func TestBuildResumeBody(t *testing.T) {
+	body := []byte(`{"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+	resumed := buildResumeBody(body, "已生成内容ABC")
+	var m map[string]any
+	if err := json.Unmarshal(resumed, &m); err != nil {
+		t.Fatal(err)
+	}
+	msgs, _ := m["messages"].([]any)
+	if len(msgs) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(msgs))
+	}
+	last := msgs[2].(map[string]any)
+	if last["role"] != "user" || !strings.Contains(last["content"].(string), "请继续") {
+		t.Fatalf("resume tail malformed: %v", last)
+	}
+	asst := msgs[1].(map[string]any)
+	if asst["role"] != "assistant" || asst["content"] != "已生成内容ABC" {
+		t.Fatalf("assistant context missing: %v", asst)
+	}
+	// 原始 body 未被修改
+	if string(body) != `{"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}]}` {
+		t.Fatalf("original body mutated")
+	}
+}
+
+// streamWithResume：正常上游（立即吐 [DONE]）应成功完成，不触发切换
+func TestStreamWithResumeNormal(t *testing.T) {
+	// 保存并缩短超时
+	orig := timeoutCfg
+	timeoutCfg = TimeoutConfig{
+		TTFTRange:    [2]time.Duration{500 * time.Millisecond, 600 * time.Millisecond},
+		SilenceRange: [2]time.Duration{300 * time.Millisecond, 400 * time.Millisecond},
+		ProbeRange:   [2]int{2, 3},
+	}
+	defer func() { timeoutCfg = orig }()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		fl, _ := w.(http.Flusher)
+		fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n")
+		fl.Flush()
+		fmt.Fprintf(w, "data: [DONE]\n\n")
+		fl.Flush()
+	}))
+	defer srv.Close()
+
+	// 用真实 client 请求 mock 上游获得 SSE body
+	body := []byte(`{"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+	// 直接构造 initial: 手动请求 mock 服务器
+	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	callRec := &CallRecord{ReqID: "test-1", Model: "m"}
+	res := streamWithResume(rr, req, body, "m", UpstreamAuth{Mode: AuthRoutePublic}, resp.Body, false, callRec)
+	if !res.OK {
+		t.Fatalf("expected OK, got %+v", res)
+	}
+	if res.Switched {
+		t.Fatalf("unexpected switch")
+	}
+	if !strings.Contains(rr.Body.String(), "hello") {
+		t.Fatalf("expected hello in output, got %s", rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "[DONE]") {
+		t.Fatalf("expected [DONE] in output")
+	}
+}
+
+// buildResumeBody 对非法 JSON 应原样返回
+func TestBuildResumeBodyInvalidJSON(t *testing.T) {
+	bad := []byte(`not-json`)
+	if got := buildResumeBody(bad, "x"); string(got) != string(bad) {
+		t.Fatalf("invalid json should pass through")
+	}
+}
+
+// streamWithResume：上游中断（EOF 无 [DONE]）→ 续写重连 → 成功
+// 验证 switch 事件记录与续写 body 构造
+func TestStreamWithResumeSwitchOnInterrupt(t *testing.T) {
+	transport := installFakeOpenCodeClient(t, []fakeUpstreamResponse{
+		// 第一次：吐一句后 EOF 无 [DONE] → 触发中断（有 accumulated 内容）
+		{status: http.StatusOK, body: "data: {\"choices\":[{\"delta\":{\"content\":\"第一句\"}}]}\n\n", header: http.Header{"Content-Type": {"text/event-stream"}}},
+		// 第二次：正常 SSE（含续写后内容）
+		{status: http.StatusOK, body: "data: {\"choices\":[{\"delta\":{\"content\":\"续写内容\"}}]}\n\ndata: [DONE]\n\n", header: http.Header{"Content-Type": {"text/event-stream"}}},
+	})
+
+	// 保存并缩短超时
+	orig := timeoutCfg
+	timeoutCfg = TimeoutConfig{
+		TTFTRange:    [2]time.Duration{500 * time.Millisecond, 600 * time.Millisecond},
+		SilenceRange: [2]time.Duration{300 * time.Millisecond, 400 * time.Millisecond},
+		ProbeRange:   [2]int{2, 3},
+	}
+	defer func() { timeoutCfg = orig }()
+
+	body := []byte(`{"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	callRec := &CallRecord{ReqID: "test-2", Model: "m"}
+
+	// initial 为 nil → 直接走第一次 callOpenCodeAPIStream
+	res := streamWithResume(rr, req, body, "m", UpstreamAuth{Mode: AuthRoutePublic}, nil, false, callRec)
+	if !res.OK {
+		t.Fatalf("expected OK after resume, got %+v", res)
+	}
+	if !res.Switched {
+		t.Fatalf("expected switch flag")
+	}
+	if !strings.Contains(rr.Body.String(), "续写内容") {
+		t.Fatalf("expected resumed content, got: %s", rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "第一句") {
+		t.Fatalf("expected first-part content forwarded, got: %s", rr.Body.String())
+	}
+	// 事件应有 stream_interrupt 和 switch
+	foundInterrupt := false
+	foundSwitch := false
+	for _, ev := range callRec.Events {
+		if ev.Type == "stream_interrupt" {
+			foundInterrupt = true
+		}
+		if ev.Type == "switch" {
+			foundSwitch = true
+		}
+	}
+	if !foundInterrupt || !foundSwitch {
+		t.Fatalf("expected stream_interrupt + switch events, got %+v", callRec.Events)
+	}
+	// 第二次请求的 payload 应包含续写消息（assistant 历史 + 请继续）
+	if len(transport.requestPayloads) < 2 {
+		t.Fatalf("expected 2 upstream requests, got %d", len(transport.requestPayloads))
+	}
+	msgs, _ := transport.requestPayloads[1]["messages"].([]any)
+	if len(msgs) < 3 {
+		t.Fatalf("expected resume messages, got %v", transport.requestPayloads[1]["messages"])
+	}
 }

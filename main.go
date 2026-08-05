@@ -2190,70 +2190,27 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
 		w.WriteHeader(http.StatusOK)
-		reader := bufio.NewReader(upResp)
-		doneSeen := false
-		var lastUsage map[string]any
-		for {
-			line, err := reader.ReadString('\n')
-			if err != nil {
-				if err == io.EOF {
-					break
-				}
-				slog.Error("stream read error", "error", err)
-				// 发送错误事件通知客户端
-				w.Write([]byte("data: {\"error\":\"stream read error\"}\n\n"))
-				if f, ok := w.(http.Flusher); ok {
-					f.Flush()
-				}
-				callRec.Status = "fail"
-				callRec.ErrMsg = "stream read error: " + err.Error()
-				callRec.DurationMS = time.Since(startTime).Milliseconds()
-				callRec.Events = append(callRec.Events, CallEvent{Type: "stream_error", Node: proxyAddr, Detail: callRec.ErrMsg, At: time.Now()})
-				recordCall(callRec)
-				return
+		// 流内超时 + 断点续写切换（阶段1验证过的核心逻辑）
+		res := streamWithResume(w, r, upstreamBody, req.Model, auth, upResp, keepReasoning, &callRec)
+		callRec.DurationMS = time.Since(startTime).Milliseconds()
+		if res.PromptTok > 0 || res.Completion > 0 {
+			callRec.PromptTok = res.PromptTok
+			callRec.CompletionTok = res.Completion
+			recordTokenUsage(req.Model, res.PromptTok, res.Completion, res.PromptTok+res.Completion, proxyAddr)
+		}
+		if !res.OK {
+			callRec.Status = "fail"
+			if res.ErrMsg != "" {
+				callRec.ErrMsg = res.ErrMsg
 			}
-			if doneSeen {
-				continue
-			}
-			trimmed := strings.TrimSpace(line)
-			if trimmed == "data: [DONE]" {
-				doneSeen = true
-				w.Write([]byte("data: [DONE]\n\n"))
-				if f, ok := w.(http.Flusher); ok {
-					f.Flush()
-				}
-				continue
-			}
-
-			out, usage := convertStreamChunkWithUsage(line, keepReasoning)
-			// 上游 router 会在每个 chunk 附带累计 usage，只保留最后一次（终值）
-			if usage != nil {
-				if tt, _ := usage["total_tokens"].(float64); tt > 0 {
-					lastUsage = usage
-				}
-			}
-			if out == "" {
-				continue
-			}
-
-			w.Write([]byte(out))
-			w.Write([]byte("\n"))
+			// 若未吐过 [DONE]，补错误事件
+			w.Write([]byte("data: {\"error\":\"stream interrupted: " + res.ErrMsg + "\"}\n\n"))
 			if f, ok := w.(http.Flusher); ok {
 				f.Flush()
 			}
+		} else {
+			callRec.Status = "ok"
 		}
-		if lastUsage != nil {
-			pt, _ := lastUsage["prompt_tokens"].(float64)
-			ct, _ := lastUsage["completion_tokens"].(float64)
-			tt, _ := lastUsage["total_tokens"].(float64)
-			if tt > 0 {
-				recordTokenUsage(req.Model, int64(pt), int64(ct), int64(tt), proxyAddr)
-			}
-			callRec.PromptTok = int64(pt)
-			callRec.CompletionTok = int64(ct)
-		}
-		callRec.DurationMS = time.Since(startTime).Milliseconds()
-		callRec.Events = append(callRec.Events, CallEvent{Type: "complete", Node: proxyAddr, Detail: "done", At: time.Now()})
 		recordCall(callRec)
 		return
 	}
