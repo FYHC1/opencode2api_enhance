@@ -36,13 +36,25 @@ pub fn build_opencode_config(singbox_port: u16) -> Result<String> {
 
 /// 生成统一网关配置：池内实例作为 SOCKS5 代理列表，路由模式默认 failover
 /// （成功不动游标、失败/限流/额度耗尽才切下一个健康实例）。
-pub fn build_opencode_router_config(singbox_ports: &[u16], route_mode: &str) -> Result<String> {
+/// port_names 提供 singbox 端口 → 实例名映射，写入 socks5_proxies[].name，
+/// 供 Go 侧流式输出显示「🤖 实例名 · 模型」（而非 SOCKS5 地址）。
+pub fn build_opencode_router_config(
+    singbox_ports: &[u16],
+    port_names: &[(u16, String)],
+    route_mode: &str,
+) -> Result<String> {
+    let name_for_port = |port: u16| -> String {
+        port_names
+            .iter()
+            .find(|(p, _)| *p == port)
+            .map(|(_, n)| n.clone())
+            .unwrap_or_else(|| format!("instance-{}", port))
+    };
     let proxies: Vec<serde_json::Value> = singbox_ports
         .iter()
-        .enumerate()
-        .map(|(index, port)| {
+        .map(|port| {
             json!({
-                "name": format!("instance-{}", index + 1),
+                "name": name_for_port(*port),
                 "addr": format!("127.0.0.1:{}", port),
                 "username": "",
                 "password": ""
@@ -111,20 +123,33 @@ mod tests {
 
     #[test]
     fn test_build_opencode_router_config() {
-        let config = build_opencode_router_config(&[18001, 18002], "failover").unwrap();
+        let names = vec![
+            (18001u16, "日本1".to_string()),
+            (18002u16, "美国2".to_string()),
+        ];
+        let config = build_opencode_router_config(&[18001, 18002], &names, "failover").unwrap();
         let v: serde_json::Value = serde_json::from_str(&config).unwrap();
         assert_eq!(v["active_socks5"], "__round_robin__");
         assert_eq!(v["route_mode"], "failover");
         assert_eq!(v["socks5_proxies"].as_array().unwrap().len(), 2);
-        assert_eq!(v["socks5_proxies"][0]["name"], "instance-1");
+        // name 应取真实实例名（而非占位 instance-N）
+        assert_eq!(v["socks5_proxies"][0]["name"], "日本1");
         assert_eq!(v["socks5_proxies"][0]["addr"], "127.0.0.1:18001");
+        assert_eq!(v["socks5_proxies"][1]["name"], "美国2");
     }
 
     #[test]
     fn test_build_opencode_router_config_round_robin() {
-        let config = build_opencode_router_config(&[18001, 18002, 18003], "round_robin").unwrap();
+        let names = vec![
+            (18001u16, "a".to_string()),
+            (18002u16, "b".to_string()),
+            (18003u16, "c".to_string()),
+        ];
+        let config =
+            build_opencode_router_config(&[18001, 18002, 18003], &names, "round_robin").unwrap();
         let v: serde_json::Value = serde_json::from_str(&config).unwrap();
         assert_eq!(v["route_mode"], "round_robin");
         assert_eq!(v["socks5_proxies"].as_array().unwrap().len(), 3);
+        assert_eq!(v["socks5_proxies"][2]["name"], "c");
     }
 }

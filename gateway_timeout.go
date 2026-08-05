@@ -484,7 +484,7 @@ func streamWithResume(w http.ResponseWriter, r *http.Request, upstreamBody []byt
 							if first, ok := chs[0].(map[string]any); ok {
 								if delta, ok := first["delta"].(map[string]any); ok {
 									if c, ok := delta["content"].(string); ok && c != "" {
-										nodeLabel := proxyAddr
+										nodeLabel := proxyDisplayName(proxyAddr)
 										if nodeLabel == "" {
 											nodeLabel = "未知节点"
 										}
@@ -648,4 +648,21 @@ func applyBadStatusConfig(cfg AppConfig) {
 	// badThreshold 用全局 const（badThreshold），配置暂不覆盖（保持简单）；
 	// 如需可配置可在此读取 cfg.BadThreshold。
 	_ = cfg.BadThreshold
+}
+
+// proxyDisplayName 按 SOCKS5 地址反查实例名（用于流式前缀「🤖 实例名 · 模型」）。
+// Rust 生成网关配置时把 socks5_proxies[].name 填为真实实例名；
+// 查不到时回退返回地址本身。纯内存查询，无网络开销。
+func proxyDisplayName(addr string) string {
+	if addr == "" {
+		return ""
+	}
+	socks5Mu.RLock()
+	defer socks5Mu.RUnlock()
+	for _, p := range socks5Proxies {
+		if p.Addr == addr && p.Name != "" {
+			return p.Name
+		}
+	}
+	return addr
 }

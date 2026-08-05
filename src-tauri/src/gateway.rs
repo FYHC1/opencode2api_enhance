@@ -191,12 +191,17 @@ impl GatewayManager {
     /// 同步网关：只把「运行中且已入池（join_gateway=true）」的实例加入池。
     /// 未入池实例保持独享访问，不受网关影响。
     pub fn sync(&mut self, instances: &[Instance]) -> Result<()> {
-        let ports: Vec<u16> = instances
+        let members: Vec<&Instance> = instances
             .iter()
             .filter(|instance| {
                 instance.status == InstanceStatus::Running && instance.join_gateway
             })
-            .map(|instance| instance.singbox_port)
+            .collect();
+        let ports: Vec<u16> = members.iter().map(|i| i.singbox_port).collect();
+        // 端口 → 实例名映射（供流式前缀显示「🤖 实例名 · 模型」）
+        let port_names: Vec<(u16, String)> = members
+            .iter()
+            .map(|i| (i.singbox_port, i.name.clone()))
             .collect();
 
         self.reap_child();
@@ -213,7 +218,8 @@ impl GatewayManager {
             return Ok(());
         }
 
-        let config = opencode_cfg::build_opencode_router_config(&ports, &self.route_mode)?;
+        let config =
+            opencode_cfg::build_opencode_router_config(&ports, &port_names, &self.route_mode)?;
         fs::create_dir_all(self.gateway_dir()).context("创建统一网关目录失败")?;
         let changed = fs::read_to_string(&self.config_path)
             .map(|old| old != config)
