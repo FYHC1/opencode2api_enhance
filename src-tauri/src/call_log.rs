@@ -7,7 +7,6 @@ use std::path::Path;
 
 /// 单条事件（连接/超时/切换/完成等）
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct CallLogEvent {
     #[serde(rename = "type")]
     pub event_type: String,
@@ -20,8 +19,9 @@ pub struct CallLogEvent {
 }
 
 /// 单条调用记录（一个请求一行 JSONL）
+/// 注意：Go 端字段为 snake_case（req_id/prompt_tokens 等），
+/// 此处不使用 rename_all，保持与 Go JSON 字段名一致。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct CallLogRecord {
     pub req_id: String,
     pub ts: String,
