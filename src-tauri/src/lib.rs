@@ -35,6 +35,13 @@ pub fn run() {
             }
         }
     }
+    // 调试构建默认开启 SSE 流信息输出（tauri dev 终端实时显示收发流，排查 IDE 解析问题）；
+    // 正式版（release）不受影响。可用 OPCODE2API_SSE_DEBUG=0 关闭。
+    if cfg!(debug_assertions) && std::env::var("OPCODE2API_SSE_DEBUG").is_err() {
+        unsafe {
+            std::env::set_var("OPCODE2API_SSE_DEBUG", "1");
+        }
+    }
     // 启动前释放内嵌子程序到 exe 旁 bin/ 目录
     let (_, binary_dir, _) = commands::manager_paths();
     match embed::ensure_binaries(&binary_dir) {
