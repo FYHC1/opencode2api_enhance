@@ -24,8 +24,14 @@ pub struct AppState {
 pub fn run() {
     // 调试构建默认隔离数据目录：与正式版（%APPDATA%\opencode2api-manager）
     // 分开，避免实例池/配置/runtime 互相干扰。可用 OPCODE2API_DATA_DIR 显式覆盖。
-    if cfg!(debug_assertions) && std::env::var("OPCODE2API_DATA_DIR").is_err() {
-        if let Some(base) = dirs::config_dir() {
+    // 注意：环境变量存在但为空串时视为未设置（否则会静默回落共享生产目录）。
+    if cfg!(debug_assertions) {
+        let unset_or_empty = match std::env::var_os("OPCODE2API_DATA_DIR") {
+            None => true,
+            Some(v) => v.is_empty(),
+        };
+        if unset_or_empty {
+            let base = dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
             // 单线程启动阶段设置环境变量，安全
             unsafe {
                 std::env::set_var(

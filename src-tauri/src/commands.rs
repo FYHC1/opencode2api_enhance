@@ -912,7 +912,7 @@ pub async fn port_suggest(state: tauri::State<'_, AppState>) -> Result<u16, Stri
     tauri::async_runtime::spawn_blocking(move || {
         let mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
         let mut rng = rand_seed();
-        // debug 构建：30000-30199 段；release：保持原 18100-39999 段
+        // debug 构建：30000+ 段（实际返回 30001-30199）；release：保持 main 原公式（18100 起，分布同 main）
         let (base, range): (u16, u16) = if cfg!(debug_assertions) {
             (30000, 200)
         } else {
@@ -920,7 +920,12 @@ pub async fn port_suggest(state: tauri::State<'_, AppState>) -> Result<u16, Stri
         };
         let start = base + (rng % range as u64) as u16;
         for _ in 0..200 {
-            let port = start.saturating_add(1 + (rng % 200) as u16) % range + base;
+            let port = if cfg!(debug_assertions) {
+                start.saturating_add(1 + (rng % 200) as u16) % range + base
+            } else {
+                // 与 main 完全一致：% 30000 + 10000（建议范围 [10000, 39999]）
+                start.saturating_add(1 + (rng % 200) as u16) % 30000 + 10000
+            };
             if !is_port_used(&mgr, port) {
                 return Ok(port);
             }

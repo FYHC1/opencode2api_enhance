@@ -26,16 +26,20 @@ impl Config {
         // （调试版与正式版共用 %APPDATA%\opencode2api-manager 会导致实例池/配置/runtime 互相干扰，
         //   调试版启动时由 lib.rs 自动设置独立目录实现隔离）
         if let Ok(dir) = std::env::var("OPCODE2API_DATA_DIR") {
-            if !dir.is_empty() {
+            if !dir.trim().is_empty() {
                 let p = PathBuf::from(dir);
-                fs::create_dir_all(&p).ok();
+                if let Err(e) = fs::create_dir_all(&p) {
+                    eprintln!("警告: 创建数据目录失败 {}: {}", p.display(), e);
+                }
                 return p;
             }
         }
         let dir = dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("opencode2api-manager");
-        fs::create_dir_all(&dir).ok();
+        if let Err(e) = fs::create_dir_all(&dir) {
+            eprintln!("警告: 创建数据目录失败 {}: {}", dir.display(), e);
+        }
         dir
     }
 
