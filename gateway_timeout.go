@@ -213,8 +213,12 @@ var (
 	sseDebugFile *os.File
 )
 
-// sseDebugf 追加一行到 sse_debug.log（失败静默）
+// sseDebugf 追加一行到 sse_debug.log，并输出到控制台（stdout）。
+// 控制台输出便于用户在 tauri dev 终端观察实际收发的 SSE 流（排查 IDE 解析问题）。
 func sseDebugf(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	// 输出到控制台（带时间戳）
+	fmt.Printf("[sse-debug] %s %s\n", time.Now().Format("15:04:05.000"), msg)
 	sseDebugMu.Lock()
 	defer sseDebugMu.Unlock()
 	if sseDebugFile == nil {
@@ -224,7 +228,7 @@ func sseDebugf(format string, args ...any) {
 		}
 		sseDebugFile = f
 	}
-	fmt.Fprintf(sseDebugFile, time.Now().Format("15:04:05.000")+" "+format+"\n", args...)
+	fmt.Fprintf(sseDebugFile, time.Now().Format("15:04:05.000")+" "+msg+"\n")
 }
 
 // closeSSEDebug 关闭调试文件（进程退出时调用）
@@ -323,6 +327,8 @@ func streamWithResume(w http.ResponseWriter, r *http.Request, upstreamBody []byt
 	currentBody := upstreamBody
 	sseDebugf("[%s] streamWithResume start, model=%s, keepReasoning=%v", reqID, model, keepReasoning)
 
+	// 已尝试过的代理地址：流中断后标记冷却，重连时强制换节点（failover 默认成功不动游标）
+	triedAddrs := map[string]bool{}
 	// 当前活动的上游响应；attempt 0 用 initial，后续用重连结果
 	upResp := initial
 	proxyAddr := ""
@@ -339,6 +345,10 @@ func streamWithResume(w http.ResponseWriter, r *http.Request, upstreamBody []byt
 				attempt++
 				continue
 			}
+			if proxyAddr != "" && triedAddrs[proxyAddr] {
+				sseDebugf("[%s] 警告: 重连仍命中已尝试节点 %s，可能无健康备选", reqID, proxyAddr)
+			}
+			triedAddrs[proxyAddr] = true
 			callRec.Events = append(callRec.Events, CallEvent{Type: "connect_ok", Node: proxyAddr, Detail: "reconnected", At: time.Now()})
 			callRec.Nodes = append(callRec.Nodes, proxyAddr)
 		}
@@ -459,8 +469,11 @@ func streamWithResume(w http.ResponseWriter, r *http.Request, upstreamBody []byt
 					}
 				}
 				sseDebugf("[%s] FWD>> %q", reqID, out)
+				// 标准 SSE：每个事件以 \n\n 结尾（事件间空行分隔）。
+				// 之前只写单个 \n，导致严格的 OpenAI 兼容客户端把连续两行当成一个事件，
+				// 第二行 JSON 报 "Unexpected non-whitespace character after JSON"。
 				w.Write([]byte(out))
-				w.Write([]byte("\n"))
+				w.Write([]byte("\n\n"))
 				if f, ok := w.(http.Flusher); ok {
 					f.Flush()
 				}
@@ -510,6 +523,13 @@ func streamWithResume(w http.ResponseWriter, r *http.Request, upstreamBody []byt
 		// 中断：记录切换事件，续写重试
 		res.Switched = true
 		attempt++
+		// 标记当前节点冷却（20s），强制下一次重连选择其他健康节点——
+		// failover 模式"成功不动游标"，若流中断但连接曾 2xx，健康表仍认为它可用，
+		// 不标记冷却会导致重连永远命中同一节点（用户实测的 28110→28110→... 死循环）。
+		if proxyAddr != "" {
+			markSocks5Result(proxyAddr, http.StatusServiceUnavailable, nil)
+			sseDebugf("[%s] 节点 %s 流中断，标记冷却以强制换节点", reqID, proxyAddr)
+		}
 		if attempt > maxResume {
 			res.OK = false
 			res.ErrMsg = "所有候选节点均失败，回复中断"
