@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-pub const UNIFIED_GATEWAY_PORT: u16 = 18080;
+pub const UNIFIED_GATEWAY_PORT: u16 = 18081;
 const UNIFIED_GATEWAY_KEY: &str = "sk-unified-local";
 
 #[derive(Debug, Clone, Serialize)]
@@ -133,7 +133,7 @@ impl GatewayManager {
             // 不设置则落到应用 exe 目录，统计界面（只扫 runtime/）读不到。
             .current_dir(self.gateway_dir())
             // 父进程 PID：Go 网关据此检测 tauri 是否存活，
-            // 若 tauri 被强杀（Ctrl+C/崩溃），网关自动退出，释放 18080 端口，避免孤儿进程
+            // 若 tauri 被强杀（Ctrl+C/崩溃），网关自动退出，释放 18081 端口，避免孤儿进程
             .env("OPCODE2API_PARENT_PID", std::process::id().to_string())
             .arg("-port")
             .arg(UNIFIED_GATEWAY_PORT.to_string())
@@ -369,7 +369,7 @@ impl GatewayManager {
     pub fn node_health(&self) -> Vec<NodeHealth> {
         let address = format!("127.0.0.1:{}", UNIFIED_GATEWAY_PORT);
         let mut stream = match TcpStream::connect_timeout(
-            &address.parse().unwrap_or_else(|_| "127.0.0.1:18080".parse().unwrap()),
+            &address.parse().unwrap_or_else(|_| "127.0.0.1:18081".parse().unwrap()),
             Duration::from_secs(2),
         ) {
             Ok(s) => s,
