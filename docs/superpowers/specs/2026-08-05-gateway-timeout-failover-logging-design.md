@@ -124,3 +124,14 @@
 ## 阶段失败回滚机制
 
 按用户方法论：**每阶段末验证失败的部分，记录到下一阶段计划中修复**，循环直到全部完成。每阶段结束写阶段报告，标注哪些验证失败、如何滚入下一阶段。
+
+## 实施状态（2026-08-05 更新）
+
+**已全部实施完成。**
+- 阶段 1（实验网关）✅ 见 `D:\AI_Projects\gateway_experiment\PHASE1_REPORT.md`（16 测试全绿 + 端到端验证）
+- 阶段 2（落地集成）✅ 见 `docs/superpowers/plans/PHASE2_REPORT.md`
+  - Go：`gateway_timeout.go`（区间随机超时 + 事件日志 + 续写切换）+ `main.go` 接入
+  - Rust：`call_log.rs`（`get_call_log`）+ `config.rs` 区间配置持久化 + `opencode_cfg.rs` 注入
+  - 前端：`LogsPage` + `SettingsPage` 区间表单 + `api.ts`/`App.tsx`
+- 待办（用户环境）：真实节点冒烟（见阶段 2 报告）
+- 已记录失败项：本地 `cargo test` 受 WinLibs 工具链限制（CI 无此问题）
