@@ -101,12 +101,44 @@ export type ConfigView = {
   has_password: boolean
   clash_external_url: string
   has_clash_token: boolean
+  timeout_ttft_min_ms: number
+  timeout_ttft_max_ms: number
+  timeout_silence_min_ms: number
+  timeout_silence_max_ms: number
+  failover_probe_min: number
+  failover_probe_max: number
+  call_log_max: number
 }
 
 export type BinariesInfo = {
   bin_dir: string
   oc_exists: boolean
   sb_exists: boolean
+}
+
+// ─── 全流程调用日志 ─────────────────────────────────────────────
+
+export type CallLogEvent = {
+  type: string
+  node?: string
+  detail?: string
+  at?: string
+}
+
+export type CallLogRecord = {
+  req_id: string
+  ts: string
+  path?: string
+  model?: string
+  stream?: boolean
+  route_mode?: string
+  nodes?: string[]
+  events?: CallLogEvent[]
+  status: string
+  prompt_tokens?: number
+  completion_tokens?: number
+  duration_ms?: number
+  err_msg?: string
 }
 
 // ─── 统一网关（实例池） ─────────────────────────────────────────────
@@ -226,6 +258,10 @@ export const api = {
 
   // Token 统计（按实例）
   getStats: () => invoke<StatsSummary>('get_stats'),
+
+  // 全流程调用日志
+  getCallLog: (limit?: number) =>
+    invoke<CallLogRecord[]>('get_call_log', { limit: limit ?? null }),
 
   // 统一网关（实例池）
   gatewayStatus: () => invoke<GatewayStatus>('gateway_status'),

@@ -11,6 +11,17 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
   const [clashUrl, setClashUrl] = useState('')
   const [clashToken, setClashToken] = useState('')
 
+  // 网关超时切换区间表单
+  const [timeoutForm, setTimeoutForm] = useState({
+    timeout_ttft_min_ms: 15000,
+    timeout_ttft_max_ms: 25000,
+    timeout_silence_min_ms: 30000,
+    timeout_silence_max_ms: 60000,
+    failover_probe_min: 2,
+    failover_probe_max: 3,
+    call_log_max: 5000,
+  })
+
 
   useEffect(() => {
     const loadData = async () => {
@@ -24,6 +35,15 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
         setAutostart(as)
         setBinariesInfo(bin)
         setClashUrl(cfg.clash_external_url)
+        setTimeoutForm({
+          timeout_ttft_min_ms: cfg.timeout_ttft_min_ms,
+          timeout_ttft_max_ms: cfg.timeout_ttft_max_ms,
+          timeout_silence_min_ms: cfg.timeout_silence_min_ms,
+          timeout_silence_max_ms: cfg.timeout_silence_max_ms,
+          failover_probe_min: cfg.failover_probe_min,
+          failover_probe_max: cfg.failover_probe_max,
+          call_log_max: cfg.call_log_max,
+        })
       } catch (e) {
         console.error('加载设置失败', e)
         toast('加载设置失败', false)
@@ -57,6 +77,38 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
     } catch (e) {
       console.error('设置开机自启失败', e)
       toast('设置失败', false)
+    }
+  }
+
+  // 校验区间：min <= max，且为正数
+  const validateRange = (min: number, max: number): boolean => {
+    return min > 0 && max >= min
+  }
+
+  const handleSaveTimeout = async () => {
+    const f = timeoutForm
+    if (!validateRange(f.timeout_ttft_min_ms, f.timeout_ttft_max_ms) ||
+        !validateRange(f.timeout_silence_min_ms, f.timeout_silence_max_ms) ||
+        !validateRange(f.failover_probe_min, f.failover_probe_max)) {
+      toast('区间不合法：最小值需 >0 且 最小值 ≤ 最大值', false)
+      return
+    }
+    if (f.call_log_max < 100) {
+      toast('日志保留上限至少 100 条', false)
+      return
+    }
+    try {
+      await api.configSet('timeout_ttft_min_ms', String(f.timeout_ttft_min_ms))
+      await api.configSet('timeout_ttft_max_ms', String(f.timeout_ttft_max_ms))
+      await api.configSet('timeout_silence_min_ms', String(f.timeout_silence_min_ms))
+      await api.configSet('timeout_silence_max_ms', String(f.timeout_silence_max_ms))
+      await api.configSet('failover_probe_min', String(f.failover_probe_min))
+      await api.configSet('failover_probe_max', String(f.failover_probe_max))
+      await api.configSet('call_log_max', String(f.call_log_max))
+      toast('超时配置已保存（重启网关后生效）', true)
+    } catch (e) {
+      console.error('保存超时配置失败', e)
+      toast('保存失败', false)
     }
   }
 
@@ -104,6 +156,106 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
           className="bg-zinc-900 text-white rounded-lg px-4 py-2 hover:bg-zinc-700"
         >
           保存
+        </button>
+      </div>
+
+      {/* 网关超时切换（区间随机，防上游识别） */}
+      <div className="bg-white rounded-2xl border p-5 space-y-4">
+        <h2 className="text-lg font-medium text-zinc-900">网关超时切换</h2>
+        <p className="text-zinc-500 text-xs">
+          每次请求在区间内随机取超时值，避免固定超时被上游识别为定时扫描；最小值防止过密重试
+        </p>
+
+        {/* 首字超时 (TTFT) */}
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-zinc-700">首字超时 (TTFT)</label>
+          <div className="flex items-center gap-3">
+            <input
+              type="number"
+              min={1}
+              value={timeoutForm.timeout_ttft_min_ms}
+              onChange={(e) => setTimeoutForm({ ...timeoutForm, timeout_ttft_min_ms: Number(e.target.value) })}
+              className="w-28 px-3 py-2 border rounded-lg"
+            />
+            <span className="text-zinc-400">~</span>
+            <input
+              type="number"
+              min={1}
+              value={timeoutForm.timeout_ttft_max_ms}
+              onChange={(e) => setTimeoutForm({ ...timeoutForm, timeout_ttft_max_ms: Number(e.target.value) })}
+              className="w-28 px-3 py-2 border rounded-lg"
+            />
+            <span className="text-zinc-500 text-xs">毫秒</span>
+          </div>
+          <p className="text-zinc-500 text-xs">建流后等待首个内容块，超时则判定异常并切换。默认 15000~25000</p>
+        </div>
+
+        {/* 块间静默超时 */}
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-zinc-700">块间静默超时</label>
+          <div className="flex items-center gap-3">
+            <input
+              type="number"
+              min={1}
+              value={timeoutForm.timeout_silence_min_ms}
+              onChange={(e) => setTimeoutForm({ ...timeoutForm, timeout_silence_min_ms: Number(e.target.value) })}
+              className="w-28 px-3 py-2 border rounded-lg"
+            />
+            <span className="text-zinc-400">~</span>
+            <input
+              type="number"
+              min={1}
+              value={timeoutForm.timeout_silence_max_ms}
+              onChange={(e) => setTimeoutForm({ ...timeoutForm, timeout_silence_max_ms: Number(e.target.value) })}
+              className="w-28 px-3 py-2 border rounded-lg"
+            />
+            <span className="text-zinc-500 text-xs">毫秒</span>
+          </div>
+          <p className="text-zinc-500 text-xs">两个数据块之间无数据，判定卡死并切换。默认 30000~60000</p>
+        </div>
+
+        {/* 切换前并行探测数 */}
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-zinc-700">切换前并行探测数</label>
+          <div className="flex items-center gap-3">
+            <input
+              type="number"
+              min={1}
+              value={timeoutForm.failover_probe_min}
+              onChange={(e) => setTimeoutForm({ ...timeoutForm, failover_probe_min: Number(e.target.value) })}
+              className="w-28 px-3 py-2 border rounded-lg"
+            />
+            <span className="text-zinc-400">~</span>
+            <input
+              type="number"
+              min={1}
+              value={timeoutForm.failover_probe_max}
+              onChange={(e) => setTimeoutForm({ ...timeoutForm, failover_probe_max: Number(e.target.value) })}
+              className="w-28 px-3 py-2 border rounded-lg"
+            />
+            <span className="text-zinc-500 text-xs">个</span>
+          </div>
+          <p className="text-zinc-500 text-xs">切换前并行探测候选节点数量。默认 2~3</p>
+        </div>
+
+        {/* 日志保留上限 */}
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-zinc-700">调用日志保留上限</label>
+          <input
+            type="number"
+            min={100}
+            value={timeoutForm.call_log_max}
+            onChange={(e) => setTimeoutForm({ ...timeoutForm, call_log_max: Number(e.target.value) })}
+            className="w-28 px-3 py-2 border rounded-lg"
+          />
+          <p className="text-zinc-500 text-xs">日志页最多保留的请求记录数。默认 5000</p>
+        </div>
+
+        <button
+          onClick={handleSaveTimeout}
+          className="bg-zinc-900 text-white rounded-lg px-4 py-2 hover:bg-zinc-700"
+        >
+          保存超时配置
         </button>
       </div>
 

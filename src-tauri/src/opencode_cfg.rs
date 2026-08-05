@@ -49,6 +49,15 @@ pub fn build_opencode_router_config(singbox_ports: &[u16], route_mode: &str) -> 
             })
         })
         .collect();
+    // 流内超时切换区间配置：从 manager 配置读取，未设置用默认值（毫秒）
+    let cfg = crate::config::Config::load().unwrap_or_default();
+    let ttft_min = cfg.timeout_ttft_min_ms.unwrap_or(15000);
+    let ttft_max = cfg.timeout_ttft_max_ms.unwrap_or(25000);
+    let silence_min = cfg.timeout_silence_min_ms.unwrap_or(30000);
+    let silence_max = cfg.timeout_silence_max_ms.unwrap_or(60000);
+    let probe_min = cfg.failover_probe_min.unwrap_or(2);
+    let probe_max = cfg.failover_probe_max.unwrap_or(3);
+    let call_log_max = cfg.call_log_max.unwrap_or(5000);
     let config = json!({
         "model_alias": {
             "deepseek-v4-flash": "deepseek-v4-flash-free",
@@ -66,7 +75,14 @@ pub fn build_opencode_router_config(singbox_ports: &[u16], route_mode: &str) -> 
         "force_disable_thinking": false,
         "socks5_proxies": proxies,
         "active_socks5": "__round_robin__",
-        "route_mode": route_mode
+        "route_mode": route_mode,
+        "timeout_ttft_min_ms": ttft_min,
+        "timeout_ttft_max_ms": ttft_max,
+        "timeout_silence_min_ms": silence_min,
+        "timeout_silence_max_ms": silence_max,
+        "failover_probe_min": probe_min,
+        "failover_probe_max": probe_max,
+        "call_log_max": call_log_max
     });
 
     Ok(serde_json::to_string_pretty(&config)?)

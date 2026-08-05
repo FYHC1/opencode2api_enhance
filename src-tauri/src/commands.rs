@@ -195,6 +195,13 @@ pub struct ConfigView {
     pub has_password: bool,
     pub clash_external_url: String,
     pub has_clash_token: bool,
+    pub timeout_ttft_min_ms: i64,
+    pub timeout_ttft_max_ms: i64,
+    pub timeout_silence_min_ms: i64,
+    pub timeout_silence_max_ms: i64,
+    pub failover_probe_min: i64,
+    pub failover_probe_max: i64,
+    pub call_log_max: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -1002,6 +1009,13 @@ pub fn config_get() -> Result<ConfigView, String> {
         has_password: !cfg.default_password.is_empty(),
         clash_external_url: cfg.clash_external_url,
         has_clash_token: !cfg.clash_auth_token.is_empty(),
+        timeout_ttft_min_ms: cfg.timeout_ttft_min_ms.unwrap_or(15000),
+        timeout_ttft_max_ms: cfg.timeout_ttft_max_ms.unwrap_or(25000),
+        timeout_silence_min_ms: cfg.timeout_silence_min_ms.unwrap_or(30000),
+        timeout_silence_max_ms: cfg.timeout_silence_max_ms.unwrap_or(60000),
+        failover_probe_min: cfg.failover_probe_min.unwrap_or(2),
+        failover_probe_max: cfg.failover_probe_max.unwrap_or(3),
+        call_log_max: cfg.call_log_max.unwrap_or(5000),
     })
 }
 

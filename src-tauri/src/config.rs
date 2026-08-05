@@ -9,6 +9,15 @@ pub struct Config {
     pub default_password: String,
     pub clash_external_url: String,
     pub clash_auth_token: String,
+    /// 流内超时切换区间（毫秒；0 = 用默认值）
+    pub timeout_ttft_min_ms: Option<i64>,
+    pub timeout_ttft_max_ms: Option<i64>,
+    pub timeout_silence_min_ms: Option<i64>,
+    pub timeout_silence_max_ms: Option<i64>,
+    pub failover_probe_min: Option<i64>,
+    pub failover_probe_max: Option<i64>,
+    /// 调用日志保留上限
+    pub call_log_max: Option<i64>,
 }
 
 impl Config {
@@ -65,11 +74,21 @@ impl Config {
             "default_password" => Some(self.default_password.clone()),
             "clash_external_url" => Some(self.clash_external_url.clone()),
             "clash_auth_token" => Some(self.clash_auth_token.clone()),
+            "timeout_ttft_min_ms" => Some(self.timeout_ttft_min_ms.unwrap_or(0).to_string()),
+            "timeout_ttft_max_ms" => Some(self.timeout_ttft_max_ms.unwrap_or(0).to_string()),
+            "timeout_silence_min_ms" => Some(self.timeout_silence_min_ms.unwrap_or(0).to_string()),
+            "timeout_silence_max_ms" => Some(self.timeout_silence_max_ms.unwrap_or(0).to_string()),
+            "failover_probe_min" => Some(self.failover_probe_min.unwrap_or(0).to_string()),
+            "failover_probe_max" => Some(self.failover_probe_max.unwrap_or(0).to_string()),
+            "call_log_max" => Some(self.call_log_max.unwrap_or(0).to_string()),
             _ => None,
         }
     }
 
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        let parse_i64 = |s: &str| -> Result<i64> {
+            s.parse::<i64>().with_context(|| format!("invalid integer for {key}: {s}"))
+        };
         match key {
             "base_url" => {
                 self.base_url = value.to_string();
@@ -83,6 +102,13 @@ impl Config {
             "clash_auth_token" => {
                 self.clash_auth_token = value.to_string();
             }
+            "timeout_ttft_min_ms" => self.timeout_ttft_min_ms = Some(parse_i64(value)?),
+            "timeout_ttft_max_ms" => self.timeout_ttft_max_ms = Some(parse_i64(value)?),
+            "timeout_silence_min_ms" => self.timeout_silence_min_ms = Some(parse_i64(value)?),
+            "timeout_silence_max_ms" => self.timeout_silence_max_ms = Some(parse_i64(value)?),
+            "failover_probe_min" => self.failover_probe_min = Some(parse_i64(value)?),
+            "failover_probe_max" => self.failover_probe_max = Some(parse_i64(value)?),
+            "call_log_max" => self.call_log_max = Some(parse_i64(value)?),
             _ => {
                 anyhow::bail!("Unknown config key: {}", key);
             }
