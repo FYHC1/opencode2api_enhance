@@ -903,16 +903,24 @@ fn rand_seed() -> u64 {
         .unwrap_or(0x1234_5678)
 }
 
-/// 建议一个可用端口（>10000，未被实例占用，本地未监听）
+/// 建议一个可用端口（未被实例占用，本地未监听）
+/// 调试构建（tauri dev）使用 30000+ 段，与正式版（10000-29999 段）完全错开，
+/// 避免两套实例的 API/sing-box 端口（port 与 port+10000）冲突。
 #[tauri::command]
 pub async fn port_suggest(state: tauri::State<'_, AppState>) -> Result<u16, String> {
     let manager = Arc::clone(&state.manager);
     tauri::async_runtime::spawn_blocking(move || {
         let mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
         let mut rng = rand_seed();
-        let start = 18100 + (rng % 20000) as u16;
+        // debug 构建：30000-30199 段；release：保持原 18100-39999 段
+        let (base, range): (u16, u16) = if cfg!(debug_assertions) {
+            (30000, 200)
+        } else {
+            (18100, 20000)
+        };
+        let start = base + (rng % range as u64) as u16;
         for _ in 0..200 {
-            let port = start.saturating_add(1 + (rng % 200) as u16) % 30000 + 10000;
+            let port = start.saturating_add(1 + (rng % 200) as u16) % range + base;
             if !is_port_used(&mgr, port) {
                 return Ok(port);
             }
