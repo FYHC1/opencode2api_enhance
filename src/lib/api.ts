@@ -141,16 +141,6 @@ export type CallLogRecord = {
   err_msg?: string
 }
 
-// 节点健康（实例池表格坏池红字标签）
-export type NodeHealth = {
-  addr: string
-  bad_reason?: string
-  bad_count?: number
-  instance_name?: string
-  joined?: boolean
-  running?: boolean
-}
-
 // ─── 统一网关（实例池） ─────────────────────────────────────────────
 
 export type GatewayStatus = {
@@ -272,9 +262,6 @@ export const api = {
   // 全流程调用日志
   getCallLog: (limit?: number) =>
     invoke<CallLogRecord[]>('get_call_log', { limit: limit ?? null }),
-
-  // 节点健康（坏池状态）
-  getNodeHealth: () => invoke<NodeHealth[]>('get_node_health'),
 
   // 统一网关（实例池）
   gatewayStatus: () => invoke<GatewayStatus>('gateway_status'),

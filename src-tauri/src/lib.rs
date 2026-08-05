@@ -105,7 +105,6 @@ pub fn run() {
 
             commands::get_stats,
             commands::get_call_log,
-            commands::get_node_health,
             commands::hide_to_tray,
             commands::toggle_maximize,
             commands::quit_app,
