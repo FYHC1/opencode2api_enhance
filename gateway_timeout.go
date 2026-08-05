@@ -584,9 +584,8 @@ func streamWithResume(w http.ResponseWriter, r *http.Request, upstreamBody []byt
 				}
 			}
 		}
-		// 向客户端发一条切换提示（可观察）
-		w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"[已切换节点，续写]\"}}]}\n\n"))
-		flushWriter(w)
+		// 不额外发送「已切换节点」提示文本——切换感知由新节点首个 chunk 前的
+		// 🤖 节点·模型 标识承担，避免插入提示打断用户预览阅读流。
 		// 下一轮重连
 		upResp = nil
 	}
