@@ -520,7 +520,7 @@ pub fn batch_add(
     if nodes.is_empty() {
         return Err("nodes 不能为空".to_string());
     }
-    let base_port = base_port.unwrap_or(18100);
+    let base_port = base_port.unwrap_or(if cfg!(debug_assertions) { 30000 } else { 18100 });
     let use_node_name = use_node_name.unwrap_or(true);
     let prefix = name_prefix.unwrap_or_else(|| "n".to_string());
 
