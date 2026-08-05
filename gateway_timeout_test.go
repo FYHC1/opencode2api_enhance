@@ -290,3 +290,97 @@ func TestStreamWithResumeSwitchOnInterrupt(t *testing.T) {
 		t.Fatalf("expected resume messages, got %v", transport.requestPayloads[1]["messages"])
 	}
 }
+
+// 坏状态码：429 连续 3 次 → 节点进坏池（badReason 非空），pickHealthyProxy 跳过
+func TestBadStatusCodeEntersBadPool(t *testing.T) {
+	// 重置健康表
+	socks5HealthMu.Lock()
+	socks5Health = map[string]socks5HealthState{}
+	socks5HealthMu.Unlock()
+
+	// 第一次 429：badCount=1，未进坏池，临时冷却 45s
+	markSocks5Result("127.0.0.1:28100", http.StatusTooManyRequests, nil)
+	markSocks5Result("127.0.0.1:28100", http.StatusTooManyRequests, nil)
+	socks5HealthMu.Lock()
+	st := socks5Health["127.0.0.1:28100"]
+	socks5HealthMu.Unlock()
+	if st.badReason != "" {
+		t.Fatalf("should not be in bad pool yet, got %q", st.badReason)
+	}
+	if st.badCount != 2 {
+		t.Fatalf("badCount = %d, want 2", st.badCount)
+	}
+
+	// 第三次 429：进坏池
+	markSocks5Result("127.0.0.1:28100", http.StatusTooManyRequests, nil)
+	socks5HealthMu.Lock()
+	st = socks5Health["127.0.0.1:28100"]
+	socks5HealthMu.Unlock()
+	if st.badReason == "" {
+		t.Fatal("expected bad pool after 3rd 429")
+	}
+	if !strings.Contains(st.badReason, "429") {
+		t.Fatalf("badReason should mention 429, got %q", st.badReason)
+	}
+
+	// pickHealthyProxy 应跳过坏池节点，选择另一个健康节点
+	proxies := []Socks5Proxy{
+		{Addr: "127.0.0.1:28100"},
+		{Addr: "127.0.0.1:28101"},
+	}
+	pick := pickHealthyProxy(proxies, 0)
+	if pick.Addr != "127.0.0.1:28101" {
+		t.Fatalf("expected skip bad pool node, got %s", pick.Addr)
+	}
+
+	// 清理
+	socks5HealthMu.Lock()
+	delete(socks5Health, "127.0.0.1:28100")
+	socks5HealthMu.Unlock()
+}
+
+// 401 也进坏池
+func TestBadStatusCode401EntersBadPool(t *testing.T) {
+	socks5HealthMu.Lock()
+	socks5Health = map[string]socks5HealthState{}
+	socks5HealthMu.Unlock()
+
+	for i := 0; i < 3; i++ {
+		markSocks5Result("127.0.0.1:28102", http.StatusUnauthorized, nil)
+	}
+	socks5HealthMu.Lock()
+	st := socks5Health["127.0.0.1:28102"]
+	socks5HealthMu.Unlock()
+	if st.badReason == "" || !strings.Contains(st.badReason, "401") {
+		t.Fatalf("expected 401 bad pool, got %q", st.badReason)
+	}
+	socks5HealthMu.Lock()
+	delete(socks5Health, "127.0.0.1:28102")
+	socks5HealthMu.Unlock()
+}
+
+// 正常状态（2xx）应清除坏池标记（节点恢复）
+func TestSuccessClearsBadPool(t *testing.T) {
+	socks5HealthMu.Lock()
+	socks5Health = map[string]socks5HealthState{}
+	socks5HealthMu.Unlock()
+
+	for i := 0; i < 3; i++ {
+		markSocks5Result("127.0.0.1:28103", http.StatusTooManyRequests, nil)
+	}
+	socks5HealthMu.Lock()
+	st := socks5Health["127.0.0.1:28103"]
+	socks5HealthMu.Unlock()
+	if st.badReason == "" {
+		t.Fatal("expected bad pool first")
+	}
+
+	// 2xx 成功应清除（手动恢复场景：实例重启后重新标记）
+	markSocks5Result("127.0.0.1:28103", http.StatusOK, nil)
+	socks5HealthMu.Lock()
+	st = socks5Health["127.0.0.1:28103"]
+	socks5HealthMu.Unlock()
+	if st.badReason != "" {
+		t.Fatalf("2xx should clear bad pool, got %q", st.badReason)
+	}
+}

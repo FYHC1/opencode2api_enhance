@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -538,11 +539,17 @@ func streamWithResume(w http.ResponseWriter, r *http.Request, upstreamBody []byt
 		<-readDone
 
 		if lastUsage != nil {
-			if pt, _ := lastUsage["prompt_tokens"].(float64); pt > 0 {
-				res.PromptTok = int64(pt)
+			// token 统计修正（切换场景）：
+			//   - prompt_tokens 取首次（原始输入），后续节点因续写追加了 assistant 上下文，
+			//     其 prompt 虚高，不采用
+			//   - completion_tokens 累加所有节点的输出（切换后是续写部分，需相加）
+			if res.PromptTok == 0 {
+				if pt, _ := lastUsage["prompt_tokens"].(float64); pt > 0 {
+					res.PromptTok = int64(pt)
+				}
 			}
 			if ct, _ := lastUsage["completion_tokens"].(float64); ct > 0 {
-				res.Completion = int64(ct)
+				res.Completion += int64(ct)
 			}
 		}
 
@@ -618,4 +625,27 @@ func buildResumeBody(body []byte, accumulated string) []byte {
 		return body
 	}
 	return b
+}
+
+// applyBadStatusConfig 从配置读取坏状态码组与坏池阈值并应用（热加载）。
+// 配置为 "状态码"→"原因文案" 的 map；未配置的项保留默认值。
+func applyBadStatusConfig(cfg AppConfig) {
+	socks5HealthMu.Lock()
+	defer socks5HealthMu.Unlock()
+	if cfg.BadStatusCodes != nil {
+		newMap := map[int]string{}
+		for codeStr, reason := range cfg.BadStatusCodes {
+			code, err := strconv.Atoi(codeStr)
+			if err != nil {
+				continue
+			}
+			newMap[code] = reason
+		}
+		if len(newMap) > 0 {
+			badStatusCodes = newMap
+		}
+	}
+	// badThreshold 用全局 const（badThreshold），配置暂不覆盖（保持简单）；
+	// 如需可配置可在此读取 cfg.BadThreshold。
+	_ = cfg.BadThreshold
 }

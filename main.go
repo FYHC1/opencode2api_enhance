@@ -209,9 +209,24 @@ var (
 
 // ======================== 代理健康池 ========================
 
+// badStatusCodes 坏状态码组：遇到这些状态码 → 立即切换节点并计数，
+// 连续 badThreshold 次后标记该节点为"坏"（badReason），不再选用。
+// 可配置（config.json 的 bad_status_codes），默认覆盖 401/402/429/503 等。
+var badStatusCodes = map[int]string{
+	http.StatusUnauthorized:      "401：认证失败",
+	http.StatusPaymentRequired:   "402：额度受限",
+	http.StatusTooManyRequests:   "429：最大额度上限",
+	http.StatusServiceUnavailable: "503：服务不可用",
+}
+
+// badThreshold 连续坏状态码次数阈值，达到后节点进入"坏池"（禁用）
+const badThreshold = 3
+
 type socks5HealthState struct {
-	failures int
-	until    time.Time
+	failures  int
+	until     time.Time
+	badReason string // 非空 = 已进坏池（如 "429：最大额度上限"），不再选用
+	badCount  int    // 连续坏状态码计数
 }
 
 var (
@@ -229,6 +244,10 @@ func pickHealthyProxy(proxies []Socks5Proxy, start int) Socks5Proxy {
 	for offset := 0; offset < len(proxies); offset++ {
 		proxy := proxies[(start+offset)%len(proxies)]
 		state := socks5Health[proxy.Addr]
+		// 坏池节点（401/402/429/503 连续 badThreshold 次）彻底不选
+		if state.badReason != "" {
+			continue
+		}
 		if state.until.IsZero() || !now.Before(state.until) {
 			return proxy
 		}
@@ -241,16 +260,34 @@ func pickHealthyProxy(proxies []Socks5Proxy, start int) Socks5Proxy {
 }
 
 // markSocks5Result 记录代理健康/冷却状态。
-// 失败分类：连接错→20s、429/限流→45s、连续 3 次→2min。
+// 失败分类：
+//   - 坏状态码（401/402/429/503，见 badStatusCodes）：立即切换节点并计数，
+//     连续 badThreshold 次 → 标记 badReason 进坏池（彻底禁用）
+//   - 其他失败：临时冷却（连接错→20s、429→45s、连续 3 次→2min）
 func markSocks5Result(addr string, status int, requestErr error) {
 	if addr == "" {
 		return
 	}
-	failed := requestErr != nil || status == http.StatusTooManyRequests ||
-		status == http.StatusBadGateway || status == http.StatusServiceUnavailable ||
-		status == http.StatusGatewayTimeout
 	socks5HealthMu.Lock()
 	defer socks5HealthMu.Unlock()
+
+	// 坏状态码：计数 + 达到阈值标记坏池
+	if reason, ok := badStatusCodes[status]; ok {
+		state := socks5Health[addr]
+		state.badCount++
+		if state.badCount >= badThreshold {
+			state.badReason = reason
+			slog.Warn("proxy entered bad pool", "addr", addr, "reason", reason, "count", state.badCount)
+		}
+		// 坏状态码也标记临时冷却（后续请求跳过，避免连续踩雷）
+		state.failures++
+		state.until = time.Now().Add(45 * time.Second)
+		socks5Health[addr] = state
+		return
+	}
+
+	failed := requestErr != nil || status == http.StatusBadGateway ||
+		status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout
 	if !failed {
 		if status >= 200 && status < 300 {
 			delete(socks5Health, addr)
@@ -260,9 +297,6 @@ func markSocks5Result(addr string, status int, requestErr error) {
 	state := socks5Health[addr]
 	state.failures++
 	cooldown := 20 * time.Second
-	if status == http.StatusTooManyRequests {
-		cooldown = 45 * time.Second
-	}
 	if state.failures >= 3 {
 		cooldown = 2 * time.Minute
 	}
@@ -977,6 +1011,11 @@ type AppConfig struct {
 	ProbeMax     int `json:"failover_probe_max,omitempty"`
 	// 调用日志保留上限（条）
 	CallLogMax int `json:"call_log_max,omitempty"`
+
+	// 坏状态码组：状态码 → 原因文案，遇到即切节点并计数（可配置，默认见 badStatusCodes）
+	BadStatusCodes map[string]string `json:"bad_status_codes,omitempty"`
+	// 坏池阈值：连续坏状态码次数达到后节点进坏池（默认 3）
+	BadThreshold int `json:"bad_threshold,omitempty"`
 }
 
 // ======================== Claude Messages API 类型 ========================
@@ -1121,6 +1160,7 @@ func applyConfig(cfg AppConfig) {
 		routeMode = cfg.RouteMode
 	}
 	setTimeoutConfigFromApp(cfg)
+	applyBadStatusConfig(cfg)
 
 
 	socks5Mu.Lock()
@@ -4738,6 +4778,47 @@ func adminStatsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// NodeStatus 节点健康状态（供 Rust 层轮询，发现坏节点后停实例）
+type NodeStatus struct {
+	Addr      string `json:"addr"`
+	BadReason string `json:"bad_reason,omitempty"` // 非空 = 已进坏池
+	BadCount  int    `json:"bad_count"`
+	Failures  int    `json:"failures"`
+	Cooldown  int64  `json:"cooldown_until_unix,omitempty"` // 临时冷却截止（0=无）
+}
+
+// nodeStatusHandler 暴露代理池每个节点的健康状态，供 Rust 轮询。
+func nodeStatusHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	socks5Mu.RLock()
+	proxies := append([]Socks5Proxy(nil), socks5Proxies...)
+	socks5Mu.RUnlock()
+
+	socks5HealthMu.Lock()
+	statuses := make([]NodeStatus, 0, len(proxies))
+	for _, p := range proxies {
+		state := socks5Health[p.Addr]
+		cooldown := int64(0)
+		if !state.until.IsZero() {
+			cooldown = state.until.Unix()
+		}
+		statuses = append(statuses, NodeStatus{
+			Addr:      p.Addr,
+			BadReason: state.badReason,
+			BadCount:  state.badCount,
+			Failures:  state.failures,
+			Cooldown:  cooldown,
+		})
+	}
+	socks5HealthMu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(statuses)
+}
+
 func adminPageHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write([]byte(adminHTML))
@@ -5136,6 +5217,7 @@ func main() {
 	http.HandleFunc("/logout", loggingMiddleware(logoutHandler))
 	http.HandleFunc("/api/config", loggingMiddleware(requireAuth(adminConfigHandler)))
 	http.HandleFunc("/api/stats", loggingMiddleware(requireAuth(adminStatsHandler)))
+	http.HandleFunc("/api/node-status", loggingMiddleware(requireAuth(nodeStatusHandler)))
 	http.HandleFunc("/api/reload", loggingMiddleware(requireAuth(reloadHandler)))
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
