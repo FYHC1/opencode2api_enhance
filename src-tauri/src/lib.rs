@@ -184,10 +184,10 @@ button: tauri::tray::MouseButton::Left,
         .expect("桌面构建失败")
         .run(|app, event| {
             // 应用退出（托盘"退出"/quit）时停止全部运行中的实例 + 统一网关，
-            // 确保网关进程和实例进程不残留后台（18081 端口、实例端口全部释放）
+            // 确保网关进程和实例进程不残留后台（18080 端口、实例端口全部释放）
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 if let Some(state) = app.try_state::<AppState>() {
-                    // 先停网关（释放 18081），再停实例（释放实例端口）
+                    // 先停网关（释放 18080），再停实例（释放实例端口）
                     if let Ok(mut gateway) = state.gateway.lock() {
                         gateway.stop();
                     }
