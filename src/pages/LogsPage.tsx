@@ -64,14 +64,7 @@ export default function LogsPage({
         // 最新在前
         setLogs([...recs].reverse())
         setError(null)
-        // 调试：打印原始返回，便于排查 invoke 解析问题
-        console.log('[LogsPage] getCallLog 返回', recs?.length, '条')
-        if (recs && recs.length > 0) {
-          console.log('[LogsPage] 第一条原始数据:', JSON.stringify(recs[0]))
-          console.log('[LogsPage] 第一条是否含异常事件:', recs[0]?.events)
-        }
       } catch (e) {
-        console.error('[LogsPage] getCallLog 失败:', e)
         if (!silent) toast(String(e), false)
         else setError(String(e))
       }

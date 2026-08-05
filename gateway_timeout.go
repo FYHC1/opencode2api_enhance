@@ -213,12 +213,14 @@ var (
 	sseDebugFile *os.File
 )
 
-// sseDebugf 追加一行到 sse_debug.log，并输出到控制台（stdout）。
-// 控制台输出便于用户在 tauri dev 终端观察实际收发的 SSE 流（排查 IDE 解析问题）。
+// sseDebugf 追加一行到 sse_debug.log，并在调试模式（-debug 或环境变量 OPCODE2API_SSE_DEBUG=1）
+// 下输出到控制台。控制台输出便于在 tauri dev 终端观察实际收发的 SSE 流（排查 IDE 解析问题）。
 func sseDebugf(format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
-	// 输出到控制台（带时间戳）
-	fmt.Printf("[sse-debug] %s %s\n", time.Now().Format("15:04:05.000"), msg)
+	if debugMode || os.Getenv("OPCODE2API_SSE_DEBUG") == "1" {
+		// 输出到控制台（带时间戳）
+		fmt.Printf("[sse-debug] %s %s\n", time.Now().Format("15:04:05.000"), msg)
+	}
 	sseDebugMu.Lock()
 	defer sseDebugMu.Unlock()
 	if sseDebugFile == nil {
