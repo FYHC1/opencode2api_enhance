@@ -2136,6 +2136,21 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 全流程调用日志：记录每个请求的决策链（网关模式下）
+	startTime := time.Now()
+	callRec := CallRecord{
+		ReqID:     getReqID(r.Context()),
+		TS:        time.Now().Format(time.RFC3339),
+		Path:      r.URL.Path,
+		Model:     req.Model,
+		Stream:    req.Stream,
+		RouteMode: routeMode,
+		Status:    "ok",
+	}
+	if callRec.ReqID == "" {
+		callRec.ReqID = "req_" + randomString(12)
+	}
+
 	// 多模态路由：检测到图片时转发到配置的上游
 
 	req.Messages = fixToolCallGaps(req.Messages)
@@ -2151,7 +2166,12 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 
 	if req.Stream {
 		upResp, status, _, proxyAddr, err := callOpenCodeAPIStream(upstreamBody, req.Model, auth)
+		callRec.Nodes = append(callRec.Nodes, proxyAddr)
 		if err != nil || status < 200 || status >= 300 {
+			callRec.Status = "fail"
+			callRec.ErrMsg = fmt.Sprintf("upstream status %d: %v", status, err)
+			callRec.Events = append(callRec.Events, CallEvent{Type: "upstream_error", Node: proxyAddr, Detail: callRec.ErrMsg, At: time.Now()})
+			recordCall(callRec)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(status)
 			if upResp != nil {
@@ -2164,6 +2184,7 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 			json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"message": "upstream error", "type": "upstream_error"}})
 			return
 		}
+		callRec.Events = append(callRec.Events, CallEvent{Type: "connect_ok", Node: proxyAddr, Detail: "connected", At: time.Now()})
 		defer upResp.Close()
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
@@ -2184,6 +2205,11 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 				if f, ok := w.(http.Flusher); ok {
 					f.Flush()
 				}
+				callRec.Status = "fail"
+				callRec.ErrMsg = "stream read error: " + err.Error()
+				callRec.DurationMS = time.Since(startTime).Milliseconds()
+				callRec.Events = append(callRec.Events, CallEvent{Type: "stream_error", Node: proxyAddr, Detail: callRec.ErrMsg, At: time.Now()})
+				recordCall(callRec)
 				return
 			}
 			if doneSeen {
@@ -2223,12 +2249,23 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 			if tt > 0 {
 				recordTokenUsage(req.Model, int64(pt), int64(ct), int64(tt), proxyAddr)
 			}
+			callRec.PromptTok = int64(pt)
+			callRec.CompletionTok = int64(ct)
 		}
+		callRec.DurationMS = time.Since(startTime).Milliseconds()
+		callRec.Events = append(callRec.Events, CallEvent{Type: "complete", Node: proxyAddr, Detail: "done", At: time.Now()})
+		recordCall(callRec)
 		return
 	}
 
 	respBody, status, _, proxyAddr, err := callOpenCodeAPI(upstreamBody, req.Model, auth)
+	callRec.Nodes = append(callRec.Nodes, proxyAddr)
 	if err != nil || status < 200 || status >= 300 {
+		callRec.Status = "fail"
+		callRec.ErrMsg = fmt.Sprintf("upstream status %d: %v", status, err)
+		callRec.DurationMS = time.Since(startTime).Milliseconds()
+		callRec.Events = append(callRec.Events, CallEvent{Type: "upstream_error", Node: proxyAddr, Detail: callRec.ErrMsg, At: time.Now()})
+		recordCall(callRec)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		if len(respBody) > 0 {
@@ -2253,8 +2290,13 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 			if tt > 0 {
 				recordTokenUsage(req.Model, int64(pt), int64(ct), int64(tt), proxyAddr)
 			}
+			callRec.PromptTok = int64(pt)
+			callRec.CompletionTok = int64(ct)
 		}
 	}
+	callRec.DurationMS = time.Since(startTime).Milliseconds()
+	callRec.Events = append(callRec.Events, CallEvent{Type: "complete", Node: proxyAddr, Detail: "done", At: time.Now()})
+	recordCall(callRec)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	w.Write(outBody)
