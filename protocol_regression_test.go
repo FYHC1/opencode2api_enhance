@@ -68,7 +68,7 @@ func TestResponsesStreamLengthEndsIncompleteAndFunctionDoneHasName(t *testing.T)
 	}, "\n")
 	rr := httptest.NewRecorder()
 	resp := &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(upstream)), Header: make(http.Header)}
-	responsesStreamHandler(rr, nil, resp, "m", "m", true, nil, nil, ResponsesAPIRequest{})
+	responsesStreamHandler(rr, nil, resp, "m", "m", true, nil, nil, ResponsesAPIRequest{}, "")
 	out := rr.Body.String()
 	if !strings.Contains(out, "event: response.incomplete") || strings.Contains(out, "event: response.completed") {
 		t.Fatalf("wrong terminal event:\n%s", out)
@@ -103,7 +103,7 @@ func TestAnthropicStreamKeepsParallelToolArgumentDeltasOnTheirOwnBlocks(t *testi
 		`data: [DONE]`, "",
 	}, "\n")
 	rr := httptest.NewRecorder()
-	claudeStreamHandler(rr, io.NopCloser(strings.NewReader(upstream)), "m", false)
+	claudeStreamHandler(rr, io.NopCloser(strings.NewReader(upstream)), "m", false, "")
 
 	var starts, deltas []sseEvent
 	for _, event := range parseSSEEvents(t, rr.Body.String()) {
@@ -142,7 +142,7 @@ func TestResponsesStreamAllocatesUniqueIndicesWhenToolPrecedesText(t *testing.T)
 		`data: [DONE]`, "",
 	}, "\n")
 	rr := httptest.NewRecorder()
-	responsesStreamHandler(rr, nil, &http.Response{Body: io.NopCloser(strings.NewReader(upstream))}, "m", "m", false, nil, nil, ResponsesAPIRequest{})
+	responsesStreamHandler(rr, nil, &http.Response{Body: io.NopCloser(strings.NewReader(upstream))}, "m", "m", false, nil, nil, ResponsesAPIRequest{}, "")
 	var added []map[string]any
 	for _, block := range strings.Split(rr.Body.String(), "\n\n") {
 		if !strings.HasPrefix(block, "event: response.output_item.added") {

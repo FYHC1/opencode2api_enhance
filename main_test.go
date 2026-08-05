@@ -201,7 +201,7 @@ func TestCallOpenCodeAPIRetries4xxAndClosesConnectionBeforeRetry(t *testing.T) {
 			)
 			if tt.stream {
 				var respBody io.ReadCloser
-				respBody, status, _, err = callOpenCodeAPIStream([]byte(tt.requestBody), "primary-model", UpstreamAuth{Mode: AuthRoutePublic})
+				respBody, status, _, _, err = callOpenCodeAPIStream([]byte(tt.requestBody), "primary-model", UpstreamAuth{Mode: AuthRoutePublic})
 				if respBody != nil {
 					defer respBody.Close()
 				}
@@ -209,7 +209,7 @@ func TestCallOpenCodeAPIRetries4xxAndClosesConnectionBeforeRetry(t *testing.T) {
 					body, err = io.ReadAll(respBody)
 				}
 			} else {
-				body, status, _, err = callOpenCodeAPI([]byte(tt.requestBody), "primary-model", UpstreamAuth{Mode: AuthRoutePublic})
+				body, status, _, _, err = callOpenCodeAPI([]byte(tt.requestBody), "primary-model", UpstreamAuth{Mode: AuthRoutePublic})
 			}
 			if err != nil {
 				t.Fatalf("upstream call error = %v", err)
@@ -254,7 +254,7 @@ func TestCallOpenCodeAPIFallbackKeepsOriginalGoEndpoint(t *testing.T) {
 			body := []byte(`{"model":"go-only-model","messages":[]}`)
 			if tt.stream {
 				body = []byte(`{"model":"go-only-model","messages":[],"stream":true}`)
-				respBody, status, _, err := callOpenCodeAPIStream(body, "go-only-model", auth)
+				respBody, status, _, _, err := callOpenCodeAPIStream(body, "go-only-model", auth)
 				if respBody != nil {
 					defer respBody.Close()
 				}
@@ -265,7 +265,7 @@ func TestCallOpenCodeAPIFallbackKeepsOriginalGoEndpoint(t *testing.T) {
 					t.Fatalf("callOpenCodeAPIStream() status = %d, want %d", status, http.StatusOK)
 				}
 			} else {
-				_, status, _, err := callOpenCodeAPI(body, "go-only-model", auth)
+				_, status, _, _, err := callOpenCodeAPI(body, "go-only-model", auth)
 				if err != nil {
 					t.Fatalf("callOpenCodeAPI() error = %v", err)
 				}
@@ -296,7 +296,7 @@ func TestCallOpenCodeAPIExhausted4xxReturnsLastUpstreamResponse(t *testing.T) {
 		},
 	})
 
-	body, status, header, err := callOpenCodeAPI([]byte(`{"model":"primary-model","messages":[]}`), "primary-model", UpstreamAuth{Mode: AuthRoutePublic})
+	body, status, header, _, err := callOpenCodeAPI([]byte(`{"model":"primary-model","messages":[]}`), "primary-model", UpstreamAuth{Mode: AuthRoutePublic})
 	if err == nil {
 		t.Fatal("callOpenCodeAPI() error = nil, want upstream error")
 	}

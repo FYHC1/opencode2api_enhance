@@ -967,6 +967,16 @@ type AppConfig struct {
 	ActiveSocks5         string            `json:"active_socks5,omitempty"`
 	// RouteMode 网关/代理池路由模式：failover（默认，成功不动游标，失败才切换）| round_robin
 	RouteMode string `json:"route_mode,omitempty"`
+
+	// 流内超时切换配置（毫秒；区间随机，防上游识别为定时扫描）
+	TTFTMinMS    int `json:"timeout_ttft_min_ms,omitempty"`
+	TTFTMaxMS    int `json:"timeout_ttft_max_ms,omitempty"`
+	SilenceMinMS int `json:"timeout_silence_min_ms,omitempty"`
+	SilenceMaxMS int `json:"timeout_silence_max_ms,omitempty"`
+	ProbeMin     int `json:"failover_probe_min,omitempty"`
+	ProbeMax     int `json:"failover_probe_max,omitempty"`
+	// 调用日志保留上限（条）
+	CallLogMax int `json:"call_log_max,omitempty"`
 }
 
 // ======================== Claude Messages API 类型 ========================
@@ -1110,6 +1120,7 @@ func applyConfig(cfg AppConfig) {
 	if cfg.RouteMode == "round_robin" || cfg.RouteMode == "failover" {
 		routeMode = cfg.RouteMode
 	}
+	setTimeoutConfigFromApp(cfg)
 
 
 	socks5Mu.Lock()
@@ -5082,6 +5093,8 @@ func main() {
 
 	loadTokenStats()
 	loadNodeStats()
+	initCallLog()
+	callLogEnabled = gatewayMode // 仅网关进程记录全流程日志（对齐 node_stats 语义）
 	slog.Info("config loaded", "path", configPath)
 	initOCSession()
 	models, err := fetchModels()
