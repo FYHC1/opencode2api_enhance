@@ -203,6 +203,15 @@ func TestStreamWithResumeNormal(t *testing.T) {
 	if !strings.Contains(rr.Body.String(), "[DONE]") {
 		t.Fatalf("expected [DONE] in output")
 	}
+	// SSE 事件必须以 \n\n 分隔（严格的 OpenAI 兼容客户端要求事件间空行）
+	outStr := rr.Body.String()
+	if !strings.Contains(outStr, "\n\n") {
+		t.Fatalf("SSE events must be separated by \\n\\n, got raw: %q", outStr)
+	}
+	// data 行后必须紧跟空行：data: {...}\n\n
+	if !strings.Contains(outStr, "}\n\n") {
+		t.Fatalf("expected '}\\n\\n' between events, got: %q", outStr)
+	}
 }
 
 // buildResumeBody 对非法 JSON 应原样返回
