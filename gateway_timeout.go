@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -665,4 +666,37 @@ func proxyDisplayName(addr string) string {
 		}
 	}
 	return addr
+}
+
+// watchParentProcess 检测父进程（tauri 主程序）是否存活：
+// 若父进程死亡（被 Ctrl+C 强杀/崩溃/任务管理器结束），网关自动退出，
+// 释放 18081 端口，避免形成孤儿进程后台常驻。
+// 父进程 PID 由 Rust 启动时通过环境变量 OPCODE2API_PARENT_PID 传入。
+// 未设置或非法时静默跳过（如直连实例/手动启动）。
+func watchParentProcess() {
+	pidStr := os.Getenv("OPCODE2API_PARENT_PID")
+	if pidStr == "" {
+		return
+	}
+	pid, err := strconv.Atoi(pidStr)
+	if err != nil || pid <= 0 {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			proc, err := os.FindProcess(pid)
+			if err != nil {
+				slog.Warn("parent process lookup failed, exiting gateway", "pid", pid)
+				os.Exit(0)
+			}
+			// Signal(0) 探测进程是否存活（Windows 下返回错误表示进程已退出）
+			if err := proc.Signal(syscall.Signal(0)); err != nil {
+				slog.Warn("parent process exited, gateway shutting down", "pid", pid)
+				closeSSEDebug()
+				os.Exit(0)
+			}
+		}
+	}()
 }
