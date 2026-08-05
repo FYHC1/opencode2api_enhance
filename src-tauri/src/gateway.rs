@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-pub const UNIFIED_GATEWAY_PORT: u16 = 18081;
+pub const UNIFIED_GATEWAY_PORT: u16 = 18082;
 const UNIFIED_GATEWAY_KEY: &str = "sk-unified-local";
 
 #[derive(Debug, Clone, Serialize)]
