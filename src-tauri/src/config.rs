@@ -22,6 +22,16 @@ pub struct Config {
 
 impl Config {
     pub fn config_dir() -> PathBuf {
+        // 环境变量优先：OPCODE2API_DATA_DIR 可指向完全隔离的数据目录
+        // （调试版与正式版共用 %APPDATA%\opencode2api-manager 会导致实例池/配置/runtime 互相干扰，
+        //   调试版启动时由 lib.rs 自动设置独立目录实现隔离）
+        if let Ok(dir) = std::env::var("OPCODE2API_DATA_DIR") {
+            if !dir.is_empty() {
+                let p = PathBuf::from(dir);
+                fs::create_dir_all(&p).ok();
+                return p;
+            }
+        }
         let dir = dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("opencode2api-manager");
@@ -166,5 +176,24 @@ mod tests {
         let mut config = Config::default();
         let result = config.set("unknown_key", "value");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_config_dir_env_override() {
+        // 保存原环境变量
+        let orig = env::var("OPCODE2API_DATA_DIR").ok();
+        let test_dir = env::temp_dir().join("opencode2api-manager-env-test");
+        // 设置环境变量，验证 config_dir 指向它
+        unsafe { env::set_var("OPCODE2API_DATA_DIR", &test_dir) };
+        let dir = Config::config_dir();
+        assert_eq!(dir, test_dir);
+        assert!(dir.exists(), "隔离目录应被创建");
+        // 清理
+        unsafe { env::remove_var("OPCODE2API_DATA_DIR") };
+        match orig {
+            Some(v) => unsafe { env::set_var("OPCODE2API_DATA_DIR", v) },
+            None => {}
+        }
+        fs::remove_dir_all(&test_dir).ok();
     }
 }

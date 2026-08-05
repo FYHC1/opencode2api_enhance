@@ -22,6 +22,19 @@ pub struct AppState {
 
 /// 桌面入口：释放内嵌二进制 → 构建 AppState → 启动 Tauri（托盘常驻）
 pub fn run() {
+    // 调试构建默认隔离数据目录：与正式版（%APPDATA%\opencode2api-manager）
+    // 分开，避免实例池/配置/runtime 互相干扰。可用 OPCODE2API_DATA_DIR 显式覆盖。
+    if cfg!(debug_assertions) && std::env::var("OPCODE2API_DATA_DIR").is_err() {
+        if let Some(base) = dirs::config_dir() {
+            // 单线程启动阶段设置环境变量，安全
+            unsafe {
+                std::env::set_var(
+                    "OPCODE2API_DATA_DIR",
+                    base.join("opencode2api-manager-dev"),
+                );
+            }
+        }
+    }
     // 启动前释放内嵌子程序到 exe 旁 bin/ 目录
     let (_, binary_dir, _) = commands::manager_paths();
     match embed::ensure_binaries(&binary_dir) {
