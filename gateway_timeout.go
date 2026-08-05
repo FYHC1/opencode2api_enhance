@@ -205,6 +205,38 @@ var (
 	callLogEnabled = true // 仅网关/代理池模式启用（避免直连实例产生无人读取的日志）
 )
 
+// ======================== SSE 调试（诊断 JSON 拼接） ========================
+// 临时诊断工具：把流式转发收到的原始行与转发行写入 sse_debug.log，
+// 便于定位 "Unexpected non-whitespace character after JSON" 的拼接现场。
+var (
+	sseDebugMu   sync.Mutex
+	sseDebugFile *os.File
+)
+
+// sseDebugf 追加一行到 sse_debug.log（失败静默）
+func sseDebugf(format string, args ...any) {
+	sseDebugMu.Lock()
+	defer sseDebugMu.Unlock()
+	if sseDebugFile == nil {
+		f, err := os.OpenFile("sse_debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			return
+		}
+		sseDebugFile = f
+	}
+	fmt.Fprintf(sseDebugFile, time.Now().Format("15:04:05.000")+" "+format+"\n", args...)
+}
+
+// closeSSEDebug 关闭调试文件（进程退出时调用）
+func closeSSEDebug() {
+	sseDebugMu.Lock()
+	defer sseDebugMu.Unlock()
+	if sseDebugFile != nil {
+		sseDebugFile.Close()
+		sseDebugFile = nil
+	}
+}
+
 // initCallLog 在进程启动时加载历史并启用落盘
 func initCallLog() {
 	loaded, err := LoadCallLogFromFile(callLogPath)
@@ -276,6 +308,10 @@ type resumeStreamResult struct {
 //   - keepReasoning: 是否保留 reasoning 内容
 //   - callRec: 调用日志记录（追加事件）
 func streamWithResume(w http.ResponseWriter, r *http.Request, upstreamBody []byte, model string, auth UpstreamAuth, initial io.ReadCloser, keepReasoning bool, callRec *CallRecord) resumeStreamResult {
+	reqID := ""
+	if callRec != nil {
+		reqID = callRec.ReqID
+	}
 	maxResume := maxRouteRetries() // 复用现有重试上限
 	if maxResume > 3 {
 		maxResume = 3 // 续写重试上限，避免无限循环
@@ -285,6 +321,7 @@ func streamWithResume(w http.ResponseWriter, r *http.Request, upstreamBody []byt
 	accumulated := ""
 	// 已有部分内容时，通过续写 body 重连
 	currentBody := upstreamBody
+	sseDebugf("[%s] streamWithResume start, model=%s, keepReasoning=%v", reqID, model, keepReasoning)
 
 	// 当前活动的上游响应；attempt 0 用 initial，后续用重连结果
 	upResp := initial
@@ -368,11 +405,13 @@ func streamWithResume(w http.ResponseWriter, r *http.Request, upstreamBody []byt
 					break readLoop
 				}
 				line := strings.TrimSpace(resLine.line)
+				sseDebugf("[%s] RAW<< %q", reqID, resLine.line)
 				if line == "" {
 					continue
 				}
 				if strings.HasPrefix(line, "data: [DONE]") || line == "[DONE]" {
 					doneSeen = true
+					sseDebugf("[%s] DONE>> %q", reqID, "data: [DONE]\n\n")
 					w.Write([]byte("data: [DONE]\n\n"))
 					flushWriter(w)
 					interrupted = false
@@ -380,6 +419,7 @@ func streamWithResume(w http.ResponseWriter, r *http.Request, upstreamBody []byt
 				}
 				if !strings.HasPrefix(line, "data: ") {
 					// 非 data 行原样转发（如 event:/id:）
+					sseDebugf("[%s] META>> %q", reqID, resLine.line)
 					w.Write([]byte(resLine.line))
 					if f, ok := w.(http.Flusher); ok {
 						f.Flush()
@@ -405,6 +445,8 @@ func streamWithResume(w http.ResponseWriter, r *http.Request, upstreamBody []byt
 							}
 						}
 					}
+				} else {
+					sseDebugf("[%s] !! JSON parse fail on data payload: %q", reqID, dataStr)
 				}
 				if !gotFirst {
 					gotFirst = true
@@ -416,6 +458,7 @@ func streamWithResume(w http.ResponseWriter, r *http.Request, upstreamBody []byt
 						lastUsage = chunkUsage
 					}
 				}
+				sseDebugf("[%s] FWD>> %q", reqID, out)
 				w.Write([]byte(out))
 				w.Write([]byte("\n"))
 				if f, ok := w.(http.Flusher); ok {

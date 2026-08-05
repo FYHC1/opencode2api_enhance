@@ -32,7 +32,7 @@
 ```
 前端 LogsPage(React) ──invoke──▶ Rust get_call_log ──读──▶ call_log.jsonl (Go 落盘)
                                                               ▲
-客户端 ──▶ 统一网关 Go 进程 18080 ──(超时计时+切换在 Go)──▶ 某实例 sing-box SOCKS5 出口 ──▶ opencode 上游
+客户端 ──▶ 统一网关 Go 进程 18081 ──(超时计时+切换在 Go)──▶ 某实例 sing-box SOCKS5 出口 ──▶ opencode 上游
                                                               │
                                                               └──▶ call_log.jsonl 每事件一行
 ```
