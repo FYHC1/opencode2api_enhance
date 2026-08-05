@@ -1,3 +1,4 @@
+pub mod call_log;
 pub mod clash_yaml;
 pub mod commands;
 pub mod config;
@@ -83,6 +84,7 @@ pub fn run() {
             commands::get_binaries_info,
 
             commands::get_stats,
+            commands::get_call_log,
             commands::hide_to_tray,
             commands::toggle_maximize,
             commands::quit_app,

@@ -1219,6 +1219,16 @@ pub fn get_stats() -> Result<StatsSummary, String> {
     Ok(aggregate_stats(&runtime_dir, &known_names, &port_to_name))
 }
 
+/// 读取统一网关全流程调用日志（call_log.jsonl），返回最新 N 条。
+/// 文件位于 runtime/_unified-gateway/call_log.jsonl（Go 网关进程 cwd 决定）。
+#[tauri::command]
+pub fn get_call_log(limit: Option<usize>) -> Vec<crate::call_log::CallLogRecord> {
+    let (_, _, runtime_dir) = manager_paths();
+    let path = runtime_dir.join("_unified-gateway").join("call_log.jsonl");
+    let max = limit.unwrap_or(5000).clamp(1, 50000);
+    crate::call_log::read_call_log(&path, max)
+}
+
 /// 聚合逻辑（独立函数便于单元测试）：遍历 runtime_dir 各子目录读取 stats.json。
 /// port_to_name 提供 sing-box 端口 → 实例名映射，用于把统一网关 node_stats.json
 /// 中的 SOCKS5 出口地址（127.0.0.1:281xx）解析为实例名。
