@@ -5175,10 +5175,6 @@ func main() {
 	loadNodeStats()
 	initCallLog()
 	callLogEnabled = gatewayMode // 仅网关进程记录全流程日志（对齐 node_stats 语义）
-	// 父进程存活守护：tauri 被强杀（Ctrl+C/崩溃）时网关自动退出，释放端口，避免孤儿进程
-	if gatewayMode {
-		watchParentProcess()
-	}
 	slog.Info("config loaded", "path", configPath)
 	initOCSession()
 	models, err := fetchModels()

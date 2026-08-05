@@ -9,11 +9,9 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"os"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -689,42 +687,4 @@ func proxyDisplayName(addr string) string {
 		}
 	}
 	return addr
-}
-
-// watchParentProcess 检测父进程（tauri 主程序）是否存活：
-// 若父进程死亡（被 Ctrl+C 强杀/崩溃/任务管理器结束），网关自动退出，
-// 释放 18080 端口，避免形成孤儿进程后台常驻。
-// 父进程 PID 由 Rust 启动时通过环境变量 OPCODE2API_PARENT_PID 传入。
-// 未设置或非法时静默跳过（如直连实例/手动启动）。
-func watchParentProcess() {
-	pidStr := os.Getenv("OPCODE2API_PARENT_PID")
-	if pidStr == "" {
-		return
-	}
-	pid, err := strconv.Atoi(pidStr)
-	if err != nil || pid <= 0 {
-		return
-	}
-	go func() {
-		ticker := time.NewTicker(2 * time.Second)
-		defer ticker.Stop()
-		for range ticker.C {
-			proc, err := os.FindProcess(pid)
-			if err != nil {
-				// Windows：FindProcess 通过 OpenProcess 探测，PID 不存在时返回错误
-				slog.Warn("parent process lookup failed, exiting gateway", "pid", pid)
-				closeSSEDebug()
-				os.Exit(0)
-			}
-			// 非 Windows：Signal(0) 探测存活（Windows 下 Signal(0) 恒返回 EWINDOWS 错误，
-			// 不可用于存活判断，已由上方 FindProcess 覆盖）
-			if runtime.GOOS != "windows" {
-				if err := proc.Signal(syscall.Signal(0)); err != nil {
-					slog.Warn("parent process exited, gateway shutting down", "pid", pid)
-					closeSSEDebug()
-					os.Exit(0)
-				}
-			}
-		}
-	}()
 }

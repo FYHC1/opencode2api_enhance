@@ -7,9 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -391,48 +389,5 @@ func TestSuccessClearsBadPool(t *testing.T) {
 	socks5HealthMu.Unlock()
 	if st.badReason != "" {
 		t.Fatalf("2xx should clear bad pool, got %q", st.badReason)
-	}
-}
-
-// watchParentProcess 生命周期：父进程存活时网关不退出；父进程消失后网关退出。
-// 用真实子进程 + OPCODE2API_PARENT_PID 验证（C1 回归测试：Windows 上 Signal(0) 不可用）。
-func TestWatchParentProcessLifecycle(t *testing.T) {
-	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
-		// 子进程：模拟网关，启动 watchParentProcess 后 sleep
-		watchParentProcess()
-		time.Sleep(10 * time.Second)
-		os.Exit(0)
-	}
-
-	// 启动子进程，父进程 = 当前测试进程（存活）
-	exe, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command(exe, "-test.run=TestWatchParentProcessLifecycle")
-	cmd.Env = append(os.Environ(), "GO_WANT_HELPER_PROCESS=1")
-	// 不设 OPCODE2API_PARENT_PID（父进程未知）→ 应直接跳过，子进程应存活
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	// 子进程应存活（父进程存在）
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-	select {
-	case <-done:
-		t.Fatal("child exited unexpectedly (parent alive)")
-	case <-time.After(3 * time.Second):
-		// 存活 3s 即认为通过
-	}
-	_ = cmd.Process.Kill()
-
-	// Windows 上 FindProcess 对不存在 PID 应报错（C1 修复依赖此行为）
-	if runtime.GOOS == "windows" {
-		_, err := os.FindProcess(99999999)
-		if err == nil {
-			t.Log("note: FindProcess did not error for invalid pid (may vary by platform)")
-		} else {
-			t.Logf("FindProcess invalid pid errors as expected: %v", err)
-		}
 	}
 }

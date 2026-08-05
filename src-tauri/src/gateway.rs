@@ -132,9 +132,6 @@ impl GatewayManager {
             // 工作目录设为网关专属目录：Go 核心把 stats.json 写入当前工作目录，
             // 不设置则落到应用 exe 目录，统计界面（只扫 runtime/）读不到。
             .current_dir(self.gateway_dir())
-            // 父进程 PID：Go 网关据此检测 tauri 是否存活，
-            // 若 tauri 被强杀（Ctrl+C/崩溃），网关自动退出，释放 18081 端口，避免孤儿进程
-            .env("OPCODE2API_PARENT_PID", std::process::id().to_string())
             .arg("-port")
             .arg(UNIFIED_GATEWAY_PORT.to_string())
             .arg("-config")
