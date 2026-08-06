@@ -88,8 +88,23 @@ async fn health_handler() -> impl IntoResponse {
 
 async fn list_instances_handler(
     State(core): State<Arc<AppCore>>,
+    Query(query): Query<RefreshQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    if let Some(raw) = query.refresh {
+        let names: Vec<String> = serde_json::from_str(&raw).unwrap_or_default();
+        let core2 = core.clone();
+        let result = tokio::task::spawn_blocking(move || commands::refresh_states_core(&core2, names))
+            .await
+            .map_err(|e| err(format!("刷新实例任务失败: {}", e)))?
+            .map_err(err)?;
+        return Ok(to_json(result));
+    }
     Ok(to_json(commands::list_instances_core(&core).map_err(err)?))
+}
+
+#[derive(Deserialize)]
+struct RefreshQuery {
+    refresh: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -166,6 +181,7 @@ struct BatchPayload {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct BatchAddPayload {
     #[serde(default)]
     nodes: Vec<commands::BatchAddItem>,
@@ -354,6 +370,7 @@ async fn port_check_handler(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ScanStartPayload {
     nodes: Option<Vec<String>>,
     api_port: Option<u16>,
