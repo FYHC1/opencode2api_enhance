@@ -43,6 +43,7 @@ fn default_password() -> String {
 
 fn lock_manager<'a>(state: &'a tauri::State<'a, AppState>) -> Result<std::sync::MutexGuard<'a, InstanceManager>, String> {
     state
+        .core
         .manager
         .lock()
         .map_err(|_| "状态锁失败".to_string())
@@ -53,6 +54,7 @@ fn lock_manager<'a>(state: &'a tauri::State<'a, AppState>) -> Result<std::sync::
 /// 同步统一网关：根据「运行中且 join_gateway=true」的实例集合更新网关池。
 pub fn sync_gateway(state: &tauri::State<'_, AppState>) {
     let instances = state
+        .core
         .manager
         .lock()
         .map(|mut mgr| {
@@ -60,7 +62,7 @@ pub fn sync_gateway(state: &tauri::State<'_, AppState>) {
             mgr.list_instances().to_vec()
         })
         .unwrap_or_default();
-    if let Ok(mut gateway) = state.gateway.lock() {
+    if let Ok(mut gateway) = state.core.gateway.lock() {
         if let Err(e) = gateway.sync(&instances) {
             eprintln!("统一网关同步失败: {}", e);
         }
@@ -72,7 +74,7 @@ pub fn gateway_status(
     state: tauri::State<'_, AppState>,
 ) -> Result<crate::gateway::GatewayStatus, String> {
 let total_instances = state
-        .manager
+        .core.manager
         .lock()
         .map_err(|_| "状态锁失败".to_string())?
         .list_instances()
@@ -80,7 +82,7 @@ let total_instances = state
         .filter(|i| i.join_gateway)
         .count();
     let mut gateway = state
-        .gateway
+        .core.gateway
         .lock()
         .map_err(|_| "网关锁失败".to_string())?;
     Ok(gateway.status(total_instances))
@@ -97,13 +99,13 @@ pub fn gateway_set_route_mode(
         return Err("路由模式仅支持 smart / failover / round_robin".to_string());
     }
     let instances = state
-        .manager
+        .core.manager
         .lock()
         .map_err(|_| "状态锁失败".to_string())?
         .list_instances()
         .to_vec();
     let mut gateway = state
-        .gateway
+        .core.gateway
         .lock()
         .map_err(|_| "网关锁失败".to_string())?;
     // 记录模式供下次 sync 使用；通过 stop+sync 让配置重写并重启进程
@@ -118,7 +120,7 @@ pub fn gateway_set_route_mode(
 #[tauri::command]
 pub fn gateway_stop(state: tauri::State<'_, AppState>) -> Result<(), String> {
     let mut gateway = state
-        .gateway
+        .core.gateway
         .lock()
         .map_err(|_| "网关锁失败".to_string())?;
     gateway.stop();
@@ -139,7 +141,7 @@ pub fn set_join_gateway(
     mgr.save_state().map_err(|e| e.to_string())?;
     let instances = mgr.list_instances().to_vec();
     drop(mgr);
-    if let Ok(mut gateway) = state.gateway.lock() {
+    if let Ok(mut gateway) = state.core.gateway.lock() {
         gateway
             .sync(&instances)
             .map_err(|e| format!("同步网关失败: {}", e))?;
@@ -279,7 +281,7 @@ fn gen_sk_key() -> String {
 /// 不依赖状态记录——即使状态因异常退出显示为 Stopped，残留进程也会被清理，
 /// 确保实例占用的端口（API 端口 / sing-box 端口）在软件退出后全部释放。
 pub fn stop_all_instances(state: &tauri::State<'_, AppState>) {
-    let Ok(mut mgr) = state.manager.lock() else { return };
+    let Ok(mut mgr) = state.core.manager.lock() else { return };
     let _ = mgr.load();
     let names: Vec<String> = mgr
         .list_instances()
@@ -311,7 +313,7 @@ pub fn data_clean(state: tauri::State<'_, AppState>, level: u8) -> Result<(), St
     }
 
     // 先停后清：关闭统一网关 + 所有实例进程（含状态异常但残留的 pid）
-    if let Ok(mut gateway) = state.gateway.lock() {
+    if let Ok(mut gateway) = state.core.gateway.lock() {
         gateway.stop();
     }
     stop_all_instances(&state);
@@ -322,7 +324,7 @@ pub fn data_clean(state: tauri::State<'_, AppState>, level: u8) -> Result<(), St
     clean_data_at(&config_dir, level)?;
 
     // 清空管理器内存里的实例状态，保证前端刷新即见空
-    if let Ok(mut mgr) = state.manager.lock() {
+    if let Ok(mut mgr) = state.core.manager.lock() {
         mgr.instances.clear();
         let _ = mgr.load(); // 重新读取 instances.json（level>=2 时为 []，level=1 时仍为原列表）
     }
@@ -527,7 +529,7 @@ pub fn remove_instance(state: tauri::State<'_, AppState>, name: String) -> Resul
     let instances = mgr.list_instances().to_vec();
     drop(mgr);
     // 同步网关：移除的实例若在池中，需从代理池剔除
-    if let Ok(mut gateway) = state.gateway.lock() {
+    if let Ok(mut gateway) = state.core.gateway.lock() {
         gateway
             .sync(&instances)
             .map_err(|e| format!("同步网关失败: {}", e))?;
@@ -539,8 +541,8 @@ pub fn remove_instance(state: tauri::State<'_, AppState>, name: String) -> Resul
 
 #[tauri::command]
 pub async fn start_instance(state: tauri::State<'_, AppState>, name: String) -> Result<(), String> {
-    let manager = Arc::clone(&state.manager);
-    let gateway = Arc::clone(&state.gateway);
+    let manager = Arc::clone(&state.core.manager);
+    let gateway = Arc::clone(&state.core.gateway);
     tauri::async_runtime::spawn_blocking(move || {
         // 短锁：标记 Starting 并取出实例快照
         let (instance, binary_dir, runtime_dir) = {
@@ -578,8 +580,8 @@ pub async fn start_instance(state: tauri::State<'_, AppState>, name: String) -> 
 
 #[tauri::command]
 pub async fn stop_instance(state: tauri::State<'_, AppState>, name: String) -> Result<(), String> {
-    let manager = Arc::clone(&state.manager);
-    let gateway = Arc::clone(&state.gateway);
+    let manager = Arc::clone(&state.core.manager);
+    let gateway = Arc::clone(&state.core.gateway);
     tauri::async_runtime::spawn_blocking(move || {
         // 短锁：标记 Stopping 并取出 PID
         let (pid, singbox_pid) = {
@@ -618,7 +620,7 @@ pub async fn test_instance(
     state: tauri::State<'_, AppState>,
     name: String,
 ) -> Result<crate::instance::TestResult, String> {
-    let manager = Arc::clone(&state.manager);
+    let manager = Arc::clone(&state.core.manager);
     tauri::async_runtime::spawn_blocking(move || {
 let mut mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
         let _ = mgr.load();
@@ -863,8 +865,8 @@ pub async fn batch_start(
     state: tauri::State<'_, AppState>,
     names: Vec<String>,
 ) -> Result<BatchOpResult, String> {
-    let manager = Arc::clone(&state.manager);
-    let gateway = Arc::clone(&state.gateway);
+    let manager = Arc::clone(&state.core.manager);
+    let gateway = Arc::clone(&state.core.gateway);
     tauri::async_runtime::spawn_blocking(move || {
         let mut unique_names = Vec::new();
         let mut seen = HashSet::new();
@@ -946,8 +948,8 @@ pub async fn batch_stop(
     state: tauri::State<'_, AppState>,
     names: Vec<String>,
 ) -> Result<BatchOpResult, String> {
-    let manager = Arc::clone(&state.manager);
-    let gateway = Arc::clone(&state.gateway);
+    let manager = Arc::clone(&state.core.manager);
+    let gateway = Arc::clone(&state.core.gateway);
     tauri::async_runtime::spawn_blocking(move || {
         let mut unique_names = Vec::new();
         let mut seen = HashSet::new();
@@ -1078,8 +1080,8 @@ fn force_free_port(port: u16) -> Vec<u32> {
 /// 5. 同步网关（自动拉起总端口）
 #[tauri::command]
 pub async fn restart_pool(state: tauri::State<'_, AppState>) -> Result<RestartPoolResult, String> {
-    let manager = Arc::clone(&state.manager);
-    let gateway = Arc::clone(&state.gateway);
+    let manager = Arc::clone(&state.core.manager);
+    let gateway = Arc::clone(&state.core.gateway);
     tauri::async_runtime::spawn_blocking(move || {
         // 1) 停统一网关
         if let Ok(mut g) = gateway.lock() {
@@ -1213,8 +1215,8 @@ pub async fn batch_delete(
     state: tauri::State<'_, AppState>,
     names: Vec<String>,
 ) -> Result<BatchOpResult, String> {
-    let manager = Arc::clone(&state.manager);
-    let gateway = Arc::clone(&state.gateway);
+    let manager = Arc::clone(&state.core.manager);
+    let gateway = Arc::clone(&state.core.gateway);
     tauri::async_runtime::spawn_blocking(move || {
         let mut mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
         let _ = mgr.load();
@@ -1253,7 +1255,7 @@ fn rand_seed() -> u64 {
 /// 避免两套实例的 API/sing-box 端口（port 与 port+10000）冲突。
 #[tauri::command]
 pub async fn port_suggest(state: tauri::State<'_, AppState>) -> Result<u16, String> {
-    let manager = Arc::clone(&state.manager);
+    let manager = Arc::clone(&state.core.manager);
     tauri::async_runtime::spawn_blocking(move || {
         let mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
         let mut rng = rand_seed();
@@ -1292,7 +1294,7 @@ pub async fn port_check(
     if port < 1024 {
         return Err("端口需 >= 1024".to_string());
     }
-    let manager = Arc::clone(&state.manager);
+    let manager = Arc::clone(&state.core.manager);
     tauri::async_runtime::spawn_blocking(move || {
         let mut mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
         let _ = mgr.load();
@@ -1333,7 +1335,7 @@ pub fn scan_start(
     let timeout = timeout.unwrap_or(25);
     let filter = nodes.filter(|v| !v.is_empty());
 
-    match state.scan.start_scan(
+    match state.core.scan.start_scan(
         binary_dir,
         runtime_dir,
         password,
@@ -1342,20 +1344,20 @@ pub fn scan_start(
         filter,
         timeout,
     ) {
-        Ok(()) => Ok(state.scan.progress_snapshot()),
+        Ok(()) => Ok(state.core.scan.progress_snapshot()),
         Err(e) => Err(e.to_string()),
     }
 }
 
 #[tauri::command]
 pub fn scan_status(state: tauri::State<'_, AppState>) -> Result<crate::probe::ScanProgress, String> {
-    Ok(state.scan.progress_snapshot())
+    Ok(state.core.scan.progress_snapshot())
 }
 
 #[tauri::command]
 pub fn scan_stop(state: tauri::State<'_, AppState>) -> Result<crate::probe::ScanProgress, String> {
-    state.scan.request_stop();
-    Ok(state.scan.progress_snapshot())
+    state.core.scan.request_stop();
+    Ok(state.core.scan.progress_snapshot())
 }
 
 // ======================== 配置 ========================
@@ -1411,14 +1413,14 @@ pub fn config_set(
         // 先取实例快照并释放 manager 锁，再单独锁 gateway，避免与
         // batch_start/batch_stop 中 gateway→manager 的加锁顺序相反导致死锁。
         let instances = state
-            .manager
+            .core.manager
             .lock()
             .map(|mut mgr| {
                 let _ = mgr.load();
                 mgr.list_instances().to_vec()
             })
             .unwrap_or_default();
-        if let Ok(mut g) = state.gateway.lock() {
+        if let Ok(mut g) = state.core.gateway.lock() {
             let _ = g.sync(&instances);
         }
     }
