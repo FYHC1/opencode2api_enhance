@@ -1385,9 +1385,44 @@ pub fn config_get() -> Result<ConfigView, String> {
 }
 
 #[tauri::command]
-pub fn config_set(key: String, value: String) -> Result<(), String> {
+pub fn config_set(
+    state: tauri::State<'_, AppState>,
+    key: String,
+    value: String,
+) -> Result<(), String> {
     let mut cfg = Config::load().unwrap_or_default();
-    cfg.set(&key, &value).map_err(|e| e.to_string())
+    cfg.set(&key, &value).map_err(|e| e.to_string())?;
+
+    // 关键配置写入后，重新生成网关配置并让 Go 端热加载（无需重启网关）。
+    // 涉及网关行为的配置：前缀开关、路由超时区间、探测数、日志上限。
+    let gateway_related = matches!(
+        key.as_str(),
+        "show_node_prefix"
+            | "timeout_ttft_min_ms"
+            | "timeout_ttft_max_ms"
+            | "timeout_silence_min_ms"
+            | "timeout_silence_max_ms"
+            | "failover_probe_min"
+            | "failover_probe_max"
+            | "call_log_max"
+            | "route_mode"
+    );
+    if gateway_related {
+        // 先取实例快照并释放 manager 锁，再单独锁 gateway，避免与
+        // batch_start/batch_stop 中 gateway→manager 的加锁顺序相反导致死锁。
+        let instances = state
+            .manager
+            .lock()
+            .map(|mut mgr| {
+                let _ = mgr.load();
+                mgr.list_instances().to_vec()
+            })
+            .unwrap_or_default();
+        if let Ok(mut g) = state.gateway.lock() {
+            let _ = g.sync(&instances);
+        }
+    }
+    Ok(())
 }
 
 // ======================== 开机自启（Windows 注册表） ========================

@@ -235,7 +235,14 @@ impl GatewayManager {
         if self.ports != ports {
             self.ports = ports;
         }
-        if !self.reap_child() {
+        let running = self.reap_child();
+        if changed && running {
+            // 配置已变更且网关正在运行：Go 进程仅在启动时读取配置文件，
+            // 运行时不会重载。重启进程让新配置立即生效（如节点前缀开关、
+            // 路由超时区间等），避免「设置已保存但对话仍按旧值运行」。
+            self.stop_child();
+            self.start_child()?;
+        } else if !running {
             self.start_child()?;
         }
         self.refresh_models_async();
