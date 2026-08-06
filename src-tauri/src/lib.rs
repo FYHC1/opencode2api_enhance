@@ -2,6 +2,7 @@ pub mod call_log;
 pub mod clash_yaml;
 pub mod commands;
 pub mod config;
+pub mod core;
 pub mod embed;
 pub mod gateway;
 pub mod instance;
