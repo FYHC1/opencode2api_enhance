@@ -6,6 +6,7 @@ use crate::config::Config;
 use crate::instance::{no_window, Instance, InstanceManager};
 use crate::probe::{DEFAULT_PROBE_API_PORT, DEFAULT_PROBE_SOCKS_PORT};
 use crate::AppState;
+use crate::core::AppCore;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{HashSet, VecDeque};
@@ -52,9 +53,8 @@ fn lock_manager<'a>(state: &'a tauri::State<'a, AppState>) -> Result<std::sync::
 // ======================== 统一网关（F1） ========================
 
 /// 同步统一网关：根据「运行中且 join_gateway=true」的实例集合更新网关池。
-pub fn sync_gateway(state: &tauri::State<'_, AppState>) {
-    let instances = state
-        .core
+pub fn sync_gateway_core(core: &AppCore) {
+    let instances = core
         .manager
         .lock()
         .map(|mut mgr| {
@@ -62,91 +62,118 @@ pub fn sync_gateway(state: &tauri::State<'_, AppState>) {
             mgr.list_instances().to_vec()
         })
         .unwrap_or_default();
-    if let Ok(mut gateway) = state.core.gateway.lock() {
+    if let Ok(mut gateway) = core.gateway.lock() {
         if let Err(e) = gateway.sync(&instances) {
             eprintln!("统一网关同步失败: {}", e);
         }
     }
 }
 
-#[tauri::command]
-pub fn gateway_status(
-    state: tauri::State<'_, AppState>,
+pub fn sync_gateway(state: &tauri::State<'_, AppState>) {
+    sync_gateway_core(&state.core);
+}
+
+pub fn gateway_status_core(
+    core: &AppCore,
 ) -> Result<crate::gateway::GatewayStatus, String> {
-let total_instances = state
-        .core.manager
+    let total_instances = core
+        .manager
         .lock()
         .map_err(|_| "状态锁失败".to_string())?
         .list_instances()
         .iter()
         .filter(|i| i.join_gateway)
         .count();
-    let mut gateway = state
-        .core.gateway
+    let mut gateway = core
+        .gateway
         .lock()
         .map_err(|_| "网关锁失败".to_string())?;
     Ok(gateway.status(total_instances))
 }
 
+#[tauri::command]
+pub fn gateway_status(
+    state: tauri::State<'_, AppState>,
+) -> Result<crate::gateway::GatewayStatus, String> {
+    gateway_status_core(&state.core)
+}
+
 /// 切换网关路由模式（smart / failover / round_robin）：写入网关配置并重启网关进程。
 /// smart（默认）= failover 游标 + 健康计数/坏池/超时切换完整容错。
-#[tauri::command]
-pub fn gateway_set_route_mode(
-    state: tauri::State<'_, AppState>,
-    mode: String,
+pub fn gateway_set_route_mode_core(
+    core: &AppCore,
+    mode: &str,
 ) -> Result<(), String> {
     if mode != "smart" && mode != "failover" && mode != "round_robin" {
         return Err("路由模式仅支持 smart / failover / round_robin".to_string());
     }
-    let instances = state
-        .core.manager
+    let instances = core
+        .manager
         .lock()
         .map_err(|_| "状态锁失败".to_string())?
         .list_instances()
         .to_vec();
-    let mut gateway = state
-        .core.gateway
+    let mut gateway = core
+        .gateway
         .lock()
         .map_err(|_| "网关锁失败".to_string())?;
-    // 记录模式供下次 sync 使用；通过 stop+sync 让配置重写并重启进程
-    gateway.set_route_mode(&mode);
+    gateway.set_route_mode(mode);
     gateway.stop();
     gateway
         .sync(&instances)
         .map_err(|e| format!("切换路由模式失败: {}", e))
 }
 
-/// 关闭统一网关：停止网关进程、清空池（实例的 join_gateway 标记保留，重启后可恢复）。
 #[tauri::command]
-pub fn gateway_stop(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    let mut gateway = state
-        .core.gateway
+pub fn gateway_set_route_mode(
+    state: tauri::State<'_, AppState>,
+    mode: String,
+) -> Result<(), String> {
+    gateway_set_route_mode_core(&state.core, &mode)
+}
+
+/// 关闭统一网关：停止网关进程、清空池（实例的 join_gateway 标记保留，重启后可恢复）。
+pub fn gateway_stop_core(core: &AppCore) -> Result<(), String> {
+    let mut gateway = core
+        .gateway
         .lock()
         .map_err(|_| "网关锁失败".to_string())?;
     gateway.stop();
     Ok(())
 }
 
+#[tauri::command]
+pub fn gateway_stop(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    gateway_stop_core(&state.core)
+}
+
 /// 切换实例是否加入统一网关池（join_gateway），并同步网关。
+pub fn set_join_gateway_core(
+    core: &AppCore,
+    name: &str,
+    join: bool,
+) -> Result<(), String> {
+    let mut mgr = core.manager.lock().map_err(|_| "状态锁失败".to_string())?;
+    let _ = mgr.load();
+    mgr.set_join_gateway(name, join).map_err(|e| e.to_string())?;
+    mgr.save_state().map_err(|e| e.to_string())?;
+    let instances = mgr.list_instances().to_vec();
+    drop(mgr);
+    if let Ok(mut gateway) = core.gateway.lock() {
+        gateway
+            .sync(&instances)
+            .map_err(|e| format!("同步网关失败: {}", e))?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn set_join_gateway(
     state: tauri::State<'_, AppState>,
     name: String,
     join: bool,
 ) -> Result<(), String> {
-    let mut mgr = lock_manager(&state)?;
-    let _ = mgr.load();
-    mgr.set_join_gateway(&name, join)
-        .map_err(|e| e.to_string())?;
-    mgr.save_state().map_err(|e| e.to_string())?;
-    let instances = mgr.list_instances().to_vec();
-    drop(mgr);
-    if let Ok(mut gateway) = state.core.gateway.lock() {
-        gateway
-            .sync(&instances)
-            .map_err(|e| format!("同步网关失败: {}", e))?;
-    }
-    Ok(())
+    set_join_gateway_core(&state.core, &name, join)
 }
 
 // ======================== 响应结构 ========================
@@ -228,8 +255,7 @@ pub struct BinariesInfo {
 // ======================== 节点 ========================
 
 /// 列出全部节点（外部控制 API 优先 + 本地 Clash Verge profiles 补充）
-#[tauri::command]
-pub fn list_nodes() -> Result<Vec<NodeView>, String> {
+pub fn list_nodes_core() -> Result<Vec<NodeView>, String> {
     match clash_yaml::list_nodes_with_group() {
         Ok(nodes) => Ok(nodes
             .into_iter()
@@ -244,6 +270,11 @@ pub fn list_nodes() -> Result<Vec<NodeView>, String> {
             .collect()),
         Err(e) => Err(e.to_string()),
     }
+}
+
+#[tauri::command]
+pub fn list_nodes() -> Result<Vec<NodeView>, String> {
+    list_nodes_core()
 }
 
 
@@ -281,7 +312,11 @@ fn gen_sk_key() -> String {
 /// 不依赖状态记录——即使状态因异常退出显示为 Stopped，残留进程也会被清理，
 /// 确保实例占用的端口（API 端口 / sing-box 端口）在软件退出后全部释放。
 pub fn stop_all_instances(state: &tauri::State<'_, AppState>) {
-    let Ok(mut mgr) = state.core.manager.lock() else { return };
+    stop_all_instances_core(&state.core);
+}
+
+pub fn stop_all_instances_core(core: &AppCore) {
+    let Ok(mut mgr) = core.manager.lock() else { return };
     let _ = mgr.load();
     let names: Vec<String> = mgr
         .list_instances()
@@ -306,17 +341,16 @@ pub fn stop_all_instances(state: &tauri::State<'_, AppState>) {
 /// 2 = 运行数据 + 实例记录（instances.json 清空，回到空实例池）
 /// 3 = 全部重置（运行数据 + 实例 + config.json，回到出厂默认）
 /// 清理前先停掉所有运行中实例与统一网关，避免残留进程占用端口。
-#[tauri::command]
-pub fn data_clean(state: tauri::State<'_, AppState>, level: u8) -> Result<(), String> {
+pub fn data_clean_core(core: &AppCore, level: u8) -> Result<(), String> {
     if level != 1 && level != 2 && level != 3 {
         return Err(format!("无效的清理级别: {}", level));
     }
 
     // 先停后清：关闭统一网关 + 所有实例进程（含状态异常但残留的 pid）
-    if let Ok(mut gateway) = state.core.gateway.lock() {
+    if let Ok(mut gateway) = core.gateway.lock() {
         gateway.stop();
     }
-    stop_all_instances(&state);
+    stop_all_instances_core(core);
     // 稍等进程退出，释放端口
     std::thread::sleep(std::time::Duration::from_millis(300));
 
@@ -324,12 +358,17 @@ pub fn data_clean(state: tauri::State<'_, AppState>, level: u8) -> Result<(), St
     clean_data_at(&config_dir, level)?;
 
     // 清空管理器内存里的实例状态，保证前端刷新即见空
-    if let Ok(mut mgr) = state.core.manager.lock() {
+    if let Ok(mut mgr) = core.manager.lock() {
         mgr.instances.clear();
         let _ = mgr.load(); // 重新读取 instances.json（level>=2 时为 []，level=1 时仍为原列表）
     }
 
     Ok(())
+}
+
+#[tauri::command]
+pub fn data_clean(state: tauri::State<'_, AppState>, level: u8) -> Result<(), String> {
+    data_clean_core(&state.core, level)
 }
 
 /// 在指定数据目录执行清理（纯 fs 逻辑，便于单元测试）。
@@ -444,25 +483,36 @@ mod clean_tests {
 
 // ======================== 实例 CRUD ========================
 
-#[tauri::command]
-pub fn list_instances(state: tauri::State<'_, AppState>) -> Result<Vec<Instance>, String> {
-    let mut mgr = lock_manager(&state)?;
+pub fn list_instances_core(core: &AppCore) -> Result<Vec<Instance>, String> {
+    let mut mgr = core.manager.lock().map_err(|_| "状态锁失败".to_string())?;
     let _ = mgr.load();
     // 首次加载时校正状态，保证前端显示与真实进程一致
     let _ = mgr.reconcile_states();
     Ok(mgr.list_instances().to_vec())
 }
 
+#[tauri::command]
+pub fn list_instances(state: tauri::State<'_, AppState>) -> Result<Vec<Instance>, String> {
+    list_instances_core(&state.core)
+}
+
 /// 手动刷新：只校正指定名称的实例状态，返回这些实例的最新状态。
 /// 前端分批（每批少量并发）调用，按返回数量累计显示进度。
+pub fn refresh_states_core(
+    core: &AppCore,
+    names: Vec<String>,
+) -> Result<Vec<Instance>, String> {
+    let mut mgr = core.manager.lock().map_err(|_| "状态锁失败".to_string())?;
+    let _ = mgr.load();
+    mgr.reconcile_batch(&names).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub fn refresh_states(
     state: tauri::State<'_, AppState>,
     names: Vec<String>,
 ) -> Result<Vec<Instance>, String> {
-    let mut mgr = lock_manager(&state)?;
-    let _ = mgr.load();
-    mgr.reconcile_batch(&names).map_err(|e| e.to_string())
+    refresh_states_core(&state.core, names)
 }
 
 /// 生成不重复的实例名：实例1、实例2…
@@ -482,9 +532,8 @@ fn next_auto_name(mgr: &InstanceManager) -> String {
     }
 }
 
-#[tauri::command]
-pub fn add_instance(
-    state: tauri::State<'_, AppState>,
+pub fn add_instance_core(
+    core: &AppCore,
     name: String,
     port: u16,
     node: String,
@@ -497,14 +546,13 @@ pub fn add_instance(
         return Err("端口需 >= 1024".to_string());
     }
     let ip = node_ip(&node.trim());
-    let mut mgr = lock_manager(&state)?;
+    let mut mgr = core.manager.lock().map_err(|_| "状态锁失败".to_string())?;
     let _ = mgr.load();
     let final_name = if name.trim().is_empty() {
         next_auto_name(&mgr)
     } else {
         name.trim().to_string()
     };
-    // 密钥为空时自动生成 sk-xxx
     let sk = if password.trim().is_empty() {
         gen_sk_key()
     } else {
@@ -521,15 +569,25 @@ pub fn add_instance(
 }
 
 #[tauri::command]
-pub fn remove_instance(state: tauri::State<'_, AppState>, name: String) -> Result<(), String> {
-    let mut mgr = lock_manager(&state)?;
+pub fn add_instance(
+    state: tauri::State<'_, AppState>,
+    name: String,
+    port: u16,
+    node: String,
+    password: String,
+) -> Result<Instance, String> {
+    add_instance_core(&state.core, name, port, node, password)
+}
+
+pub fn remove_instance_core(core: &AppCore, name: &str) -> Result<(), String> {
+    let mut mgr = core.manager.lock().map_err(|_| "状态锁失败".to_string())?;
     let _ = mgr.load();
     mgr.remove_instance(&name).map_err(|e| e.to_string())?;
     mgr.save_state().map_err(|e| e.to_string())?;
     let instances = mgr.list_instances().to_vec();
     drop(mgr);
     // 同步网关：移除的实例若在池中，需从代理池剔除
-    if let Ok(mut gateway) = state.core.gateway.lock() {
+    if let Ok(mut gateway) = core.gateway.lock() {
         gateway
             .sync(&instances)
             .map_err(|e| format!("同步网关失败: {}", e))?;
@@ -537,13 +595,17 @@ pub fn remove_instance(state: tauri::State<'_, AppState>, name: String) -> Resul
     Ok(())
 }
 
+#[tauri::command]
+pub fn remove_instance(state: tauri::State<'_, AppState>, name: String) -> Result<(), String> {
+    remove_instance_core(&state.core, &name)
+}
+
 // ======================== 实例启停（阻塞，走 spawn_blocking） ========================
 
-#[tauri::command]
-pub async fn start_instance(state: tauri::State<'_, AppState>, name: String) -> Result<(), String> {
-    let manager = Arc::clone(&state.core.manager);
-    let gateway = Arc::clone(&state.core.gateway);
-    tauri::async_runtime::spawn_blocking(move || {
+pub fn start_instance_core(core: &AppCore, name: &str) -> Result<(), String> {
+    let manager = Arc::clone(&core.manager);
+    let gateway = Arc::clone(&core.gateway);
+    (|| {
         // 短锁：标记 Starting 并取出实例快照
         let (instance, binary_dir, runtime_dir) = {
             let mut mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
@@ -573,16 +635,21 @@ pub async fn start_instance(state: tauri::State<'_, AppState>, name: String) -> 
             let _ = g.sync(mgr.list_instances());
         }
         result
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    })()
 }
 
 #[tauri::command]
-pub async fn stop_instance(state: tauri::State<'_, AppState>, name: String) -> Result<(), String> {
-    let manager = Arc::clone(&state.core.manager);
-    let gateway = Arc::clone(&state.core.gateway);
-    tauri::async_runtime::spawn_blocking(move || {
+pub async fn start_instance(state: tauri::State<'_, AppState>, name: String) -> Result<(), String> {
+    let core = state.core.clone();
+    tokio::task::spawn_blocking(move || start_instance_core(&core, &name))
+        .await
+        .map_err(|e| format!("启动实例任务失败: {}", e))?
+}
+
+pub fn stop_instance_core(core: &AppCore, name: &str) -> Result<(), String> {
+    let manager = Arc::clone(&core.manager);
+    let gateway = Arc::clone(&core.gateway);
+    (|| {
         // 短锁：标记 Stopping 并取出 PID
         let (pid, singbox_pid) = {
             let mut mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
@@ -610,21 +677,23 @@ pub async fn stop_instance(state: tauri::State<'_, AppState>, name: String) -> R
             let _ = g.sync(mgr.list_instances());
         }
         result
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    })()
 }
 
 #[tauri::command]
-pub async fn test_instance(
-    state: tauri::State<'_, AppState>,
-    name: String,
-) -> Result<crate::instance::TestResult, String> {
-    let manager = Arc::clone(&state.core.manager);
-    tauri::async_runtime::spawn_blocking(move || {
+pub async fn stop_instance(state: tauri::State<'_, AppState>, name: String) -> Result<(), String> {
+    let core = state.core.clone();
+    tokio::task::spawn_blocking(move || stop_instance_core(&core, &name))
+        .await
+        .map_err(|e| format!("停止实例任务失败: {}", e))?
+}
+
+pub fn test_instance_core(core: &AppCore, name: &str) -> Result<crate::instance::TestResult, String> {
+    let manager = Arc::clone(&core.manager);
+    (|| {
 let mut mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
         let _ = mgr.load();
-        let name_owned = name.clone();
+        let name_owned = name.to_string();
         let port = mgr
             .prepare_test(&name_owned)
             .map_err(|e| e.to_string())?;
@@ -640,9 +709,18 @@ let mut mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
             });
         drop(mgr); // 探测在锁外进行，避免长阻塞
         Ok(crate::instance::probe_free_completion(&name_owned, port, auth.as_deref()))
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    })()
+}
+
+#[tauri::command]
+pub async fn test_instance(
+    state: tauri::State<'_, AppState>,
+    name: String,
+) -> Result<crate::instance::TestResult, String> {
+    let core = state.core.clone();
+    tokio::task::spawn_blocking(move || test_instance_core(&core, &name))
+        .await
+        .map_err(|e| format!("测试实例任务失败: {}", e))?
 }
 // ======================== 批量操作 ========================
 
@@ -665,9 +743,8 @@ fn sanitize_instance_name(node: &str) -> String {
     }
 }
 
-#[tauri::command]
-pub fn batch_add(
-    state: tauri::State<'_, AppState>,
+pub fn batch_add_core(
+    core: &AppCore,
     nodes: Vec<BatchAddItem>,
     base_port: Option<u16>,
     use_node_name: Option<bool>,
@@ -680,7 +757,7 @@ pub fn batch_add(
     let use_node_name = use_node_name.unwrap_or(true);
     let prefix = name_prefix.unwrap_or_else(|| "n".to_string());
 
-    let mut mgr = lock_manager(&state)?;
+    let mut mgr = core.manager.lock().map_err(|_| "状态锁失败".to_string())?;
     let _ = mgr.load();
 
     let mut added = Vec::new();
@@ -756,6 +833,17 @@ pub fn batch_add(
         added_count,
         error_count,
     })
+}
+
+#[tauri::command]
+pub fn batch_add(
+    state: tauri::State<'_, AppState>,
+    nodes: Vec<BatchAddItem>,
+    base_port: Option<u16>,
+    use_node_name: Option<bool>,
+    name_prefix: Option<String>,
+) -> Result<BatchAddResult, String> {
+    batch_add_core(&state.core, nodes, base_port, use_node_name, name_prefix)
 }
 
 /// 对一批实例执行同一操作，汇总成功与失败明细。
@@ -860,14 +948,13 @@ fn run_parallel_stop_jobs(jobs: Vec<(String, Option<u32>, Option<u32>)>) -> Vec<
 }
 
 
-#[tauri::command]
-pub async fn batch_start(
-    state: tauri::State<'_, AppState>,
+pub fn batch_start_core(
+    core: &AppCore,
     names: Vec<String>,
 ) -> Result<BatchOpResult, String> {
-    let manager = Arc::clone(&state.core.manager);
-    let gateway = Arc::clone(&state.core.gateway);
-    tauri::async_runtime::spawn_blocking(move || {
+    let manager = Arc::clone(&core.manager);
+    let gateway = Arc::clone(&core.gateway);
+    (|| {
         let mut unique_names = Vec::new();
         let mut seen = HashSet::new();
         for name in names {
@@ -938,19 +1025,27 @@ pub async fn batch_start(
         }
 
         result
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    })()
 }
 
 #[tauri::command]
-pub async fn batch_stop(
+pub async fn batch_start(
     state: tauri::State<'_, AppState>,
     names: Vec<String>,
 ) -> Result<BatchOpResult, String> {
-    let manager = Arc::clone(&state.core.manager);
-    let gateway = Arc::clone(&state.core.gateway);
-    tauri::async_runtime::spawn_blocking(move || {
+    let core = state.core.clone();
+    tokio::task::spawn_blocking(move || batch_start_core(&core, names))
+        .await
+        .map_err(|e| format!("批量启动任务失败: {}", e))?
+}
+
+pub fn batch_stop_core(
+    core: &AppCore,
+    names: Vec<String>,
+) -> Result<BatchOpResult, String> {
+    let manager = Arc::clone(&core.manager);
+    let gateway = Arc::clone(&core.gateway);
+    (|| {
         let mut unique_names = Vec::new();
         let mut seen = HashSet::new();
         for name in names {
@@ -1014,9 +1109,18 @@ pub async fn batch_stop(
         }
 
         result
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    })()
+}
+
+#[tauri::command]
+pub async fn batch_stop(
+    state: tauri::State<'_, AppState>,
+    names: Vec<String>,
+) -> Result<BatchOpResult, String> {
+    let core = state.core.clone();
+    tokio::task::spawn_blocking(move || batch_stop_core(&core, names))
+        .await
+        .map_err(|e| format!("批量停止任务失败: {}", e))?
 }
 
 // ======================== 一键重启（含总端口强制清理） ========================
@@ -1078,11 +1182,10 @@ fn force_free_port(port: u16) -> Vec<u32> {
 /// 3. 强制清理所有池成员 singbox 端口 + 总端口（解决占用）
 /// 4. 并行启动全部池成员
 /// 5. 同步网关（自动拉起总端口）
-#[tauri::command]
-pub async fn restart_pool(state: tauri::State<'_, AppState>) -> Result<RestartPoolResult, String> {
-    let manager = Arc::clone(&state.core.manager);
-    let gateway = Arc::clone(&state.core.gateway);
-    tauri::async_runtime::spawn_blocking(move || {
+pub fn restart_pool_core(core: &AppCore) -> Result<RestartPoolResult, String> {
+    let manager = Arc::clone(&core.manager);
+    let gateway = Arc::clone(&core.gateway);
+    (|| {
         // 1) 停统一网关
         if let Ok(mut g) = gateway.lock() {
             g.stop();
@@ -1205,19 +1308,24 @@ pub async fn restart_pool(state: tauri::State<'_, AppState>) -> Result<RestartPo
             gateway_running,
             error,
         })
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    })()
 }
 
 #[tauri::command]
-pub async fn batch_delete(
-    state: tauri::State<'_, AppState>,
+pub async fn restart_pool(state: tauri::State<'_, AppState>) -> Result<RestartPoolResult, String> {
+    let core = state.core.clone();
+    tokio::task::spawn_blocking(move || restart_pool_core(&core))
+        .await
+        .map_err(|e| format!("重启实例池任务失败: {}", e))?
+}
+
+pub fn batch_delete_core(
+    core: &AppCore,
     names: Vec<String>,
 ) -> Result<BatchOpResult, String> {
-    let manager = Arc::clone(&state.core.manager);
-    let gateway = Arc::clone(&state.core.gateway);
-    tauri::async_runtime::spawn_blocking(move || {
+    let manager = Arc::clone(&core.manager);
+    let gateway = Arc::clone(&core.gateway);
+    (|| {
         let mut mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
         let _ = mgr.load();
         let result = batch_op_response(names, |name| mgr.remove_instance(name));
@@ -1229,9 +1337,18 @@ pub async fn batch_delete(
             let _ = g.sync(&instances);
         }
         Ok(result)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    })()
+}
+
+#[tauri::command]
+pub async fn batch_delete(
+    state: tauri::State<'_, AppState>,
+    names: Vec<String>,
+) -> Result<BatchOpResult, String> {
+    let core = state.core.clone();
+    tokio::task::spawn_blocking(move || batch_delete_core(&core, names))
+        .await
+        .map_err(|e| format!("批量删除任务失败: {}", e))?
 }
 
 // ======================== 端口建议 / 校验 ========================
@@ -1253,10 +1370,9 @@ fn rand_seed() -> u64 {
 /// 建议一个可用端口（未被实例占用，本地未监听）
 /// 调试构建（tauri dev）使用 30000+ 段，与正式版（10000-29999 段）完全错开，
 /// 避免两套实例的 API/sing-box 端口（port 与 port+10000）冲突。
-#[tauri::command]
-pub async fn port_suggest(state: tauri::State<'_, AppState>) -> Result<u16, String> {
-    let manager = Arc::clone(&state.core.manager);
-    tauri::async_runtime::spawn_blocking(move || {
+pub fn port_suggest_core(core: &AppCore) -> Result<u16, String> {
+    let manager = Arc::clone(&core.manager);
+    (|| {
         let mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
         let mut rng = rand_seed();
         // debug 构建：30000+ 段（实际返回 30001-30199）；release：保持 main 原公式（18100 起，分布同 main）
@@ -1281,21 +1397,26 @@ pub async fn port_suggest(state: tauri::State<'_, AppState>) -> Result<u16, Stri
                 .wrapping_add(1442695040888963407);
         }
         Err("未找到可用端口".to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    })()
 }
 
 #[tauri::command]
-pub async fn port_check(
-    state: tauri::State<'_, AppState>,
+pub async fn port_suggest(state: tauri::State<'_, AppState>) -> Result<u16, String> {
+    let core = state.core.clone();
+    tokio::task::spawn_blocking(move || port_suggest_core(&core))
+        .await
+        .map_err(|e| format!("端口建议任务失败: {}", e))?
+}
+
+pub fn port_check_core(
+    core: &AppCore,
     port: u16,
 ) -> Result<PortCheckResult, String> {
     if port < 1024 {
         return Err("端口需 >= 1024".to_string());
     }
-    let manager = Arc::clone(&state.core.manager);
-    tauri::async_runtime::spawn_blocking(move || {
+    let manager = Arc::clone(&core.manager);
+    (|| {
         let mut mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
         let _ = mgr.load();
         if mgr.list_instances().iter().any(|i| i.port == port) {
@@ -1314,11 +1435,53 @@ pub async fn port_check(
             available: true,
             reason: "端口可用".to_string(),
         })
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    })()
+}
+
+#[tauri::command]
+pub async fn port_check(
+    state: tauri::State<'_, AppState>,
+    port: u16,
+) -> Result<PortCheckResult, String> {
+    let core = state.core.clone();
+    tokio::task::spawn_blocking(move || port_check_core(&core, port))
+        .await
+        .map_err(|e| format!("端口检查任务失败: {}", e))?
 }
 // ======================== 节点扫描 ========================
+
+#[derive(Debug, Default, Clone)]
+pub struct ScanStartOpts {
+    pub nodes: Option<Vec<String>>,
+    pub api_port: Option<u16>,
+    pub socks_port: Option<u16>,
+    pub timeout: Option<u64>,
+}
+
+pub fn scan_start_core(
+    core: &AppCore,
+    opts: ScanStartOpts,
+) -> Result<crate::probe::ScanProgress, String> {
+    let (_, binary_dir, runtime_dir) = manager_paths();
+    let password = default_password();
+    let api_port = opts.api_port.unwrap_or(DEFAULT_PROBE_API_PORT);
+    let socks_port = opts.socks_port.unwrap_or(DEFAULT_PROBE_SOCKS_PORT);
+    let timeout = opts.timeout.unwrap_or(25);
+    let filter = opts.nodes.filter(|v| !v.is_empty());
+
+    match core.scan.start_scan(
+        binary_dir,
+        runtime_dir,
+        password,
+        api_port,
+        socks_port,
+        filter,
+        timeout,
+    ) {
+        Ok(()) => Ok(core.scan.progress_snapshot()),
+        Err(e) => Err(e.to_string()),
+    }
+}
 
 #[tauri::command]
 pub fn scan_start(
@@ -1328,42 +1491,31 @@ pub fn scan_start(
     socks_port: Option<u16>,
     timeout: Option<u64>,
 ) -> Result<crate::probe::ScanProgress, String> {
-    let (_, binary_dir, runtime_dir) = manager_paths();
-    let password = default_password();
-    let api_port = api_port.unwrap_or(DEFAULT_PROBE_API_PORT);
-    let socks_port = socks_port.unwrap_or(DEFAULT_PROBE_SOCKS_PORT);
-    let timeout = timeout.unwrap_or(25);
-    let filter = nodes.filter(|v| !v.is_empty());
+    scan_start_core(&state.core, ScanStartOpts { nodes, api_port, socks_port, timeout })
+}
 
-    match state.core.scan.start_scan(
-        binary_dir,
-        runtime_dir,
-        password,
-        api_port,
-        socks_port,
-        filter,
-        timeout,
-    ) {
-        Ok(()) => Ok(state.core.scan.progress_snapshot()),
-        Err(e) => Err(e.to_string()),
-    }
+pub fn scan_status_core(core: &AppCore) -> Result<crate::probe::ScanProgress, String> {
+    Ok(core.scan.progress_snapshot())
 }
 
 #[tauri::command]
 pub fn scan_status(state: tauri::State<'_, AppState>) -> Result<crate::probe::ScanProgress, String> {
-    Ok(state.core.scan.progress_snapshot())
+    scan_status_core(&state.core)
+}
+
+pub fn scan_stop_core(core: &AppCore) -> Result<crate::probe::ScanProgress, String> {
+    core.scan.request_stop();
+    Ok(core.scan.progress_snapshot())
 }
 
 #[tauri::command]
 pub fn scan_stop(state: tauri::State<'_, AppState>) -> Result<crate::probe::ScanProgress, String> {
-    state.core.scan.request_stop();
-    Ok(state.core.scan.progress_snapshot())
+    scan_stop_core(&state.core)
 }
 
 // ======================== 配置 ========================
 
-#[tauri::command]
-pub fn config_get() -> Result<ConfigView, String> {
+pub fn config_get_core() -> Result<ConfigView, String> {
     let cfg = Config::load().unwrap_or_default();
     Ok(ConfigView {
         base_url: cfg.base_url,
@@ -1387,18 +1539,22 @@ pub fn config_get() -> Result<ConfigView, String> {
 }
 
 #[tauri::command]
-pub fn config_set(
-    state: tauri::State<'_, AppState>,
-    key: String,
-    value: String,
+pub fn config_get() -> Result<ConfigView, String> {
+    config_get_core()
+}
+
+pub fn config_set_core(
+    core: &AppCore,
+    key: &str,
+    value: &str,
 ) -> Result<(), String> {
     let mut cfg = Config::load().unwrap_or_default();
-    cfg.set(&key, &value).map_err(|e| e.to_string())?;
+    cfg.set(key, value).map_err(|e| e.to_string())?;
 
     // 关键配置写入后，重新生成网关配置并让 Go 端热加载（无需重启网关）。
     // 涉及网关行为的配置：前缀开关、路由超时区间、探测数、日志上限。
     let gateway_related = matches!(
-        key.as_str(),
+        key,
         "show_node_prefix"
             | "timeout_ttft_min_ms"
             | "timeout_ttft_max_ms"
@@ -1412,19 +1568,28 @@ pub fn config_set(
     if gateway_related {
         // 先取实例快照并释放 manager 锁，再单独锁 gateway，避免与
         // batch_start/batch_stop 中 gateway→manager 的加锁顺序相反导致死锁。
-        let instances = state
-            .core.manager
+        let instances = core
+            .manager
             .lock()
             .map(|mut mgr| {
                 let _ = mgr.load();
                 mgr.list_instances().to_vec()
             })
             .unwrap_or_default();
-        if let Ok(mut g) = state.core.gateway.lock() {
+        if let Ok(mut g) = core.gateway.lock() {
             let _ = g.sync(&instances);
         }
     }
     Ok(())
+}
+
+#[tauri::command]
+pub fn config_set(
+    state: tauri::State<'_, AppState>,
+    key: String,
+    value: String,
+) -> Result<(), String> {
+    config_set_core(&state.core, &key, &value)
 }
 
 // ======================== 开机自启（Windows 注册表） ========================
@@ -1467,13 +1632,16 @@ fn autostart_set_impl(_enabled: bool) -> anyhow::Result<()> {
     anyhow::bail!("仅 Windows 支持开机自启")
 }
 
-#[tauri::command]
-pub fn autostart_get() -> Result<bool, String> {
+pub fn autostart_get_core() -> Result<bool, String> {
     autostart_status().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn autostart_set(enabled: bool) -> Result<(), String> {
+pub fn autostart_get() -> Result<bool, String> {
+    autostart_get_core()
+}
+
+pub fn autostart_set_core(enabled: bool) -> Result<(), String> {
     #[cfg(windows)]
     {
         set_autostart(enabled).map_err(|e| e.to_string())
@@ -1484,10 +1652,14 @@ pub fn autostart_set(enabled: bool) -> Result<(), String> {
     }
 }
 
+#[tauri::command]
+pub fn autostart_set(enabled: bool) -> Result<(), String> {
+    autostart_set_core(enabled)
+}
+
 // ======================== 二进制信息 ========================
 
-#[tauri::command]
-pub fn get_binaries_info() -> BinariesInfo {
+pub fn get_binaries_info_core() -> BinariesInfo {
     let (_, binary_dir, _) = manager_paths();
     BinariesInfo {
         bin_dir: binary_dir.display().to_string(),
@@ -1496,6 +1668,11 @@ pub fn get_binaries_info() -> BinariesInfo {
         sb_exists: binary_dir.join("sing-box.exe").exists()
             || binary_dir.join("sing-box").exists(),
     }
+}
+
+#[tauri::command]
+pub fn get_binaries_info() -> BinariesInfo {
+    get_binaries_info_core()
 }
 
 // ======================== 窗口控制（托盘） ========================
@@ -1623,8 +1800,7 @@ struct GoNodeStatsData {
 /// 汇总出全局总览 + 实例列表（按总计 token 降序）。
 /// - 实例目录存在但实例列表中没有 → exists=false（已删除，统计保留）
 /// - stats.json 缺失或解析失败 → 跳过该目录，不报错
-#[tauri::command]
-pub fn get_stats() -> Result<StatsSummary, String> {
+pub fn get_stats_core() -> Result<StatsSummary, String> {
     let (_, _, runtime_dir) = manager_paths();
 
     let manager = create_manager();
@@ -1642,14 +1818,23 @@ pub fn get_stats() -> Result<StatsSummary, String> {
     Ok(aggregate_stats(&runtime_dir, &known_names, &port_to_name))
 }
 
+#[tauri::command]
+pub fn get_stats() -> Result<StatsSummary, String> {
+    get_stats_core()
+}
+
 /// 读取统一网关全流程调用日志（call_log.jsonl），返回最新 N 条。
 /// 文件位于 runtime/_unified-gateway/call_log.jsonl（Go 网关进程 cwd 决定）。
-#[tauri::command]
-pub fn get_call_log(limit: Option<usize>) -> Vec<crate::call_log::CallLogRecord> {
+pub fn get_call_log_core(limit: Option<usize>) -> Vec<crate::call_log::CallLogRecord> {
     let (_, _, runtime_dir) = manager_paths();
     let path = runtime_dir.join("_unified-gateway").join("call_log.jsonl");
     let max = limit.unwrap_or(5000).clamp(1, 50000);
     crate::call_log::read_call_log(&path, max)
+}
+
+#[tauri::command]
+pub fn get_call_log(limit: Option<usize>) -> Vec<crate::call_log::CallLogRecord> {
+    get_call_log_core(limit)
 }
 
 /// 聚合逻辑（独立函数便于单元测试）：遍历 runtime_dir 各子目录读取 stats.json。
