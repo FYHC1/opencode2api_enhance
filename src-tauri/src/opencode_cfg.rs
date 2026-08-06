@@ -111,6 +111,10 @@ mod tests {
 
     #[test]
     fn test_build_opencode_config() {
+        // 隔离数据目录：build_opencode_config 会读 Config::load()，
+        // 避免受开发者本机 config.json 的 show_node_prefix 设置影响
+        let test_dir = std::env::temp_dir().join("opencode2api-cfg-test");
+        unsafe { std::env::set_var("OPCODE2API_DATA_DIR", &test_dir) };
         let config = build_opencode_config(7890).unwrap();
         let v: serde_json::Value = serde_json::from_str(&config).unwrap();
         assert_eq!(v["active_socks5"], "127.0.0.1:7890");
@@ -119,6 +123,7 @@ mod tests {
         assert_eq!(v["force_disable_thinking"], false);
         // show_node_prefix 默认 false（默认关闭）
         assert_eq!(v["show_node_prefix"], false);
+        unsafe { std::env::remove_var("OPCODE2API_DATA_DIR") };
     }
 
     #[test]
@@ -130,6 +135,9 @@ mod tests {
 
     #[test]
     fn test_build_opencode_router_config() {
+        // 隔离数据目录（同 test_build_opencode_config）
+        let test_dir = std::env::temp_dir().join("opencode2api-cfg-test");
+        unsafe { std::env::set_var("OPCODE2API_DATA_DIR", &test_dir) };
         let names = vec![
             (18001u16, "日本1".to_string()),
             (18002u16, "美国2".to_string()),
@@ -145,6 +153,7 @@ mod tests {
         assert_eq!(v["socks5_proxies"][1]["name"], "美国2");
         // show_node_prefix 默认 false
         assert_eq!(v["show_node_prefix"], false);
+        unsafe { std::env::remove_var("OPCODE2API_DATA_DIR") };
     }
 
     #[test]

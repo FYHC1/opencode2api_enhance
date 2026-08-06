@@ -222,6 +222,53 @@ func TestStreamWithResumeNormal(t *testing.T) {
 	}
 }
 
+// streamWithResume：开关默认关闭（OFF）时，首个内容 chunk 不应插入 🤖 前缀
+func TestStreamWithResumePrefixOffByDefault(t *testing.T) {
+	// 确保开关为默认 false（不手动开启）
+	configMu.Lock()
+	showNodePrefix = false
+	configMu.Unlock()
+	defer func() {
+		configMu.Lock()
+		showNodePrefix = false
+		configMu.Unlock()
+	}()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		fl, _ := w.(http.Flusher)
+		fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n")
+		fl.Flush()
+		fmt.Fprintf(w, "data: [DONE]\n\n")
+		fl.Flush()
+	}))
+	defer srv.Close()
+
+	body := []byte(`{"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	callRec := &CallRecord{ReqID: "test-off", Model: "m"}
+	res := streamWithResume(rr, req, body, "m", UpstreamAuth{Mode: AuthRoutePublic}, resp.Body, "127.0.0.1:28100", false, callRec)
+	if !res.OK {
+		t.Fatalf("expected OK, got %+v", res)
+	}
+	outStr := rr.Body.String()
+	if !strings.Contains(outStr, "hello") {
+		t.Fatalf("expected hello in output, got %s", outStr)
+	}
+	// 默认关闭：不得出现节点/模型前缀
+	if strings.Contains(outStr, "🤖") {
+		t.Fatalf("prefix should be suppressed when show_node_prefix is off, got: %q", outStr)
+	}
+}
+
 // buildResumeBody 对非法 JSON 应原样返回
 func TestBuildResumeBodyInvalidJSON(t *testing.T) {
 	bad := []byte(`not-json`)
