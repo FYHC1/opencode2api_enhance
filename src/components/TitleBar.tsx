@@ -10,6 +10,7 @@ import clsx from 'clsx'
  */
 export function TitleBar() {
   const [maximized, setMaximized] = useState(false)
+  const [isTauri, setIsTauri] = useState(false)
 
   const refreshMax = useCallback(async () => {
     try {
@@ -20,16 +21,17 @@ export function TitleBar() {
   }, [])
 
   useEffect(() => {
-    refreshMax()
     let un: (() => void) | undefined
     ;(async () => {
       try {
         const win = getCurrentWindow()
+        setIsTauri(true)
+        void refreshMax()
         un = await win.onResized(() => {
           void refreshMax()
         })
       } catch {
-        /* ignore */
+        /* 非 Tauri 环境（headless 浏览器） */
       }
     })()
     return () => {
@@ -90,25 +92,27 @@ export function TitleBar() {
         </span>
       </div>
 
-      {/* Window controls — no drag so clicks work */}
-      <div className="flex h-full items-stretch shrink-0">
-        <WinBtn aria-label="最小化" onClick={() => void minimize()}>
-          <Minus size={14} strokeWidth={2} />
-        </WinBtn>
-        <WinBtn aria-label={maximized ? '还原' : '最大化'} onClick={() => void toggleMax()}>
-          {maximized ? (
-            <span className="relative inline-block w-[12px] h-[12px]">
-              <span className="absolute left-0 bottom-0 w-[9px] h-[9px] border-[1.5px] border-current bg-white" />
-              <span className="absolute right-0 top-0 w-[9px] h-[9px] border-[1.5px] border-current bg-transparent" />
-            </span>
-          ) : (
-            <Square size={12} strokeWidth={2} />
-          )}
-        </WinBtn>
-        <WinBtn aria-label="关闭" danger onClick={() => void close()}>
-          <X size={14} strokeWidth={2} />
-        </WinBtn>
-      </div>
+      {/* Window controls — no drag so clicks work；非 Tauri（headless 浏览器）时隐藏 */}
+      {isTauri && (
+        <div className="flex h-full items-stretch shrink-0">
+          <WinBtn aria-label="最小化" onClick={() => void minimize()}>
+            <Minus size={14} strokeWidth={2} />
+          </WinBtn>
+          <WinBtn aria-label={maximized ? '还原' : '最大化'} onClick={() => void toggleMax()}>
+            {maximized ? (
+              <span className="relative inline-block w-[12px] h-[12px]">
+                <span className="absolute left-0 bottom-0 w-[9px] h-[9px] border-[1.5px] border-current bg-white" />
+                <span className="absolute right-0 top-0 w-[9px] h-[9px] border-[1.5px] border-current bg-transparent" />
+              </span>
+            ) : (
+              <Square size={12} strokeWidth={2} />
+            )}
+          </WinBtn>
+          <WinBtn aria-label="关闭" danger onClick={() => void close()}>
+            <X size={14} strokeWidth={2} />
+          </WinBtn>
+        </div>
+      )}
     </header>
   )
 }
