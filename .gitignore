@@ -35,3 +35,6 @@ legacy/opencode2api_enhance/.github/
 legacy/opencode2api_enhance/.dockerignore
 legacy/opencode2api_enhance/.gitignore
 legacy/opencode2api_enhance/进度.md
+
+# Brainstorm visual companion sessions
+.superpowers/
