@@ -629,6 +629,39 @@ func TestResolveModelAutoSuffixFree(t *testing.T) {
 	}
 }
 
+// TestDisplayModelName：前缀/UI 展示用名应去除 -free 标记，显式别名优先。
+func TestDisplayModelName(t *testing.T) {
+	oldModelAlias := modelAlias
+	configMu.Lock()
+	modelAlias = map[string]string{
+		"deepseek-v4-flash": "deepseek-v4-flash-free",
+	}
+	configMu.Unlock()
+	t.Cleanup(func() {
+		configMu.Lock()
+		modelAlias = oldModelAlias
+		configMu.Unlock()
+	})
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"显式别名优先", "deepseek-v4-flash-free", "deepseek-v4-flash"},
+		{"新 -free 自动去掉后缀", "brand-new-model-free", "brand-new-model"},
+		{"无 -free 原样", "gpt-5.5", "gpt-5.5"},
+		{"空格裁剪", "  x-free  ", "x"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := displayModelName(tt.input); got != tt.want {
+				t.Fatalf("displayModelName(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestExtractUpstreamAuthKeyValidation(t *testing.T) {
 	// 本次修复核心：本地门禁密钥（adminPassword）不得作为上游付费 key 透传，
 	// 应识别为 public（底层免费通道）。

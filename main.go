@@ -1278,6 +1278,25 @@ func modelInCaches(id string) bool {
 	return containsModelWithID(modelsCache, id) || containsModelWithID(goModelsCache, id)
 }
 
+// displayModelName 返回模型名的展示形式（用于前缀/UI 展示，不含 -free 标记）：
+//  1. 若 model 是某别名的真实上游名（含 -free），返回该别名（显式配置优先）；
+//  2. 否则若以 -free 结尾，去掉后缀；
+//  3. 否则原样返回。
+func displayModelName(model string) string {
+	m := strings.TrimSpace(model)
+	configMu.RLock()
+	defer configMu.RUnlock()
+	for alias, upstream := range modelAlias {
+		if upstream == m {
+			return alias
+		}
+	}
+	if strings.HasSuffix(m, "-free") {
+		return strings.TrimSuffix(m, "-free")
+	}
+	return m
+}
+
 func getForceDisableThinking() bool {
 	configMu.RLock()
 	defer configMu.RUnlock()

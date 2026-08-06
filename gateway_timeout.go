@@ -502,7 +502,7 @@ func streamWithResume(w http.ResponseWriter, r *http.Request, upstreamBody []byt
 										if nodeLabel == "" {
 											nodeLabel = "未知节点"
 										}
-										delta["content"] = fmt.Sprintf("\n\n🤖 %s · %s\n\n%s", nodeLabel, model, c)
+										delta["content"] = fmt.Sprintf("\n\n🤖 %s · %s\n\n%s", nodeLabel, displayModelName(model), c)
 										first["delta"] = delta
 										chs[0] = first
 										outObj["choices"] = chs
