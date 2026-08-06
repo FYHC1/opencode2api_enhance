@@ -126,6 +126,28 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
     }
   }
 
+  const handleDataClean = async (level: 1 | 2 | 3) => {
+    const labels: Record<number, string> = {
+      1: '仅清理运行时数据（日志、统计、临时配置，保留实例记录）',
+      2: '清理运行时数据 + 清空实例记录（回到空实例池）',
+      3: '全部重置（运行数据 + 实例 + 配置，回到出厂默认）',
+    }
+    if (!window.confirm(`确定要执行「${labels[level]}」？\n\n这会先停止所有运行中的实例与网关。此操作不可撤销。`)) return
+    if (level === 3 && !window.confirm('这是完全重置，将删除所有配置并备份到 config.json.bak。\n请再次确认继续？')) return
+    try {
+      await api.dataClean(level)
+      try {
+        const [cfg, as] = await Promise.all([api.configGet(), api.autostartGet()])
+        setConfig(cfg)
+        setAutostart(as)
+      } catch { /* 忽略刷新失败 */ }
+      toast('清理完成', true)
+    } catch (e) {
+      console.error('清理失败', e)
+      toast('清理失败', false)
+    }
+  }
+
   if (!config || !binariesInfo) {
     return <div className="p-8 text-zinc-500">加载中...</div>
   }
@@ -305,6 +327,35 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
           <span className="text-sm text-zinc-700">开机时自动启动管理器</span>
         </div>
         <p className="text-zinc-500 text-xs">Windows 注册表</p>
+      </div>
+
+      {/* 清除数据 */}
+      <div className="bg-white rounded-2xl border p-5 space-y-4 border-red-200">
+        <h2 className="text-lg font-medium text-red-700">清除数据</h2>
+        <p className="text-zinc-500 text-xs">
+          遇到环境异常（实例/端口残留、配置损坏）时可清理本地数据。执行前会自动停止所有实例与网关。
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => handleDataClean(1)}
+            className="px-4 py-2 rounded-lg border border-zinc-300 text-sm hover:bg-zinc-100"
+          >
+            清理运行数据
+          </button>
+          <button
+            onClick={() => handleDataClean(2)}
+            className="px-4 py-2 rounded-lg border border-amber-300 text-sm text-amber-700 hover:bg-amber-50"
+          >
+            清空实例记录
+          </button>
+          <button
+            onClick={() => handleDataClean(3)}
+            className="px-4 py-2 rounded-lg bg-red-600 text-white text-sm hover:bg-red-700"
+          >
+            全部重置
+          </button>
+        </div>
+        <p className="text-zinc-500 text-xs">全部重置会删除 config.json（备份为 config.json.bak），需重新配置</p>
       </div>
 
       {/* 关于 */}

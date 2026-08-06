@@ -117,6 +117,7 @@ pub fn run() {
             commands::gateway_status,
             commands::gateway_set_route_mode,
             commands::gateway_stop,
+            commands::data_clean,
             commands::set_join_gateway
         ])
 .setup(|app| {

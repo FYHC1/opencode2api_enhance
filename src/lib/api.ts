@@ -269,4 +269,7 @@ export const api = {
   gatewaySetRouteMode: (mode: 'smart' | 'failover' | 'round_robin') => invoke<void>('gateway_set_route_mode', { mode }),
   gatewayStop: () => invoke<void>('gateway_stop'),
   setJoinGateway: (name: string, join: boolean) => invoke<void>('set_join_gateway', { name, join }),
+
+  // 清除数据（1=运行数据, 2=+实例记录, 3=全部重置）
+  dataClean: (level: 1 | 2 | 3) => invoke<void>('data_clean', { level }),
 }

@@ -287,6 +287,149 @@ pub fn stop_all_instances(state: &tauri::State<'_, AppState>) {
     }
 }
 
+// ======================== 清除数据（缓存/实例/配置） ========================
+
+/// 清除本地数据。level 语义：
+/// 1 = 仅运行数据（runtime 目录：日志/stats/临时生成的配置），保留配置与实例记录
+/// 2 = 运行数据 + 实例记录（instances.json 清空，回到空实例池）
+/// 3 = 全部重置（运行数据 + 实例 + config.json，回到出厂默认）
+/// 清理前先停掉所有运行中实例与统一网关，避免残留进程占用端口。
+#[tauri::command]
+pub fn data_clean(state: tauri::State<'_, AppState>, level: u8) -> Result<(), String> {
+    if level != 1 && level != 2 && level != 3 {
+        return Err(format!("无效的清理级别: {}", level));
+    }
+
+    // 先停后清：关闭统一网关 + 所有实例进程（含状态异常但残留的 pid）
+    if let Ok(mut gateway) = state.gateway.lock() {
+        gateway.stop();
+    }
+    stop_all_instances(&state);
+    // 稍等进程退出，释放端口
+    std::thread::sleep(std::time::Duration::from_millis(300));
+
+    let config_dir = Config::config_dir();
+    clean_data_at(&config_dir, level)?;
+
+    // 清空管理器内存里的实例状态，保证前端刷新即见空
+    if let Ok(mut mgr) = state.manager.lock() {
+        mgr.instances.clear();
+        let _ = mgr.load(); // 重新读取 instances.json（level>=2 时为 []，level=1 时仍为原列表）
+    }
+
+    Ok(())
+}
+
+/// 在指定数据目录执行清理（纯 fs 逻辑，便于单元测试）。
+fn clean_data_at(config_dir: &std::path::Path, level: u8) -> Result<(), String> {
+    if level != 1 && level != 2 && level != 3 {
+        return Err(format!("无效的清理级别: {}", level));
+    }
+
+    let runtime_dir = config_dir.join("runtime");
+
+    // 1) 删除 runtime 目录（运行数据）
+    if runtime_dir.exists() {
+        std::fs::remove_dir_all(&runtime_dir)
+            .map_err(|e| format!("删除运行数据失败: {}", e))?;
+    }
+
+    let instances_path = config_dir.join("instances.json");
+
+    // 2) 清空实例记录（回到空实例池）
+    if level >= 2 && instances_path.exists() {
+        std::fs::write(&instances_path, "[]")
+            .map_err(|e| format!("清空实例记录失败: {}", e))?;
+    }
+
+    // 3) 删除配置（回到出厂默认），并备份一份便于误操作恢复
+    if level == 3 {
+        let config_path = config_dir.join("config.json");
+        if config_path.exists() {
+            let backup = config_dir.join("config.json.bak");
+            let _ = std::fs::copy(&config_path, &backup);
+            std::fs::remove_file(&config_path)
+                .map_err(|e| format!("删除配置失败: {}", e))?;
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod clean_tests {
+    use super::*;
+    use std::fs;
+
+    fn temp_dir() -> std::path::PathBuf {
+        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "oc2api-clean-test-{}-{}",
+            std::process::id(),
+            n
+        ));
+        fs::create_dir_all(&dir).ok();
+        dir
+    }
+
+    #[test]
+    fn test_clean_level1_keeps_instances_and_config() {
+        let dir = temp_dir();
+        fs::create_dir_all(dir.join("runtime")).ok();
+        fs::write(dir.join("instances.json"), r#"[{"name":"a"}]"#).ok();
+        fs::write(dir.join("config.json"), r#"{"base_url":"x"}"#).ok();
+
+        clean_data_at(&dir, 1).unwrap();
+
+        assert!(!dir.join("runtime").exists(), "runtime 应被删除");
+        assert!(dir.join("instances.json").exists(), "实例记录应保留");
+        assert!(dir.join("config.json").exists(), "配置应保留");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_clean_level2_clears_instances_keeps_config() {
+        let dir = temp_dir();
+        fs::create_dir_all(dir.join("runtime")).ok();
+        fs::write(dir.join("instances.json"), r#"[{"name":"a"}]"#).ok();
+        fs::write(dir.join("config.json"), r#"{"base_url":"x"}"#).ok();
+
+        clean_data_at(&dir, 2).unwrap();
+
+        assert!(!dir.join("runtime").exists());
+        let instances = fs::read_to_string(dir.join("instances.json")).unwrap();
+        assert_eq!(instances.trim(), "[]", "实例记录应清空");
+        assert!(dir.join("config.json").exists(), "配置应保留");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_clean_level3_resets_everything_with_backup() {
+        let dir = temp_dir();
+        fs::create_dir_all(dir.join("runtime")).ok();
+        fs::write(dir.join("instances.json"), r#"[{"name":"a"}]"#).ok();
+        fs::write(dir.join("config.json"), r#"{"base_url":"x"}"#).ok();
+
+        clean_data_at(&dir, 3).unwrap();
+
+        assert!(!dir.join("runtime").exists());
+        assert!(!dir.join("config.json").exists(), "配置应删除");
+        assert!(dir.join("config.json.bak").exists(), "应有备份");
+        let instances = fs::read_to_string(dir.join("instances.json")).unwrap();
+        assert_eq!(instances.trim(), "[]");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_clean_invalid_level_rejected() {
+        let dir = temp_dir();
+        assert!(clean_data_at(&dir, 0).is_err());
+        assert!(clean_data_at(&dir, 4).is_err());
+        fs::remove_dir_all(&dir).ok();
+    }
+}
+
 // ======================== 实例 CRUD ========================
 
 #[tauri::command]
