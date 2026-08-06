@@ -159,6 +159,14 @@ export type GatewayStatus = {
   free_models_error: string | null
 }
 
+export type RestartPoolResult = {
+  stopped: number
+  started: number
+  freed_ports: number[]
+  gateway_running: boolean
+  error: string | null
+}
+
 // ─── Token 统计（按实例） ─────────────────────────────────────────────
 
 export type ModelStat = {
@@ -269,6 +277,9 @@ export const api = {
   gatewaySetRouteMode: (mode: 'smart' | 'failover' | 'round_robin') => invoke<void>('gateway_set_route_mode', { mode }),
   gatewayStop: () => invoke<void>('gateway_stop'),
   setJoinGateway: (name: string, join: boolean) => invoke<void>('set_join_gateway', { name, join }),
+
+  // 一键重启实例池（全停→强制清端口→全启→网关同步）
+  restartPool: () => invoke<RestartPoolResult>('restart_pool'),
 
   // 清除数据（1=运行数据, 2=+实例记录, 3=全部重置）
   dataClean: (level: 1 | 2 | 3) => invoke<void>('data_clean', { level }),

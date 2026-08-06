@@ -26,6 +26,7 @@ export default function PoolPage({
   // 单行操作忙态；全部操作忙态（start / stop / test）
   const [rowBusy, setRowBusy] = useState<Record<string, 'start' | 'stop' | 'test'>>({})
   const [allBusy, setAllBusy] = useState<'start' | 'stop' | 'test' | null>(null)
+  const [restarting, setRestarting] = useState(false)
 
   // 池成员 = 已入池（join_gateway=true）的实例；支持前端搜索（名称/节点/IP/端口）
   const members = instances
@@ -78,6 +79,23 @@ export default function PoolPage({
       toast(String(e), false)
     } finally {
       setStopping(false)
+    }
+  }
+
+  const doRestart = async () => {
+    if (!confirm('确定一键重启实例池？\n将停止全部实例与网关、强制释放被占用的端口，再启动全部池成员。')) return
+    setRestarting(true)
+    try {
+      const r = await api.restartPool()
+      const parts = [`已停止 ${r.stopped} 个`, `启动 ${r.started} 个`]
+      if (r.freed_ports.length > 0) parts.push(`强制释放端口 ${r.freed_ports.join(', ')}`)
+      parts.push(`网关${r.gateway_running ? '运行中' : '未启动'}`)
+      toast(parts.join(' · ') + (r.error ? `（${r.error}）` : ''), !r.error)
+      await load()
+    } catch (e) {
+      toast(String(e), false)
+    } finally {
+      setRestarting(false)
     }
   }
 
@@ -211,6 +229,14 @@ export default function PoolPage({
           >
             {stopping ? <Loader2 size={14} className="animate-spin" /> : <Power size={14} />}
             {stopping ? '关闭中…' : '一键关闭网关'}
+          </button>
+          <button
+            onClick={() => void doRestart()}
+            disabled={restarting || members.length === 0}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-teal-700 bg-teal-50 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {restarting ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+            {restarting ? '重启中…' : '一键重启'}
           </button>
         </div>
       </div>

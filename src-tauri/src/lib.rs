@@ -98,6 +98,7 @@ pub fn run() {
             commands::batch_start,
             commands::batch_stop,
             commands::batch_delete,
+            commands::restart_pool,
             commands::port_suggest,
             commands::port_check,
             commands::scan_start,

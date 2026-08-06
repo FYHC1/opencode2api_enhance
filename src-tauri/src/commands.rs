@@ -183,6 +183,16 @@ pub struct BatchOpResult {
     pub error_count: usize,
 }
 
+/// 一键重启结果：停止/启动实例数 + 强制释放的端口列表。
+#[derive(Debug, Serialize)]
+pub struct RestartPoolResult {
+    pub stopped: usize,
+    pub started: usize,
+    pub freed_ports: Vec<u16>,
+    pub gateway_running: bool,
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct PortCheckResult {
     pub available: bool,
@@ -1002,6 +1012,197 @@ pub async fn batch_stop(
         }
 
         result
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+// ======================== 一键重启（含总端口强制清理） ========================
+
+/// 查找占用指定端口的进程 PID（Windows 用 netstat 解析 LISTENING 行）。
+#[cfg(windows)]
+fn pids_on_port(port: u16) -> Vec<u32> {
+    let mut pids = Vec::new();
+    let Ok(out) = std::process::Command::new("netstat")
+        .args(["-ano", "-p", "tcp"])
+        .output()
+    else {
+        return pids;
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    let needle = format!(":{}", port);
+    for line in text.lines() {
+        if !line.contains(&needle) {
+            continue;
+        }
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 5 {
+            continue;
+        }
+        // netstat 行：Proto LocalAddr ForeignAddr State PID
+        let state = parts[3];
+        if !(state == "LISTENING" || state == "ESTABLISHED" || state == "TIME_WAIT") {
+            continue;
+        }
+        if let Ok(pid) = parts[4].parse::<u32>() {
+            if pid != 0 && !pids.contains(&pid) {
+                pids.push(pid);
+            }
+        }
+    }
+    pids
+}
+
+#[cfg(not(windows))]
+fn pids_on_port(_port: u16) -> Vec<u32> {
+    Vec::new()
+}
+
+/// 强制释放端口：找到占用者并 taskkill，返回成功杀掉的进程 PID 列表。
+fn force_free_port(port: u16) -> Vec<u32> {
+    let mut freed = Vec::new();
+    let pids = pids_on_port(port);
+    for pid in pids {
+        if crate::instance::kill_process(pid).is_ok() {
+            freed.push(pid);
+        }
+    }
+    freed
+}
+
+/// 一键重启实例池（含统一网关总端口）：
+/// 1. 停止统一网关（总端口释放）
+/// 2. 停止所有实例（含残留 pid 的僵尸进程）
+/// 3. 强制清理所有池成员 singbox 端口 + 总端口（解决占用）
+/// 4. 并行启动全部池成员
+/// 5. 同步网关（自动拉起总端口）
+#[tauri::command]
+pub async fn restart_pool(state: tauri::State<'_, AppState>) -> Result<RestartPoolResult, String> {
+    let manager = Arc::clone(&state.manager);
+    let gateway = Arc::clone(&state.gateway);
+    tauri::async_runtime::spawn_blocking(move || {
+        // 1) 停统一网关
+        if let Ok(mut g) = gateway.lock() {
+            g.stop();
+        }
+
+        // 2) 全停实例（含残留 pid 的僵尸进程）
+        {
+            let Ok(mut mgr) = manager.lock() else {
+                return Err("状态锁失败".to_string());
+            };
+            let _ = mgr.load();
+            let names: Vec<String> = mgr
+                .list_instances()
+                .iter()
+                .filter(|i| {
+                    i.pid.is_some()
+                        || i.singbox_pid.is_some()
+                        || i.status == crate::instance::InstanceStatus::Running
+                        || i.status == crate::instance::InstanceStatus::Starting
+                })
+                .map(|i| i.name.clone())
+                .collect();
+            for n in names {
+                let _ = mgr.stop_instance(&n);
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(300));
+
+        // 3) 收集池成员端口 + 总端口，强制清理
+        let (pool_names, member_ports) = {
+            let mut mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
+            let _ = mgr.load();
+            let names: Vec<String> = mgr
+                .list_instances()
+                .iter()
+                .filter(|i| i.join_gateway)
+                .map(|i| i.name.clone())
+                .collect();
+            let ports: Vec<u16> = mgr
+                .list_instances()
+                .iter()
+                .filter(|i| i.join_gateway)
+                .map(|i| i.singbox_port)
+                .collect();
+            (names, ports)
+        };
+
+        let mut freed_ports: Vec<u16> = Vec::new();
+        let mut all_ports = member_ports.clone();
+        all_ports.push(crate::gateway::UNIFIED_GATEWAY_PORT);
+        for port in all_ports {
+            // 端口仍被占则强清
+            if !crate::instance::is_port_free(port) {
+                let freed = force_free_port(port);
+                if !freed.is_empty() {
+                    freed_ports.push(port);
+                }
+            }
+        }
+        // 再等一拍让端口真正释放
+        std::thread::sleep(std::time::Duration::from_millis(200));
+
+        // 4) 并行启动全部池成员
+        let started = if pool_names.is_empty() {
+            0
+        } else {
+            let mut mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
+            let _ = mgr.load();
+            let mut jobs = Vec::new();
+            for name in &pool_names {
+                if let Ok(instance) = mgr.mark_starting(name) {
+                    jobs.push(instance);
+                }
+            }
+            let (binary_dir, runtime_dir) = (mgr.binary_dir.clone(), mgr.runtime_dir.clone());
+            mgr.save_state().ok();
+            drop(mgr);
+
+            let outcomes = run_parallel_start_jobs(jobs, binary_dir, runtime_dir);
+            let mut success = 0usize;
+            if let Ok(mut mgr) = manager.lock() {
+                for (name, outcome) in outcomes {
+                    match outcome {
+                        Ok(instance) => {
+                            if mgr.apply_start_result(&name, Ok(instance)).is_ok() {
+                                success += 1;
+                            }
+                        }
+                        Err(error) => {
+                            let _ = mgr.apply_start_result(&name, Err(error.clone()));
+                        }
+                    }
+                }
+                mgr.save_state().ok();
+            }
+            success
+        };
+
+        // 5) 同步网关（自动拉起总端口）
+        let mut gateway_running = false;
+        let mut error = None;
+        if let Ok(mut g) = gateway.lock() {
+            if let Ok(mut mgr) = manager.lock() {
+                let _ = mgr.reconcile_states();
+                let total = mgr.list_instances().len();
+                match g.sync(mgr.list_instances()) {
+                    Ok(()) => {
+                        // status() 会在池非空且网关未启动时自动拉起，并返回运行态
+                        gateway_running = g.status(total).running;
+                    }
+                    Err(e) => error = Some(e.to_string()),
+                }
+            }
+        }
+
+        Ok(RestartPoolResult {
+            stopped: pool_names.len(),
+            started,
+            freed_ports,
+            gateway_running,
+            error,
+        })
     })
     .await
     .map_err(|e| e.to_string())?
