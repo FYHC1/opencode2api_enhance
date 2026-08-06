@@ -52,6 +52,7 @@ pub fn run() {
 
     // 构建核心：释放内嵌子程序 → 加载实例 → 校正僵尸状态 → 同步统一网关
     let core = Arc::new(core::AppCore::new());
+    let core_for_setup = core.clone();
 
     tauri::Builder::default()
         .manage(AppState {
@@ -93,8 +94,18 @@ pub fn run() {
             commands::data_clean,
             commands::set_join_gateway
         ])
-.setup(|app| {
+.setup(move |app| {
             use tauri::Manager;
+
+            // 启动本地管理 HTTP 服务（桌面与 headless 共用同一 API；端口可被
+            // OPCODE2API_HTTP_PORT 覆盖，默认 19090）
+            let core_for_http = core_for_setup.clone();
+            tauri::async_runtime::spawn(async move {
+                let addr = format!("127.0.0.1:{}", local_http_port());
+                if let Err(e) = server::serve(&addr, core_for_http).await {
+                    eprintln!("本地 HTTP 服务启动失败 ({}): {}", addr, e);
+                }
+            });
 
             // 托盘菜单：右键显示「显示主窗口 / 退出」
             let show_i =
@@ -167,11 +178,20 @@ button: tauri::tray::MouseButton::Left,
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 if let Some(state) = app.try_state::<AppState>() {
                     // 先停网关（释放网关端口），再停实例（释放实例端口）
-                    if let Ok(mut gateway) = state.core.gateway.lock() {
+                     if let Ok(mut gateway) = state.core.gateway.lock() {
                         gateway.stop();
                     }
                     commands::stop_all_instances(&state);
                 }
             }
         });
+}
+
+/// 本地管理 HTTP 端口：默认 19090，可用 OPCODE2API_HTTP_PORT 覆盖
+/// （headless 的 `serve --port` 与桌面模式共享此环境变量约定）。
+fn local_http_port() -> u16 {
+    std::env::var("OPCODE2API_HTTP_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(19090)
 }
