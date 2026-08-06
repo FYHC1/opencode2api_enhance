@@ -8,6 +8,7 @@ pub mod gateway;
 pub mod instance;
 pub mod opencode_cfg;
 pub mod probe;
+pub mod server;
 pub mod singbox;
 
 use std::sync::{Arc, Mutex};
