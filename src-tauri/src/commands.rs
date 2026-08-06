@@ -1461,7 +1461,7 @@ let _ = no_window(&mut std::process::Command::new("reg"))
 }
 
 #[cfg(not(windows))]
-fn autostart_set(_enabled: bool) -> anyhow::Result<()> {
+fn autostart_set_impl(_enabled: bool) -> anyhow::Result<()> {
     anyhow::bail!("仅 Windows 支持开机自启")
 }
 
@@ -1472,7 +1472,14 @@ pub fn autostart_get() -> Result<bool, String> {
 
 #[tauri::command]
 pub fn autostart_set(enabled: bool) -> Result<(), String> {
-    set_autostart(enabled).map_err(|e| e.to_string())
+    #[cfg(windows)]
+    {
+        set_autostart(enabled).map_err(|e| e.to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        autostart_set_impl(enabled).map_err(|e| e.to_string())
+    }
 }
 
 // ======================== 二进制信息 ========================
