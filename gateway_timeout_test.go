@@ -151,6 +151,16 @@ func TestStreamWithResumeNormal(t *testing.T) {
 	}
 	defer func() { timeoutCfg = orig }()
 
+	// 开启节点前缀展示（默认关闭，此处显式开启验证前缀逻辑）
+	configMu.Lock()
+	showNodePrefix = true
+	configMu.Unlock()
+	defer func() {
+		configMu.Lock()
+		showNodePrefix = false
+		configMu.Unlock()
+	}()
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(200)

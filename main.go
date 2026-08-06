@@ -727,6 +727,7 @@ var (
 	modelAlias           = map[string]string{}
 	reasoningEffortMap   = map[string]string{}
 	forceDisableThinking bool
+	showNodePrefix       bool
 	debugMode            bool
 	gatewayMode          bool
 	configMu             sync.RWMutex
@@ -1020,6 +1021,8 @@ type AppConfig struct {
 	BadStatusCodes map[string]string `json:"bad_status_codes,omitempty"`
 	// 坏池阈值：连续坏状态码次数达到后节点进坏池（默认 3）
 	BadThreshold int `json:"bad_threshold,omitempty"`
+	// ShowNodePrefix 是否在对话流首段展示「🤖 节点 · 模型」前缀（默认关闭）
+	ShowNodePrefix *bool `json:"show_node_prefix,omitempty"`
 }
 
 // ======================== Claude Messages API 类型 ========================
@@ -1159,6 +1162,9 @@ func applyConfig(cfg AppConfig) {
 		reasoningEffortMap = cfg.ReasoningEffortMap
 	}
 	forceDisableThinking = cfg.ForceDisableThinking
+	if cfg.ShowNodePrefix != nil {
+		showNodePrefix = *cfg.ShowNodePrefix
+	}
 
 	if cfg.RouteMode == "round_robin" || cfg.RouteMode == "failover" || cfg.RouteMode == "smart" {
 		routeMode = cfg.RouteMode
@@ -1250,13 +1256,38 @@ func resolveModel(model string) string {
 	if ok {
 		return alias
 	}
+	// 自动兜底：新 -free 模型无需手动加别名。
+	// 若请求名本身已在缓存（含 -free）则原样使用；否则若「请求名+-free」存在，
+	// 说明客户发的是去 -free 的展示名，映射回真实免费模型名。
+	if modelInCaches(m) {
+		return m
+	}
+	if strings.HasSuffix(m, "-free") {
+		return m
+	}
+	if modelInCaches(m + "-free") {
+		return m + "-free"
+	}
 	return m
+}
+
+// modelInCaches 判断模型名是否存在于免费模型或 Go 目录缓存中（含 -free 原名）。
+func modelInCaches(id string) bool {
+	modelMu.RLock()
+	defer modelMu.RUnlock()
+	return containsModelWithID(modelsCache, id) || containsModelWithID(goModelsCache, id)
 }
 
 func getForceDisableThinking() bool {
 	configMu.RLock()
 	defer configMu.RUnlock()
 	return forceDisableThinking
+}
+
+func getShowNodePrefix() bool {
+	configMu.RLock()
+	defer configMu.RUnlock()
+	return showNodePrefix
 }
 
 func getReasoningEffortMap() map[string]string {
@@ -2398,7 +2429,13 @@ func replaceModelIDsWithAliases(models []ModelInfo, aliases map[string]string) [
 	for _, model := range models {
 		visibleIDs := aliasesByUpstream[model.ID]
 		if len(visibleIDs) == 0 {
-			visibleIDs = []string{model.ID}
+			// 自动兜底：未配置别名的 -free 模型，展示名去掉 -free 后缀
+			// （内部请求仍用原名；显式别名优先）。
+			if strings.HasSuffix(model.ID, "-free") {
+				visibleIDs = []string{strings.TrimSuffix(model.ID, "-free")}
+			} else {
+				visibleIDs = []string{model.ID}
+			}
 		}
 		for _, visibleID := range visibleIDs {
 			if _, exists := seen[visibleID]; exists {

@@ -490,7 +490,8 @@ func streamWithResume(w http.ResponseWriter, r *http.Request, upstreamBody []byt
 				// 节点/模型标识：每个节点首个内容 chunk 前插入「🤖 节点 · 模型」前缀，
 				// 用户可感知当前由哪个节点/模型回答、以及何时切换（切换后新节点重新加前缀）。
 				// 前缀独立成行（\n\n 分隔），不影响后续内容阅读。
-				if !prefixDone && strings.HasPrefix(out, "data: ") {
+				// 由配置 show_node_prefix 控制（默认关闭）。
+				if getShowNodePrefix() && !prefixDone && strings.HasPrefix(out, "data: ") {
 					var outObj map[string]any
 					if json.Unmarshal([]byte(out[6:]), &outObj) == nil {
 						if chs, ok := outObj["choices"].([]any); ok && len(chs) > 0 {

@@ -435,17 +435,17 @@ func TestListModelsHandlerSeparatesPublicZenAndGoCatalogs(t *testing.T) {
 	}{
 		{
 			name:    "public only sees free zen models",
-			wantIDs: []string{"deepseek-v4-flash-free"},
+			wantIDs: []string{"deepseek-v4-flash"},
 		},
 		{
 			name:       "bare zen key sees zen catalog only",
 			authHeader: "Bearer sk-auto0123456789abcdef",
-			wantIDs:    []string{"deepseek-v4-flash-free", "glm-5.2", "gpt-5.5"},
+			wantIDs:    []string{"deepseek-v4-flash", "glm-5.2", "gpt-5.5"},
 		},
 		{
 			name:       "go prefix sees free and go catalog",
 			authHeader: "Bearer go:sk-go0123456789abcdef",
-			wantIDs:    []string{"deepseek-v4-flash-free", "glm-5.2", "kimi-k2.7-code"},
+			wantIDs:    []string{"deepseek-v4-flash", "glm-5.2", "kimi-k2.7-code"},
 		},
 	}
 
@@ -547,6 +547,83 @@ func TestListModelsHandlerReplacesMappedModelIDsWithAliases(t *testing.T) {
 			}
 			if !reflect.DeepEqual(gotIDs, tt.wantIDs) {
 				t.Fatalf("listModelsHandler() ids = %#v, want %#v", gotIDs, tt.wantIDs)
+			}
+		})
+	}
+}
+
+// TestReplaceModelIDsAutoStripFreeSuffix：新 -free 模型未配置别名时，
+// 展示名自动去掉 -free 后缀（内部仍保留原名），显式别名优先。
+func TestReplaceModelIDsAutoStripFreeSuffix(t *testing.T) {
+	aliases := map[string]string{
+		// 显式别名优先：该模型展示名用配置值，不受自动兜底影响
+		"deepseek-v4-flash": "deepseek-v4-flash-free",
+	}
+	models := []ModelInfo{
+		{ID: "deepseek-v4-flash-free", Object: "model"},
+		{ID: "brand-new-model-free", Object: "model"}, // 未来新增，未配置别名
+		{ID: "plain-model", Object: "model"},          // 无 -free 后缀，原样
+	}
+	got := replaceModelIDsWithAliases(models, aliases)
+	want := []string{"deepseek-v4-flash", "brand-new-model", "plain-model"}
+	gotIDs := make([]string, 0, len(got))
+	for _, m := range got {
+		gotIDs = append(gotIDs, m.ID)
+	}
+	if !reflect.DeepEqual(gotIDs, want) {
+		t.Fatalf("replaceModelIDsWithAliases() = %#v, want %#v", gotIDs, want)
+	}
+	// 展示名应为去 -free 的 ID，但原始 -free 名不应出现在展示列表
+	if got[1].ID != "brand-new-model" {
+		t.Fatalf("expected stripped display id, got %q", got[1].ID)
+	}
+	if models[1].ID != "brand-new-model-free" {
+		t.Fatal("expected original -free id preserved in input model")
+	}
+}
+
+// TestResolveModelAutoSuffixFree：客户发去 -free 的展示名时，
+// 自动反向映射回缓存中存在的 -free 真实名；已在缓存中的原名原样返回。
+func TestResolveModelAutoSuffixFree(t *testing.T) {
+	oldModelsCache := modelsCache
+	oldGoModelsCache := goModelsCache
+	oldModelAlias := modelAlias
+	modelMu.Lock()
+	modelsCache = []ModelInfo{
+		{ID: "brand-new-model-free", Object: "model"},
+		{ID: "deepseek-v4-flash-free", Object: "model"},
+	}
+	goModelsCache = nil
+	modelMu.Unlock()
+	configMu.Lock()
+	modelAlias = map[string]string{
+		"deepseek-v4-flash": "deepseek-v4-flash-free",
+	}
+	configMu.Unlock()
+	t.Cleanup(func() {
+		modelMu.Lock()
+		modelsCache = oldModelsCache
+		goModelsCache = oldGoModelsCache
+		modelMu.Unlock()
+		configMu.Lock()
+		modelAlias = oldModelAlias
+		configMu.Unlock()
+	})
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"显式别名优先", "deepseek-v4-flash", "deepseek-v4-flash-free"},
+		{"新模型自动映射", "brand-new-model", "brand-new-model-free"},
+		{"已在缓存原名原样", "brand-new-model-free", "brand-new-model-free"},
+		{"非免费模型原样", "gpt-5.5", "gpt-5.5"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := resolveModel(tt.input); got != tt.want {
+				t.Fatalf("resolveModel(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
 	}

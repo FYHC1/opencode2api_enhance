@@ -203,6 +203,7 @@ pub struct ConfigView {
     pub failover_probe_min: i64,
     pub failover_probe_max: i64,
     pub call_log_max: i64,
+    pub show_node_prefix: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -1035,6 +1036,7 @@ pub fn config_get() -> Result<ConfigView, String> {
         failover_probe_min: cfg.failover_probe_min.unwrap_or(2),
         failover_probe_max: cfg.failover_probe_max.unwrap_or(3),
         call_log_max: cfg.call_log_max.unwrap_or(5000),
+        show_node_prefix: cfg.show_node_prefix.unwrap_or(false),
     })
 }
 

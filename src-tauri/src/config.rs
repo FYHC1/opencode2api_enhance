@@ -18,6 +18,8 @@ pub struct Config {
     pub failover_probe_max: Option<i64>,
     /// 调用日志保留上限
     pub call_log_max: Option<i64>,
+    /// 对话流是否展示「🤖 节点 · 模型」前缀（默认关闭）
+    pub show_node_prefix: Option<bool>,
 }
 
 impl Config {
@@ -95,6 +97,7 @@ impl Config {
             "failover_probe_min" => Some(self.failover_probe_min.unwrap_or(0).to_string()),
             "failover_probe_max" => Some(self.failover_probe_max.unwrap_or(0).to_string()),
             "call_log_max" => Some(self.call_log_max.unwrap_or(0).to_string()),
+            "show_node_prefix" => Some(self.show_node_prefix.unwrap_or(false).to_string()),
             _ => None,
         }
     }
@@ -123,6 +126,11 @@ impl Config {
             "failover_probe_min" => self.failover_probe_min = Some(parse_i64(value)?),
             "failover_probe_max" => self.failover_probe_max = Some(parse_i64(value)?),
             "call_log_max" => self.call_log_max = Some(parse_i64(value)?),
+            "show_node_prefix" => {
+                let b = value.parse::<bool>()
+                    .with_context(|| format!("invalid boolean for show_node_prefix: {value}"))?;
+                self.show_node_prefix = Some(b);
+            }
             _ => {
                 anyhow::bail!("Unknown config key: {}", key);
             }
@@ -173,6 +181,18 @@ mod tests {
 
         config.set("default_password", "secret").unwrap();
         assert_eq!(config.get("default_password"), Some("secret".to_string()));
+    }
+
+    #[test]
+    fn test_config_show_node_prefix_get_set() {
+        let mut config = Config::default();
+        // 默认关闭
+        assert_eq!(config.get("show_node_prefix"), Some("false".to_string()));
+        config.set("show_node_prefix", "true").unwrap();
+        assert_eq!(config.get("show_node_prefix"), Some("true".to_string()));
+        assert_eq!(config.show_node_prefix, Some(true));
+        // 非法布尔应报错
+        assert!(config.set("show_node_prefix", "maybe").is_err());
     }
 
     #[test]

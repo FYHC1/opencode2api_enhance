@@ -5,6 +5,8 @@ use serde_json::json;
 /// active_socks5 指向 sing-box 的 SOCKS5 端口
 pub fn build_opencode_config(singbox_port: u16) -> Result<String> {
     let proxy_addr = format!("127.0.0.1:{}", singbox_port);
+    let cfg = crate::config::Config::load().unwrap_or_default();
+    let show_node_prefix = cfg.show_node_prefix.unwrap_or(false);
     let config = json!({
         "model_alias": {
             "deepseek-v4-flash": "deepseek-v4-flash-free",
@@ -28,7 +30,8 @@ pub fn build_opencode_config(singbox_port: u16) -> Result<String> {
                 "password": ""
             }
         ],
-        "active_socks5": proxy_addr
+        "active_socks5": proxy_addr,
+        "show_node_prefix": show_node_prefix
     });
 
     Ok(serde_json::to_string_pretty(&config)?)
@@ -70,6 +73,7 @@ pub fn build_opencode_router_config(
     let probe_min = cfg.failover_probe_min.unwrap_or(2);
     let probe_max = cfg.failover_probe_max.unwrap_or(3);
     let call_log_max = cfg.call_log_max.unwrap_or(5000);
+    let show_node_prefix = cfg.show_node_prefix.unwrap_or(false);
     let config = json!({
         "model_alias": {
             "deepseek-v4-flash": "deepseek-v4-flash-free",
@@ -94,7 +98,8 @@ pub fn build_opencode_router_config(
         "timeout_silence_max_ms": silence_max,
         "failover_probe_min": probe_min,
         "failover_probe_max": probe_max,
-        "call_log_max": call_log_max
+        "call_log_max": call_log_max,
+        "show_node_prefix": show_node_prefix
     });
 
     Ok(serde_json::to_string_pretty(&config)?)
@@ -112,6 +117,8 @@ mod tests {
         assert_eq!(v["socks5_proxies"][0]["addr"], "127.0.0.1:7890");
         assert!(v["model_alias"]["deepseek-v4-flash"].is_string());
         assert_eq!(v["force_disable_thinking"], false);
+        // show_node_prefix 默认 false（默认关闭）
+        assert_eq!(v["show_node_prefix"], false);
     }
 
     #[test]
@@ -136,6 +143,8 @@ mod tests {
         assert_eq!(v["socks5_proxies"][0]["name"], "日本1");
         assert_eq!(v["socks5_proxies"][0]["addr"], "127.0.0.1:18001");
         assert_eq!(v["socks5_proxies"][1]["name"], "美国2");
+        // show_node_prefix 默认 false
+        assert_eq!(v["show_node_prefix"], false);
     }
 
     #[test]

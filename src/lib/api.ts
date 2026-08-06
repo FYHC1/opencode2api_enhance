@@ -108,6 +108,7 @@ export type ConfigView = {
   failover_probe_min: number
   failover_probe_max: number
   call_log_max: number
+  show_node_prefix: boolean
 }
 
 export type BinariesInfo = {

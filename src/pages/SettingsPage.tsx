@@ -21,6 +21,8 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
     failover_probe_max: 3,
     call_log_max: 5000,
   })
+  // 节点前缀展示开关（默认关闭）
+  const [showNodePrefix, setShowNodePrefix] = useState(false)
 
 
   useEffect(() => {
@@ -44,6 +46,7 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
           failover_probe_max: cfg.failover_probe_max,
           call_log_max: cfg.call_log_max,
         })
+        setShowNodePrefix(cfg.show_node_prefix)
       } catch (e) {
         console.error('加载设置失败', e)
         toast('加载设置失败', false)
@@ -109,6 +112,17 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
     } catch (e) {
       console.error('保存超时配置失败', e)
       toast('保存失败', false)
+    }
+  }
+
+  const handleShowNodePrefixChange = async (enabled: boolean) => {
+    try {
+      await api.configSet('show_node_prefix', String(enabled))
+      setShowNodePrefix(enabled)
+      toast(enabled ? '已开启节点前缀展示' : '已关闭节点前缀展示', true)
+    } catch (e) {
+      console.error('设置节点前缀失败', e)
+      toast('设置失败', false)
     }
   }
 
@@ -250,6 +264,21 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
           />
           <p className="text-zinc-500 text-xs">日志页最多保留的请求记录数。默认 5000</p>
         </div>
+
+        {/* 节点前缀展示开关 */}
+        <div className="flex items-center space-x-3">
+          <label className="relative inline-flex items-center cursor-pointer">
+            <input
+              type="checkbox"
+              checked={showNodePrefix}
+              onChange={(e) => handleShowNodePrefixChange(e.target.checked)}
+              className="sr-only peer"
+            />
+            <div className="w-11 h-6 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-zinc-900"></div>
+          </label>
+          <span className="text-sm text-zinc-700">对话流首段展示「节点 · 模型」前缀</span>
+        </div>
+        <p className="text-zinc-500 text-xs">开启后每条回复显示由哪个实例/模型回答（切换节点时重新标注）。默认关闭</p>
 
         <button
           onClick={handleSaveTimeout}
