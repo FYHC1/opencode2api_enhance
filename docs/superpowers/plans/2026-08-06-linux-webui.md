@@ -2,13 +2,28 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 将 Windows 优先的 Tauri 桌面应用改造为「Rust core + 双入口」架构：桌面模式与纯浏览器 headless 模式共用一套 React 前端与一套 Rust 管理逻辑，并完成 Linux 适配与 6 项功能完善（订阅拉取/健康巡检/报表导出/日志过滤/自定义网关密钥与端口/配置文件驱动）。
+**Goal:** 将 Windows 优先的 Tauri 桌面应用改造为「Rust core + 双入口」架构：桌面模式与纯浏览器 headless 模式共用一套 React 前端与一套 Rust 管理逻辑，并完成功能完善（订阅拉取/健康巡检/报表导出/日志过滤/自定义网关密钥与端口/配置文件驱动），最终可在 Linux 上以 Docker / headless 形态运行。
 
 **Architecture:** 抽取 `AppCore`（纯逻辑，无 Tauri 依赖）持有 manager/scan/gateway；axum HTTP 层与 Tauri command 层均调用同一批 `*_core()` 函数。前端 `api.ts` 从 `invoke` 全量切换为 `fetch`。桌面入口保留 Tauri 壳（窗口/托盘/自启）；新增 headless 入口（`serve` 子命令）提供 HTTP API + 静态文件托管。所有平台相关代码用 `cfg!` 分支隔离。
 
-**Tech Stack:** Rust（axum 0.8 + tokio + serde）、Tauri 2、React 19 + Vite 8 + Tailwind 4、Go 核心（不动）、sing-box。
+**Tech Stack:** Rust（axum 0.8 + tokio + serde）、Tauri 2、React 19 + Vite 8 + Tailwind 4、Go 核心（不动）、sing-box、Docker。
 
 **Spec:** `docs/superpowers/specs/2026-08-06-linux-webui-design.md`
+
+---
+
+## 分阶段执行策略（2026-08-06 用户确认）
+
+用户要求**分阶段推进**，而非一次完成全部：
+
+- **Phase 1（当前，Windows 基础）**：以现有 Windows 版为基底实现 WebUI（桌面 + headless 双入口）+ 全部功能完善（订阅拉取/健康巡检/报表导出/日志过滤/自定义网关密钥/配置化端口）。本阶段代码保持 Windows 编译优先，`cfg!` 分支写好但 Linux 侧可暂不交付产物。
+  - 执行范围：Task 1-13 + Task 17-22（M1 架构重构 + M2 配置化 + M3 功能完善），全部在 Windows/当前平台编译验证。
+- **Phase 2（Docker 化）**：将 headless 模式打包为 Docker 镜像（multi-stage：Rust 编译管理服务 + Go 编译 opencode2api 核心 + sing-box + 前端静态文件），在 Linux 容器中运行。
+  - 执行范围：新增 Task 25（Dockerfile）+ Task 26（docker-compose/部署验证）。依赖 Phase 1 完成。
+- **Phase 3（Linux 完全适配）**：Linux 二进制内嵌/释放、CI ubuntu job、systemd 服务、部署文档。**Linux 桌面端 GUI 短期内不实现，仅预留扩展点**（`tauri_main` 保持平台无关壳，Linux 上 headless 为第一公民）。
+  - 执行范围：Task 14-16 + Task 23 + 新增 Task 27（Linux GUI 预留扩展点说明）。
+
+> **任务归属总览**：Phase 1 = Task 1-13 + 17-22；Phase 2 = Task 25-26；Phase 3 = Task 14-16 + 23 + 27。Task 24（端到端回归）在 Phase 1 末尾执行一次，Phase 3 末尾再执行一次。
 
 ---
 
