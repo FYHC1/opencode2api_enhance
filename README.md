@@ -41,7 +41,7 @@ UI 参照 Windsurf Account Manager 的浅色官网风格：Tauri 2 无边框窗�
 
 ## Linux / Headless 部署
 
-- **Headless（无图形界面 / 服务器）**：`opencode2api serve --port 19090`，监听 `0.0.0.0` 并托管前端 `dist/`，纯浏览器完成全部管理。生产环境建议配合 systemd + 反向代理，见 [部署文档](docs/DEPLOYMENT.md)。
+- **Headless（无图形界面 / 服务器）**：`opencode2api serve --port 19090`，默认仅监听 `127.0.0.1` 并托管前端 `dist/`，纯浏览器完成全部管理；局域网/公网访问需显式 `--bind 0.0.0.0`（管理 API 无鉴权，务必配合 systemd + 反向代理限制来源），见 [部署文档](docs/DEPLOYMENT.md)。
 - **桌面（Linux）**：安装 .deb / AppImage 即可；桌面模式内置本地 HTTP 服务（`127.0.0.1:19090`），前端经它取数，行为与 Windows 版一致。
 - 数据目录与配置：`OPCODE2API_DATA_DIR` 隔离数据；`OPCODE2API_HTTP_PORT` 覆盖管理端口；`config.json` 支持网关端口/密钥、订阅、健康巡检、日志过滤等配置项。
 

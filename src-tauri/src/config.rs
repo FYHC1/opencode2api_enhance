@@ -161,6 +161,12 @@ impl Config {
             s.parse::<i64>()
                 .with_context(|| format!("invalid integer for {key}: {s}"))
         };
+        // u32 字段（订阅间隔/巡检间隔/重启阈值）拒绝负值——负值经 i64→u32 cast
+        // 会 wrap 成 4294967295，导致后台循环休眠数年（实测 -1 → 4294967295）。
+        let parse_u32 = |s: &str, key: &str| -> Result<u32> {
+            s.parse::<u32>()
+                .with_context(|| format!("invalid non-negative integer for {key}: {s}"))
+        };
         match key {
             "base_url" => {
                 self.base_url = value.to_string();
@@ -225,13 +231,13 @@ impl Config {
                 };
             }
             "subscribe_interval_min" => {
-                self.subscribe_interval_min = Some(parse_i64(value)? as u32);
+                self.subscribe_interval_min = Some(parse_u32(value, key)?);
             }
             "health_check_interval_sec" => {
-                self.health_check_interval_sec = Some(parse_i64(value)? as u32);
+                self.health_check_interval_sec = Some(parse_u32(value, key)?);
             }
             "health_restart_threshold" => {
-                self.health_restart_threshold = Some(parse_i64(value)? as u32);
+                self.health_restart_threshold = Some(parse_u32(value, key)?);
             }
             "log_filter_keywords" => {
                 self.log_filter_keywords = if value.is_empty() {

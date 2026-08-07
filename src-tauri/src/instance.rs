@@ -39,8 +39,7 @@ pub struct Instance {
     pub status: InstanceStatus,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub enum InstanceStatus {
     #[default]
     Stopped,
@@ -49,7 +48,6 @@ pub enum InstanceStatus {
     Stopping,
     Error(String),
 }
-
 
 pub struct InstanceManager {
     pub instances: Vec<Instance>,
@@ -80,7 +78,6 @@ impl InstanceManager {
             persist_state: false,
         }
     }
-
 
     pub fn add_instance(
         &mut self,
@@ -149,30 +146,26 @@ impl InstanceManager {
         }
 
         // 1. 根据节点名查找 Clash 节点
-        let nodes = clash_yaml::list_nodes_with_group()
-            .context("无法读取代理节点（本地或外部控制）")?;
+        let nodes =
+            clash_yaml::list_nodes_with_group().context("无法读取代理节点（本地或外部控制）")?;
         let node = nodes
             .iter()
             .find(|n| n.name == self.instances[idx].node)
             .with_context(|| format!("未找到节点 '{}'", self.instances[idx].node))?;
 
         let instance_dir = self.runtime_dir.join(&self.instances[idx].name);
-        fs::create_dir_all(&instance_dir)
-            .context("创建实例目录失败")?;
+        fs::create_dir_all(&instance_dir).context("创建实例目录失败")?;
         let log_dir = instance_dir.join("logs");
-        fs::create_dir_all(&log_dir)
-            .context("创建日志目录失败")?;
+        fs::create_dir_all(&log_dir).context("创建日志目录失败")?;
 
         self.instances[idx].status = InstanceStatus::Starting;
         self.save()?;
-
 
         // 2. 生成并启动 sing-box
         let singbox_cfg = singbox::build_singbox_config(node, self.instances[idx].singbox_port)
             .context("生成 sing-box 配置失败")?;
         let singbox_cfg_path = instance_dir.join("singbox.json");
-        fs::write(&singbox_cfg_path, singbox_cfg)
-            .context("写入 sing-box 配置失败")?;
+        fs::write(&singbox_cfg_path, singbox_cfg).context("写入 sing-box 配置失败")?;
 
         let singbox_exe = self.binary_dir.join("sing-box.exe");
         let singbox_bin = if singbox_exe.exists() {
@@ -180,7 +173,10 @@ impl InstanceManager {
         } else {
             let fallback = self.binary_dir.join("sing-box");
             if !fallback.exists() {
-                bail!("未找到 sing-box 可执行文件: {}", self.binary_dir.join("sing-box.exe").display());
+                bail!(
+                    "未找到 sing-box 可执行文件: {}",
+                    self.binary_dir.join("sing-box.exe").display()
+                );
             }
             fallback
         };
@@ -190,7 +186,7 @@ impl InstanceManager {
         let singbox_stderr = fs::File::create(log_dir.join("singbox.err.log"))
             .context("创建 sing-box 错误日志失败")?;
 
-let singbox_child = no_window(&mut Command::new(&singbox_bin))
+        let singbox_child = no_window(&mut Command::new(&singbox_bin))
             .args(["run", "-c"])
             .arg(&singbox_cfg_path)
             .stdout(Stdio::from(singbox_stdout))
@@ -198,6 +194,16 @@ let singbox_child = no_window(&mut Command::new(&singbox_bin))
             .spawn()
             .context("启动 sing-box 失败")?;
         self.instances[idx].singbox_pid = Some(singbox_child.id());
+
+        // sing-box 已启动；后续任何失败都必须先清理它，避免孤儿进程占用端口。
+        // 用闭包统一收尾：失败时杀 sing-box 并回写 Error 状态。
+        let cleanup_singbox = |instances: &mut [Instance], idx: usize| {
+            if let Some(pid) = instances[idx].singbox_pid.take() {
+                let _ = kill_process(pid);
+            }
+            instances[idx].status = InstanceStatus::Error("opencode2api 启动失败".into());
+            instances[idx].pid = None;
+        };
 
         // 等待 sing-box SOCKS5 端口就绪，再启动 opencode2api
         let singbox_port = self.instances[idx].singbox_port;
@@ -211,10 +217,15 @@ let singbox_child = no_window(&mut Command::new(&singbox_bin))
 
         // 3. 生成并启动 opencode2api
         let oc_cfg = opencode_cfg::build_opencode_config(self.instances[idx].singbox_port)
-            .context("生成 opencode2api 配置失败")?;
+            .map_err(|e| {
+                cleanup_singbox(&mut self.instances, idx);
+                e
+            })?;
         let oc_cfg_path = instance_dir.join("opencode2api.json");
-        fs::write(&oc_cfg_path, oc_cfg)
-            .context("写入 opencode2api 配置失败")?;
+        fs::write(&oc_cfg_path, oc_cfg).map_err(|e| {
+            cleanup_singbox(&mut self.instances, idx);
+            e
+        })?;
 
         let oc_bin = self.binary_dir.join("opencode2api.exe");
         let oc_bin = if oc_bin.exists() {
@@ -222,18 +233,25 @@ let singbox_child = no_window(&mut Command::new(&singbox_bin))
         } else {
             let fallback = self.binary_dir.join("opencode2api");
             if !fallback.exists() {
-                let _ = kill_process(singbox_child.id());
-                bail!("未找到 opencode2api 可执行文件: {}", self.binary_dir.join("opencode2api.exe").display());
+                cleanup_singbox(&mut self.instances, idx);
+                bail!(
+                    "未找到 opencode2api 可执行文件: {}",
+                    self.binary_dir.join("opencode2api.exe").display()
+                );
             }
             fallback
         };
 
-        let oc_stdout = fs::File::create(log_dir.join("opencode2api.out.log"))
-            .context("创建 opencode2api 输出日志失败")?;
-        let oc_stderr = fs::File::create(log_dir.join("opencode2api.err.log"))
-            .context("创建 opencode2api 错误日志失败")?;
+        let oc_stdout = fs::File::create(log_dir.join("opencode2api.out.log")).map_err(|e| {
+            cleanup_singbox(&mut self.instances, idx);
+            e
+        })?;
+        let oc_stderr = fs::File::create(log_dir.join("opencode2api.err.log")).map_err(|e| {
+            cleanup_singbox(&mut self.instances, idx);
+            e
+        })?;
 
-	let oc_child = no_window(&mut Command::new(&oc_bin))
+        let oc_child = no_window(&mut Command::new(&oc_bin))
             // 工作目录设为实例专属目录：Go 核心把 stats.json 写入当前工作目录，
             // 隔离后每个实例的 token 统计独立落盘到 runtime/{实例名}/stats.json
             .current_dir(&instance_dir)
@@ -246,7 +264,10 @@ let singbox_child = no_window(&mut Command::new(&singbox_bin))
             .stdout(Stdio::from(oc_stdout))
             .stderr(Stdio::from(oc_stderr))
             .spawn()
-            .context("启动 opencode2api 失败")?;
+            .map_err(|e| {
+                cleanup_singbox(&mut self.instances, idx);
+                e
+            })?;
         self.instances[idx].pid = Some(oc_child.id());
 
         let api_port = self.instances[idx].port;
@@ -428,10 +449,8 @@ let singbox_child = no_window(&mut Command::new(&singbox_bin))
         if !self.persist_state {
             return Ok(());
         }
-        let data = serde_json::to_string_pretty(&self.instances)
-            .context("序列化实例失败")?;
-        fs::write(&self.config_path, data)
-            .context("写入实例文件失败")?;
+        let data = serde_json::to_string_pretty(&self.instances).context("序列化实例失败")?;
+        fs::write(&self.config_path, data).context("写入实例文件失败")?;
         Ok(())
     }
 
@@ -439,13 +458,10 @@ let singbox_child = no_window(&mut Command::new(&singbox_bin))
         self.save()
     }
 
-
     pub fn load(&mut self) -> Result<()> {
         if self.config_path.exists() {
-            let data = fs::read_to_string(&self.config_path)
-                .context("读取实例文件失败")?;
-            self.instances = serde_json::from_str(&data)
-                .context("解析实例文件失败")?;
+            let data = fs::read_to_string(&self.config_path).context("读取实例文件失败")?;
+            self.instances = serde_json::from_str(&data).context("解析实例文件失败")?;
         }
         Ok(())
     }
@@ -613,8 +629,7 @@ pub(crate) fn probe_free_completion_response(
         "max_tokens": 1,
         "stream": false
     });
-    let request_body =
-        serde_json::to_string(&request_body).context("生成免费模型测试请求失败")?;
+    let request_body = serde_json::to_string(&request_body).context("生成免费模型测试请求失败")?;
     http_post_json(
         port,
         "/v1/chat/completions",
@@ -654,7 +669,6 @@ pub fn probe_free_completion(name: &str, port: u16, auth_token: Option<&str>) ->
     }
 }
 
-
 fn truncate(s: &str, max: usize) -> String {
     let mut t: String = s.chars().take(max).collect();
     if s.chars().count() > max {
@@ -683,8 +697,7 @@ pub(crate) fn http_get_json(
     auth_token: Option<&str>,
 ) -> Result<(u16, String)> {
     let addr = format!("127.0.0.1:{}", port);
-    let mut stream =
-        TcpStream::connect(&addr).with_context(|| format!("无法连接 {}", addr))?;
+    let mut stream = TcpStream::connect(&addr).with_context(|| format!("无法连接 {}", addr))?;
     stream
         .set_read_timeout(Some(timeout))
         .context("设置读超时失败")?;
@@ -705,9 +718,7 @@ pub(crate) fn http_get_json(
         .context("发送 HTTP 请求失败")?;
 
     let mut buf = Vec::new();
-    stream
-        .read_to_end(&mut buf)
-        .context("读取 HTTP 响应失败")?;
+    stream.read_to_end(&mut buf).context("读取 HTTP 响应失败")?;
     let raw = String::from_utf8_lossy(&buf);
     let (header, body) = raw
         .split_once("\r\n\r\n")
@@ -735,8 +746,7 @@ pub(crate) fn http_post_json(
     auth_token: Option<&str>,
 ) -> Result<(u16, String)> {
     let addr = format!("127.0.0.1:{}", port);
-    let mut stream =
-        TcpStream::connect(&addr).with_context(|| format!("无法连接 {}", addr))?;
+    let mut stream = TcpStream::connect(&addr).with_context(|| format!("无法连接 {}", addr))?;
     stream
         .set_read_timeout(Some(timeout))
         .context("设置读超时失败")?;
@@ -777,7 +787,6 @@ pub(crate) fn http_post_json(
     Ok((status, resp_body.trim().to_string()))
 }
 
-
 /// 等待本地 TCP 端口可连接
 pub(crate) fn wait_for_port(port: u16, timeout: Duration) -> bool {
     let addr = format!("127.0.0.1:{}", port);
@@ -808,14 +817,18 @@ pub(crate) fn is_port_free(port: u16) -> bool {
 pub fn kill_process(pid: u32) -> Result<()> {
     #[cfg(windows)]
     {
-let output = no_window(&mut Command::new("taskkill"))
+        let output = no_window(&mut Command::new("taskkill"))
             .args(["/PID", &pid.to_string(), "/F"])
             .output()
             .context("执行 taskkill 失败")?;
         if output.status.success() {
             Ok(())
         } else {
-            bail!("终止进程 {} 失败: {}", pid, String::from_utf8_lossy(&output.stderr));
+            bail!(
+                "终止进程 {} 失败: {}",
+                pid,
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
     }
     #[cfg(not(windows))]
@@ -846,12 +859,7 @@ impl InstanceManager {
             .instances
             .iter()
             .enumerate()
-            .filter(|(_, i)| {
-                matches!(
-                    i.status,
-                    InstanceStatus::Running | InstanceStatus::Starting
-                )
-            })
+            .filter(|(_, i)| matches!(i.status, InstanceStatus::Running | InstanceStatus::Starting))
             .filter_map(|(idx, i)| i.pid.map(|p| (idx, p)))
             .collect();
         if to_check.is_empty() {
@@ -888,12 +896,7 @@ impl InstanceManager {
             .iter()
             .enumerate()
             .filter(|(_, i)| names.iter().any(|n| n == &i.name))
-            .filter(|(_, i)| {
-                matches!(
-                    i.status,
-                    InstanceStatus::Running | InstanceStatus::Starting
-                )
-            })
+            .filter(|(_, i)| matches!(i.status, InstanceStatus::Running | InstanceStatus::Starting))
             .filter_map(|(idx, i)| i.pid.map(|p| (idx, p)))
             .collect();
 
@@ -950,7 +953,8 @@ mod tests {
 
     #[test]
     fn test_select_probe_free_model_prefers_free_suffix() {
-        let body = r#"{"data":[{"id":"gpt-4o"},{"id":"deepseek-v4-flash-free"},{"id":"big-pickle"}]}"#;
+        let body =
+            r#"{"data":[{"id":"gpt-4o"},{"id":"deepseek-v4-flash-free"},{"id":"big-pickle"}]}"#;
         let got = select_probe_free_model(body);
         assert_eq!(got.as_deref(), Some("deepseek-v4-flash-free"));
     }
@@ -978,19 +982,33 @@ mod tests {
 
     #[test]
     fn test_is_probe_completion_success_requires_choices() {
-        assert!(is_probe_completion_success(200, r#"{"choices":[{"index":0}]}"#));
+        assert!(is_probe_completion_success(
+            200,
+            r#"{"choices":[{"index":0}]}"#
+        ));
         assert!(!is_probe_completion_success(200, r#"{"choices":[]}"#));
-        assert!(!is_probe_completion_success(200, r#"{"error":"rate limited"}"#));
-        assert!(!is_probe_completion_success(429, r#"{"choices":[{"index":0}]}"#));
+        assert!(!is_probe_completion_success(
+            200,
+            r#"{"error":"rate limited"}"#
+        ));
+        assert!(!is_probe_completion_success(
+            429,
+            r#"{"choices":[{"index":0}]}"#
+        ));
         assert!(!is_probe_completion_success(503, ""));
     }
-
 
     #[test]
     fn test_add_instance() {
         let mut manager = new_manager("add");
         manager
-            .add_instance("user1".to_string(), 8088, "新加坡 G1".to_string(), "".to_string(), "".to_string())
+            .add_instance(
+                "user1".to_string(),
+                8088,
+                "新加坡 G1".to_string(),
+                "".to_string(),
+                "".to_string(),
+            )
             .unwrap();
         assert_eq!(manager.instances.len(), 1);
         assert_eq!(manager.instances[0].name, "user1");
@@ -1002,8 +1020,22 @@ mod tests {
     #[test]
     fn test_add_duplicate() {
         let mut manager = new_manager("dup");
-        manager.add_instance("a".to_string(), 8088, "n".to_string(), "".to_string(), "".to_string()).unwrap();
-        let r = manager.add_instance("a".to_string(), 8089, "n".to_string(), "".to_string(), "".to_string());
+        manager
+            .add_instance(
+                "a".to_string(),
+                8088,
+                "n".to_string(),
+                "".to_string(),
+                "".to_string(),
+            )
+            .unwrap();
+        let r = manager.add_instance(
+            "a".to_string(),
+            8089,
+            "n".to_string(),
+            "".to_string(),
+            "".to_string(),
+        );
         assert!(r.is_err());
         fs::remove_dir_all(temp_dir("dup")).ok();
     }
@@ -1011,8 +1043,22 @@ mod tests {
     #[test]
     fn test_add_duplicate_port() {
         let mut manager = new_manager("dupport");
-        manager.add_instance("a".to_string(), 8088, "n".to_string(), "".to_string(), "".to_string()).unwrap();
-        let r = manager.add_instance("b".to_string(), 8088, "n".to_string(), "".to_string(), "".to_string());
+        manager
+            .add_instance(
+                "a".to_string(),
+                8088,
+                "n".to_string(),
+                "".to_string(),
+                "".to_string(),
+            )
+            .unwrap();
+        let r = manager.add_instance(
+            "b".to_string(),
+            8088,
+            "n".to_string(),
+            "".to_string(),
+            "".to_string(),
+        );
         assert!(r.is_err());
         fs::remove_dir_all(temp_dir("dupport")).ok();
     }
@@ -1029,7 +1075,13 @@ mod tests {
     fn test_mark_starting_and_apply_result() {
         let mut manager = new_manager("markstart");
         manager
-            .add_instance("u1".to_string(), 8088, "n".to_string(), "".to_string(), "".to_string())
+            .add_instance(
+                "u1".to_string(),
+                8088,
+                "n".to_string(),
+                "".to_string(),
+                "".to_string(),
+            )
             .unwrap();
 
         // mark_starting：状态 → Starting，返回快照
@@ -1049,11 +1101,9 @@ mod tests {
         assert_eq!(manager.instances[0].pid, Some(4242));
 
         // apply_start_result 失败 → Error
-        assert!(
-            manager
-                .apply_start_result("u1", Err("启动失败".to_string()))
-                .is_err()
-        );
+        assert!(manager
+            .apply_start_result("u1", Err("启动失败".to_string()))
+            .is_err());
         assert!(matches!(
             manager.instances[0].status,
             InstanceStatus::Error(_)
@@ -1066,7 +1116,13 @@ mod tests {
     fn test_prepare_stop_and_finish_stop() {
         let mut manager = new_manager("prepstop");
         manager
-            .add_instance("u1".to_string(), 8089, "n".to_string(), "".to_string(), "".to_string())
+            .add_instance(
+                "u1".to_string(),
+                8089,
+                "n".to_string(),
+                "".to_string(),
+                "".to_string(),
+            )
             .unwrap();
         manager.instances[0].status = InstanceStatus::Running;
         manager.instances[0].pid = Some(9999);
@@ -1083,12 +1139,17 @@ mod tests {
         fs::remove_dir_all(temp_dir("prepstop")).ok();
     }
 
-
     #[test]
     fn test_reconcile_marks_dead_running_as_stopped() {
         let mut manager = new_manager("reconcile");
         manager
-            .add_instance("u1".to_string(), 8088, "n".to_string(), "".to_string(), "".to_string())
+            .add_instance(
+                "u1".to_string(),
+                8088,
+                "n".to_string(),
+                "".to_string(),
+                "".to_string(),
+            )
             .unwrap();
         // 构造"进程已死但状态残留 Running"的僵尸状态
         manager.instances[0].status = InstanceStatus::Running;
@@ -1105,7 +1166,13 @@ mod tests {
     fn test_reconcile_keeps_alive_running() {
         let mut manager = new_manager("reconcile_alive");
         manager
-            .add_instance("u1".to_string(), 8088, "n".to_string(), "".to_string(), "".to_string())
+            .add_instance(
+                "u1".to_string(),
+                8088,
+                "n".to_string(),
+                "".to_string(),
+                "".to_string(),
+            )
             .unwrap();
         // 当前测试进程自身是活着的，Running 应保留
         manager.instances[0].status = InstanceStatus::Running;
@@ -1120,7 +1187,13 @@ mod tests {
     fn test_reconcile_leaves_stopped_untouched() {
         let mut manager = new_manager("reconcile_stopped");
         manager
-            .add_instance("u1".to_string(), 8088, "n".to_string(), "".to_string(), "".to_string())
+            .add_instance(
+                "u1".to_string(),
+                8088,
+                "n".to_string(),
+                "".to_string(),
+                "".to_string(),
+            )
             .unwrap();
         manager.instances[0].status = InstanceStatus::Stopped;
         manager.instances[0].pid = Some(u32::MAX); // 已停止状态不校验进程
@@ -1135,13 +1208,31 @@ mod tests {
     fn test_reconcile_batch_only_updates_named_instances() {
         let mut manager = new_manager("reconcile_batch");
         manager
-            .add_instance("dead".to_string(), 8088, "n".to_string(), "".to_string(), "".to_string())
+            .add_instance(
+                "dead".to_string(),
+                8088,
+                "n".to_string(),
+                "".to_string(),
+                "".to_string(),
+            )
             .unwrap();
         manager
-            .add_instance("alive".to_string(), 8089, "n".to_string(), "".to_string(), "".to_string())
+            .add_instance(
+                "alive".to_string(),
+                8089,
+                "n".to_string(),
+                "".to_string(),
+                "".to_string(),
+            )
             .unwrap();
         manager
-            .add_instance("skip".to_string(), 8090, "n".to_string(), "".to_string(), "".to_string())
+            .add_instance(
+                "skip".to_string(),
+                8090,
+                "n".to_string(),
+                "".to_string(),
+                "".to_string(),
+            )
             .unwrap();
         // dead：进程必然不存在，应被校正为 Stopped
         manager.instances[0].status = InstanceStatus::Running;

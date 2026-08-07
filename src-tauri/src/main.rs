@@ -9,8 +9,10 @@ fn main() {
     }
 }
 
-/// headless 模式：仅启动 HTTP 服务（无窗口），默认 0.0.0.0:19090。
-/// 支持 `serve --port <n>` 覆盖端口（亦可经 OPCODE2API_HTTP_PORT 环境变量）。
+/// headless 模式：仅启动 HTTP 服务（无窗口），默认 127.0.0.1:19090。
+/// 支持 `serve --port <n>` 覆盖端口（亦可经 OPCODE2API_HTTP_PORT 环境变量）；
+/// `serve --bind <addr>` 覆盖监听地址（默认仅回环；公网/局域网访问需显式
+/// `--bind 0.0.0.0`，此时管理 API 无鉴权，请务必配合防火墙/反代限制来源）。
 fn headless_main(args: &[String]) {
     use opencode2api::core::AppCore;
     use opencode2api::server;
@@ -27,6 +29,12 @@ fn headless_main(args: &[String]) {
                 .and_then(|p| p.parse().ok())
         })
         .unwrap_or(19090);
+    let bind = args
+        .iter()
+        .position(|a| a == "--bind")
+        .and_then(|i| args.get(i + 1))
+        .cloned()
+        .unwrap_or_else(|| "127.0.0.1".to_string());
 
     let core = Arc::new(AppCore::new());
     let rt = tokio::runtime::Runtime::new().expect("无法创建运行时");
@@ -44,7 +52,7 @@ fn headless_main(args: &[String]) {
             opencode2api::subscribe::subscribe_loop(core_for_sub).await;
         });
     }
-    if let Err(e) = rt.block_on(server::serve(&format!("0.0.0.0:{}", port), core)) {
+    if let Err(e) = rt.block_on(server::serve(&format!("{}:{}", bind, port), core)) {
         eprintln!("Headless 服务启动失败: {}", e);
         std::process::exit(1);
     }

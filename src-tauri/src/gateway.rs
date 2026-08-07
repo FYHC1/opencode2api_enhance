@@ -18,8 +18,6 @@ use std::time::Duration;
 pub const UNIFIED_GATEWAY_PORT: u16 = 21080;
 #[cfg(not(debug_assertions))]
 pub const UNIFIED_GATEWAY_PORT: u16 = 18080;
-/// 统一网关密钥回退默认（Config::effective_gateway_key 优先取 config.gateway_key）
-const UNIFIED_GATEWAY_KEY: &str = "sk-unified-local";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct GatewayStatus {

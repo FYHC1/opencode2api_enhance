@@ -113,27 +113,42 @@ pub fn run_health_check_once(core: &AppCore) -> HealthSummary {
         }
     }
 
-    // 依据配置自动重启：连续失败达阈值
+    // 依据配置自动重启：仅对「当前 Running 且连续失败达阈值」的实例重启，
+    // 避免把已停止实例（含陈旧的失败计数记录）误启。
     let threshold = crate::config::Config::load()
         .unwrap_or_default()
         .health_restart_threshold
         .unwrap_or(0);
+    let running_names: std::collections::HashSet<String> =
+        running.iter().map(|i| i.name.clone()).collect();
     let mut to_restart: Vec<String> = Vec::new();
     for rec in by_name.values() {
-        if threshold > 0 && rec.consecutive_failures >= threshold {
+        if running_names.contains(&rec.name)
+            && threshold > 0
+            && rec.consecutive_failures >= threshold
+        {
             to_restart.push(rec.name.clone());
         }
     }
     for name in to_restart {
-        let _ = crate::commands::stop_instance_core(core, &name);
-        let _ = crate::commands::start_instance_core(core, &name);
+        let stopped = crate::commands::stop_instance_core(core, &name).is_ok();
+        let started = stopped && crate::commands::start_instance_core(core, &name).is_ok();
         if let Some(rec) = by_name.get_mut(&name) {
-            rec.consecutive_failures = 0;
-            rec.last_error = Some("已自动重启".to_string());
+            if started {
+                rec.healthy = true;
+                rec.consecutive_failures = 0;
+                rec.last_error = Some("已自动重启".to_string());
+            } else {
+                rec.healthy = false;
+                rec.last_error = Some("自动重启失败".to_string());
+            }
         }
     }
 
     let mut records_out: Vec<HealthRecord> = by_name.into_values().collect();
+    // 只保留当前 Running 实例的记录：已停止/已删除实例的陈旧记录会污染
+    // total/healthy/unhealthy 统计（例如停掉一个实例后仍显示其旧健康记录）。
+    records_out.retain(|r| running_names.contains(&r.name));
     records_out.sort_by(|a, b| a.name.cmp(&b.name));
     summary.total = running.len();
     summary.healthy = records_out.iter().filter(|r| r.healthy).count();
@@ -176,6 +191,15 @@ mod tests {
 
     #[test]
     fn test_health_file_roundtrip() {
+        // health_file_path() 依赖 OPCODE2API_DATA_DIR，与改写 env 的并发测试
+        // 需串行（共享 CONFIG_TEST_LOCK），否则读到对方隔离目录。
+        let _guard = crate::config::CONFIG_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let orig = std::env::var("OPCODE2API_DATA_DIR").ok();
+        let test_dir = std::env::temp_dir().join(format!("oc2api-health-rt-{}", std::process::id()));
+        unsafe { std::env::set_var("OPCODE2API_DATA_DIR", &test_dir) };
+
         let recs = vec![
             HealthRecord {
                 name: "n1".to_string(),
@@ -197,5 +221,85 @@ mod tests {
         assert_eq!(loaded.len(), 2);
         assert_eq!(loaded[0].name, "n1");
         assert_eq!(loaded[1].consecutive_failures, 2);
+
+        unsafe { std::env::remove_var("OPCODE2API_DATA_DIR") };
+        if let Some(v) = orig {
+            unsafe { std::env::set_var("OPCODE2API_DATA_DIR", v) };
+        }
+        std::fs::remove_dir_all(&test_dir).ok();
+    }
+
+    /// 回归测试：已停止实例的陈旧健康记录不得计入 total/healthy/unhealthy。
+    /// 曾出现「只启动 4 个实例却显示 5 个健康」——records 未按 Running 集合过滤。
+    #[test]
+    fn test_health_stats_only_count_running() {
+        let _guard = crate::config::CONFIG_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let orig = std::env::var("OPCODE2API_DATA_DIR").ok();
+        let test_dir = std::env::temp_dir().join(format!("oc2api-health-{}", std::process::id()));
+        unsafe { std::env::set_var("OPCODE2API_DATA_DIR", &test_dir) };
+
+        let (instances_path, binary_dir, runtime_dir) = crate::commands::manager_paths();
+        std::fs::create_dir_all(&runtime_dir).ok();
+        let mut mgr = crate::instance::InstanceManager::new(
+            instances_path,
+            binary_dir.clone(),
+            runtime_dir.clone(),
+        );
+        for i in 0..4u16 {
+            let name = format!("inst{}", i);
+            mgr.add_instance(name.clone(), 28000 + i, format!("node{}", i), "sk".into(), "x:1".into())
+                .unwrap();
+            if let Some(inst) = mgr.instances.iter_mut().find(|x| x.name == name) {
+                inst.status = crate::instance::InstanceStatus::Running;
+            }
+        }
+        mgr.add_instance("inst-stopped".into(), 28010, "nodex".into(), "sk".into(), "x:1".into())
+            .unwrap();
+
+        let mut records: Vec<HealthRecord> = (0..4u16)
+            .map(|i| HealthRecord {
+                name: format!("inst{}", i),
+                healthy: true,
+                last_check_ts: 1,
+                consecutive_failures: 0,
+                last_error: None,
+            })
+            .collect();
+        records.push(HealthRecord {
+            name: "inst-stopped".into(),
+            healthy: true,
+            last_check_ts: 1,
+            consecutive_failures: 0,
+            last_error: None,
+        });
+        save_records(&records);
+
+        let core = crate::core::AppCore {
+            manager: std::sync::Arc::new(std::sync::Mutex::new(mgr)),
+            scan: std::sync::Arc::new(crate::probe::ScanController::new()),
+            gateway: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::gateway::GatewayManager::new(binary_dir, runtime_dir),
+            )),
+        };
+
+        let summary = run_health_check_once(&core);
+        assert_eq!(summary.total, 4, "total 只计当前 Running 实例");
+        assert_eq!(
+            summary.healthy + summary.unhealthy,
+            4,
+            "健康+异常之和应等于 Running 实例数"
+        );
+        assert!(
+            !summary.records.iter().any(|r| r.name == "inst-stopped"),
+            "已停止实例的陈旧记录不应出现在巡检结果中"
+        );
+
+        unsafe { std::env::remove_var("OPCODE2API_DATA_DIR") };
+        if let Some(v) = orig {
+            unsafe { std::env::set_var("OPCODE2API_DATA_DIR", v) };
+        }
+        std::fs::remove_dir_all(&test_dir).ok();
     }
 }

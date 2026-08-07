@@ -2,8 +2,12 @@
 //!
 //! 两种入口：
 //! - 桌面模式：lib.rs `run()` 在 setup 中 spawn 本服务（127.0.0.1:19090），前端经它取数
-//! - headless 模式：main.rs `serve` 子命令阻塞运行本服务（默认 0.0.0.0:19090），
-//!   同时托管打包后的前端静态文件（dist/），纯浏览器即可完成全部管理
+//! - headless 模式：main.rs `serve` 子命令阻塞运行本服务（默认 127.0.0.1:19090，
+//!   显式 `--bind 0.0.0.0` 才暴露到网络），同时托管打包后的前端静态文件（dist/），
+//!   纯浏览器即可完成全部管理
+//!
+//! CORS 白名单：仅放行 Tauri 桌面前端来源（tauri://localhost）与同源请求，
+//! 拒绝任意来源——防止恶意网页经浏览器驱动本机/内网管理 API。
 
 use crate::commands;
 use crate::core::AppCore;
@@ -80,14 +84,41 @@ pub fn build_router(core: Arc<AppCore>) -> Router {
         .route("/api/export/stats.json", get(export_stats_handler))
         .route("/api/data-clean", post(data_clean_handler))
         .fallback_service(ServeDir::new(dist_dir).append_index_html_on_directories(true))
-        .layer(CorsLayer::permissive())
+        .layer(cors_layer())
         .with_state(core)
+}
+
+/// 构建 CORS 层：仅放行已知前端来源（Tauri 桌面前端 custom-protocol 来源
+/// `tauri://localhost` 与 `http://tauri.localhost`）及同源请求。
+/// 不设 `permissive()`：拒绝任意来源，防恶意网页驱动本机/内网管理 API。
+fn cors_layer() -> CorsLayer {
+    use tower_http::cors::AllowOrigin;
+    CorsLayer::new()
+        .allow_origin(AllowOrigin::predicate(|origin, _| {
+            let o = origin.to_str().unwrap_or("");
+            o == "tauri://localhost" || o == "http://tauri.localhost"
+        }))
+        .allow_methods([axum::http::Method::GET, axum::http::Method::POST, axum::http::Method::DELETE])
+        .allow_headers(tower_http::cors::Any)
 }
 
 // ---------- Handler 实现 ----------
 
 fn err(e: String) -> (StatusCode, String) {
     (StatusCode::BAD_REQUEST, e)
+}
+
+/// 在 spawn_blocking 中执行同步阻塞逻辑（fs/进程/网络 I/O），
+/// 避免占住 tokio worker 线程。返回 Result 语义与 handler 一致。
+async fn blocking<T, F>(f: F) -> Result<T, (StatusCode, String)>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| err(format!("任务执行失败: {}", e)))?
+        .map_err(err)
 }
 
 fn to_json<T: serde::Serialize>(value: T) -> Json<serde_json::Value> {
@@ -280,13 +311,14 @@ async fn restart_pool_handler(
 async fn gateway_status_handler(
     State(core): State<Arc<AppCore>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    Ok(to_json(commands::gateway_status_core(&core).map_err(err)?))
+    let status = blocking(move || commands::gateway_status_core(&core)).await?;
+    Ok(to_json(status))
 }
 
 async fn gateway_stop_handler(
     State(core): State<Arc<AppCore>>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    commands::gateway_stop_core(&core).map_err(err)?;
+    blocking(move || commands::gateway_stop_core(&core)).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -299,7 +331,7 @@ async fn gateway_route_mode_handler(
     State(core): State<Arc<AppCore>>,
     Json(payload): Json<RouteModePayload>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    commands::gateway_set_route_mode_core(&core, &payload.mode).map_err(err)?;
+    blocking(move || commands::gateway_set_route_mode_core(&core, &payload.mode)).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -313,12 +345,13 @@ async fn set_join_gateway_handler(
     State(core): State<Arc<AppCore>>,
     Json(payload): Json<JoinGatewayPayload>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    commands::set_join_gateway_core(&core, &payload.name, payload.join).map_err(err)?;
+    blocking(move || commands::set_join_gateway_core(&core, &payload.name, payload.join)).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
 async fn config_get_handler() -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    Ok(to_json(commands::config_get_core().map_err(err)?))
+    let cfg = blocking(commands::config_get_core).await?;
+    Ok(to_json(cfg))
 }
 
 #[derive(Deserialize)]
@@ -331,12 +364,13 @@ async fn config_set_handler(
     Path(key): Path<String>,
     Json(payload): Json<ConfigValuePayload>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    commands::config_set_core(&core, &key, &payload.value).map_err(err)?;
+    blocking(move || commands::config_set_core(&core, &key, &payload.value)).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
 async fn stats_handler() -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    Ok(to_json(commands::get_stats_core().map_err(err)?))
+    let stats = blocking(commands::get_stats_core).await?;
+    Ok(to_json(stats))
 }
 
 #[derive(Deserialize)]
@@ -345,19 +379,30 @@ struct CallLogQuery {
 }
 
 async fn call_log_handler(Query(query): Query<CallLogQuery>) -> Json<serde_json::Value> {
-    to_json(commands::get_call_log_core(query.limit))
+    let limit = query.limit;
+    let value = tokio::task::spawn_blocking(move || commands::get_call_log_core(limit))
+        .await
+        .unwrap_or_default();
+    Json(serde_json::to_value(value).unwrap_or(json!({})))
 }
 
 async fn call_log_filtered_handler(Json(filter): Json<crate::call_log::CallLogFilter>) -> Json<serde_json::Value> {
-    to_json(commands::call_log_filtered_core(&filter))
+    let value = tokio::task::spawn_blocking(move || commands::call_log_filtered_core(&filter))
+        .await
+        .unwrap_or_default();
+    Json(serde_json::to_value(value).unwrap_or(json!({})))
 }
 
 async fn call_log_aggregate_handler() -> Json<serde_json::Value> {
-    to_json(commands::call_log_aggregate_core())
+    let value = tokio::task::spawn_blocking(commands::call_log_aggregate_core)
+        .await
+        .unwrap_or_default();
+    Json(serde_json::to_value(value).unwrap_or(json!({})))
 }
 
 async fn nodes_handler() -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    Ok(to_json(commands::list_nodes_core().map_err(err)?))
+    let nodes = blocking(commands::list_nodes_core).await?;
+    Ok(to_json(nodes))
 }
 
 #[derive(Deserialize)]
@@ -368,7 +413,7 @@ struct NodeDeletePayload {
 async fn node_delete_handler(
     Json(payload): Json<NodeDeletePayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let removed = commands::delete_node_core(&payload.name).map_err(err)?;
+    let removed = blocking(move || commands::delete_node_core(&payload.name)).await?;
     Ok(to_json(json!({ "removed": removed })))
 }
 
@@ -380,12 +425,17 @@ struct NodeNamesPayload {
 async fn node_delete_batch_handler(
     Json(payload): Json<NodeNamesPayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let removed = commands::delete_nodes_core(payload.names).map_err(err)?;
+    let removed = blocking(move || commands::delete_nodes_core(payload.names)).await?;
     Ok(to_json(json!({ "removed": removed })))
 }
 
 async fn binaries_handler() -> Json<serde_json::Value> {
-    to_json(commands::get_binaries_info_core())
+    let value = tokio::task::spawn_blocking(commands::get_binaries_info_core)
+        .await
+        .map_err(|_| ())
+        .and_then(|v| serde_json::to_value(v).map_err(|_| ()))
+        .unwrap_or(json!({}));
+    Json(value)
 }
 
 async fn port_suggest_handler(
@@ -430,29 +480,33 @@ async fn scan_start_handler(
     State(core): State<Arc<AppCore>>,
     Json(payload): Json<ScanStartPayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let progress = commands::scan_start_core(
-        &core,
-        commands::ScanStartOpts {
-            nodes: payload.nodes,
-            api_port: payload.api_port,
-            socks_port: payload.socks_port,
-            timeout: payload.timeout,
-        },
-    )
-    .map_err(err)?;
+    let progress = blocking(move || {
+        commands::scan_start_core(
+            &core,
+            commands::ScanStartOpts {
+                nodes: payload.nodes,
+                api_port: payload.api_port,
+                socks_port: payload.socks_port,
+                timeout: payload.timeout,
+            },
+        )
+    })
+    .await?;
     Ok(to_json(progress))
 }
 
 async fn scan_status_handler(
     State(core): State<Arc<AppCore>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    Ok(to_json(commands::scan_status_core(&core).map_err(err)?))
+    let status = blocking(move || commands::scan_status_core(&core)).await?;
+    Ok(to_json(status))
 }
 
 async fn scan_stop_handler(
     State(core): State<Arc<AppCore>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    Ok(to_json(commands::scan_stop_core(&core).map_err(err)?))
+    let status = blocking(move || commands::scan_stop_core(&core)).await?;
+    Ok(to_json(status))
 }
 
 #[derive(Deserialize)]
@@ -503,17 +557,20 @@ async fn subscribe_import_pool_handler(
 async fn health_check_handler(
     State(core): State<Arc<AppCore>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    Ok(to_json(commands::health_check_now_core(&core)))
+    let summary = blocking(move || Ok(commands::health_check_now_core(&core))).await?;
+    Ok(to_json(summary))
 }
 
 async fn health_summary_handler(
     State(core): State<Arc<AppCore>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    Ok(to_json(commands::health_summary_core(&core)))
+    let summary = blocking(move || Ok(commands::health_summary_core(&core))).await?;
+    Ok(to_json(summary))
 }
 
 async fn autostart_get_handler() -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    Ok(to_json(json!({ "enabled": commands::autostart_get_core().map_err(err)? })))
+    let enabled = blocking(commands::autostart_get_core).await?;
+    Ok(to_json(json!({ "enabled": enabled })))
 }
 
 #[derive(Deserialize)]
@@ -522,7 +579,7 @@ struct AutostartPayload {
 }
 
 async fn autostart_set_handler(Json(payload): Json<AutostartPayload>) -> Result<impl IntoResponse, (StatusCode, String)> {
-    commands::autostart_set_core(payload.enabled).map_err(err)?;
+    blocking(move || commands::autostart_set_core(payload.enabled)).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -535,7 +592,7 @@ async fn data_clean_handler(
     State(core): State<Arc<AppCore>>,
     Json(payload): Json<DataCleanPayload>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    commands::data_clean_core(&core, payload.level).map_err(err)?;
+    blocking(move || commands::data_clean_core(&core, payload.level)).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -569,14 +626,14 @@ fn export_text_response(
 async fn export_csv_handler(
     Query(query): Query<ExportLimitQuery>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let csv = commands::export_call_log_csv_core(query.limit).map_err(err)?;
+    let csv = blocking(move || commands::export_call_log_csv_core(query.limit)).await?;
     Ok(export_text_response(csv, "text/csv; charset=utf-8", "call-log.csv"))
 }
 
 async fn export_instances_handler(
     State(core): State<Arc<AppCore>>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let json = commands::export_instances_json_core(&core).map_err(err)?;
+    let json = blocking(move || commands::export_instances_json_core(&core)).await?;
     Ok(export_text_response(
         json,
         "application/json; charset=utf-8",
@@ -585,7 +642,7 @@ async fn export_instances_handler(
 }
 
 async fn export_stats_handler() -> Result<impl IntoResponse, (StatusCode, String)> {
-    let json = commands::export_stats_json_core().map_err(err)?;
+    let json = blocking(commands::export_stats_json_core).await?;
     Ok(export_text_response(
         json,
         "application/json; charset=utf-8",

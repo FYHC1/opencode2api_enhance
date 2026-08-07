@@ -3,7 +3,9 @@
 
 use crate::clash_yaml;
 use crate::config::Config;
-use crate::instance::{no_window, Instance, InstanceManager};
+#[cfg(windows)]
+use crate::instance::no_window;
+use crate::instance::{Instance, InstanceManager};
 use crate::probe::{DEFAULT_PROBE_API_PORT, DEFAULT_PROBE_SOCKS_PORT};
 use crate::AppState;
 use crate::core::AppCore;
@@ -40,14 +42,6 @@ pub fn create_manager() -> InstanceManager {
 
 fn default_password() -> String {
     Config::effective_default_password()
-}
-
-fn lock_manager<'a>(state: &'a tauri::State<'a, AppState>) -> Result<std::sync::MutexGuard<'a, InstanceManager>, String> {
-    state
-        .core
-        .manager
-        .lock()
-        .map_err(|_| "状态锁失败".to_string())
 }
 
 // ======================== 统一网关（F1） ========================
@@ -578,7 +572,9 @@ pub fn add_instance_core(
     let final_name = if name.trim().is_empty() {
         next_auto_name(&mgr)
     } else {
-        name.trim().to_string()
+        // 实例名直接用于 runtime_dir.join(name) 创建目录：必须经 sanitize
+        // 去除路径分隔符/控制字符，防止 ../ 等目录穿越。
+        sanitize_instance_name(&name)
     };
     let sk = if password.trim().is_empty() {
         gen_sk_key()
@@ -1044,11 +1040,17 @@ pub fn batch_start_core(
         });
 
         // 同步网关（池成员可能变化）
-        if let Ok(mut g) = gateway.lock() {
-            if let Ok(mut mgr) = manager.lock() {
+        // 锁序统一 manager→gateway：先取快照放锁，再锁 gateway，避免与
+        // start/stop_instance 的 manager→gateway 顺序相反导致死锁。
+        let instances = manager
+            .lock()
+            .map(|mut mgr| {
                 let _ = mgr.reconcile_states();
-                let _ = g.sync(mgr.list_instances());
-            }
+                mgr.list_instances().to_vec()
+            })
+            .unwrap_or_default();
+        if let Ok(mut g) = gateway.lock() {
+            let _ = g.sync(&instances);
         }
 
         result
@@ -1128,11 +1130,16 @@ pub fn batch_stop_core(
         });
 
         // 同步网关（池成员可能变化）
-        if let Ok(mut g) = gateway.lock() {
-            if let Ok(mut mgr) = manager.lock() {
+        // 锁序统一 manager→gateway（见 batch_start_core 注释）
+        let instances = manager
+            .lock()
+            .map(|mut mgr| {
                 let _ = mgr.reconcile_states();
-                let _ = g.sync(mgr.list_instances());
-            }
+                mgr.list_instances().to_vec()
+            })
+            .unwrap_or_default();
+        if let Ok(mut g) = gateway.lock() {
+            let _ = g.sync(&instances);
         }
 
         result
@@ -1314,17 +1321,22 @@ pub fn restart_pool_core(core: &AppCore) -> Result<RestartPoolResult, String> {
         // 5) 同步网关（自动拉起总端口）
         let mut gateway_running = false;
         let mut error = None;
-        if let Ok(mut g) = gateway.lock() {
-            if let Ok(mut mgr) = manager.lock() {
+        // 锁序统一 manager→gateway（先取快照放锁，再锁 gateway，避免死锁）
+        let instances = manager
+            .lock()
+            .map(|mut mgr| {
                 let _ = mgr.reconcile_states();
-                let total = mgr.list_instances().len();
-                match g.sync(mgr.list_instances()) {
-                    Ok(()) => {
-                        // status() 会在池非空且网关未启动时自动拉起，并返回运行态
-                        gateway_running = g.status(total).running;
-                    }
-                    Err(e) => error = Some(e.to_string()),
+                mgr.list_instances().to_vec()
+            })
+            .unwrap_or_default();
+        if let Ok(mut g) = gateway.lock() {
+            let total = instances.len();
+            match g.sync(&instances) {
+                Ok(()) => {
+                    // status() 会在池非空且网关未启动时自动拉起，并返回运行态
+                    gateway_running = g.status(total).running;
                 }
+                Err(e) => error = Some(e.to_string()),
             }
         }
 
@@ -1712,7 +1724,9 @@ pub fn config_set(
 
 // ======================== 开机自启（Windows 注册表） ========================
 
+#[cfg(windows)]
 const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+#[cfg(windows)]
 const RUN_NAME: &str = "opencode2api-manager";
 
 #[cfg(windows)]
@@ -1796,6 +1810,13 @@ pub fn get_binaries_info() -> BinariesInfo {
 }
 
 // ======================== 窗口控制（托盘） ========================
+
+/// 返回本地管理 HTTP 服务实际端口（桌面前端据此构造 API 地址；
+/// http_port 可配置，前端不能写死 19090）。
+#[tauri::command]
+pub fn get_http_port() -> u16 {
+    crate::config::Config::effective_http_port()
+}
 
 /// 收起到托盘（前端关闭按钮调用）
 #[tauri::command]

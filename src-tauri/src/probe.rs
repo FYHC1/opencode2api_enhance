@@ -149,7 +149,7 @@ impl ScanController {
         }
 
         {
-            let mut g = self.progress.lock().unwrap();
+            let mut g = self.progress.lock().map_err(|_| anyhow::anyhow!("扫描状态锁失败"))?;
             *g = ScanProgress {
                 status: ScanStatus::Running,
                 total: nodes.len(),
@@ -1056,7 +1056,7 @@ pub fn scan_nodes_sync(
             break;
         }
         {
-            let mut g = progress_cb.lock().unwrap();
+            let mut g = progress_cb.lock().map_err(|_| anyhow::anyhow!("扫描状态锁失败"))?;
             g.current = i + 1;
             g.current_node = Some(node.name.clone());
             on_progress(&g.snapshot());
@@ -1077,7 +1077,7 @@ pub fn scan_nodes_sync(
         );
 
         {
-            let mut g = progress_cb.lock().unwrap();
+            let mut g = progress_cb.lock().map_err(|_| anyhow::anyhow!("扫描状态锁失败"))?;
             g.results.push(result);
             on_progress(&g.snapshot());
         }
@@ -1085,7 +1085,7 @@ pub fn scan_nodes_sync(
 
     procs.kill_all();
 
-    let mut g = progress.lock().unwrap();
+    let mut g = progress.lock().map_err(|_| anyhow::anyhow!("扫描状态锁失败"))?;
     g.status = ScanStatus::Done;
     g.finished_ms = Some(now_ms());
     g.current_node = None;

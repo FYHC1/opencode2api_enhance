@@ -6,13 +6,13 @@ After=network.target
 Type=simple
 User=opencode2api
 # 二进制路径按实际安装位置修改
-ExecStart=/usr/local/bin/opencode2api serve --port 19090
+# headless 默认仅监听 127.0.0.1；服务器部署（内网/公网）需显式 --bind 0.0.0.0，
+# 并配合防火墙/前置 nginx 反代限制来源（管理 API 无鉴权，勿直接暴露公网）
+ExecStart=/usr/local/bin/opencode2api serve --port 19090 --bind 0.0.0.0
 Restart=on-failure
 RestartSec=5
 # 数据目录（实例配置、运行态、日志均在此）
 Environment=OPCODE2API_DATA_DIR=/var/lib/opencode2api
-# headless 模式默认监听 0.0.0.0（公网可达）；如需仅本机访问，
-# 建议用防火墙放行规则或在前置 nginx 反代层限制来源 IP
 # 日志
 StandardOutput=journal
 StandardError=journal

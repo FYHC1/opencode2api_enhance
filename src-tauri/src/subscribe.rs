@@ -454,20 +454,28 @@ pub fn import_subscription(
 
     let mut mgr = core.manager.lock().map_err(|_| "状态锁失败".to_string())?;
     let _ = mgr.load();
-    let mut existing: std::collections::HashSet<String> = mgr
-        .list_instances()
-        .iter()
-        .map(|i| i.name.clone())
-        .collect();
-    let mut imported = 0usize;
+    let existing_instances = mgr.list_instances().to_vec();
+    let mut existing_names: std::collections::HashSet<String> =
+        existing_instances.iter().map(|i| i.name.clone()).collect();
     let mut used_ports: std::collections::HashSet<u16> =
-        mgr.list_instances().iter().map(|i| i.port).collect();
+        existing_instances.iter().map(|i| i.port).collect();
+    // 按节点身份（node 名 + 端口）匹配已存在实例，重复的订阅节点不重复创建
+    // （自动拉取每轮调用本函数，否则实例会无限增长）。
+    let existing_ids: std::collections::HashSet<String> = existing_instances
+        .iter()
+        .map(|i| format!("{}|{}", i.node, i.port))
+        .collect();
 
+    let mut imported = 0usize;
     for node in &nodes {
+        let node_id = format!("{}|{}", node.name, node.port);
+        if existing_ids.contains(&node_id) {
+            continue;
+        }
         let mut name = crate::commands::sanitize_instance_name(&node.name);
-        if existing.contains(&name) {
+        if existing_names.contains(&name) {
             let mut i = 2u32;
-            while existing.contains(&format!("{}-{}", name, i)) {
+            while existing_names.contains(&format!("{}-{}", name, i)) {
                 i += 1;
             }
             name = format!("{}-{}", name, i);
@@ -483,7 +491,7 @@ pub fn import_subscription(
         if join_gateway {
             let _ = mgr.set_join_gateway(&name, true);
         }
-        existing.insert(name);
+        existing_names.insert(name);
         used_ports.insert(port);
         imported += 1;
     }

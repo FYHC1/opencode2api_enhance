@@ -274,19 +274,35 @@ export type HealthSummary = {
 
 // ─── HTTP 基座（桌面与 headless 共用） ─────────────────────────────
 //
-// headless：前端与后端同源（都由 127.0.0.1:19090 托管），相对路径即可。
+// headless：前端与后端同源（都由 127.0.0.1:<http_port> 托管），相对路径即可。
 // 桌面：WebView 经 Tauri custom-protocol（tauri://localhost）加载内置资源，
 //      相对路径会解析到自定义协议而非后端，必须用绝对地址访问本地 HTTP 服务。
 //      后端已配置 CorsLayer::permissive()，允许跨协议取数。
+//      http_port 可配置（默认 19090），桌面前端经 get_http_port 动态获取，
+//      避免配置改动后写死的端口失联。
 
 const isTauri =
   typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
-const API_ORIGIN = isTauri ? 'http://127.0.0.1:19090' : ''
-const BASE = `${API_ORIGIN}/api`
+let httpPort: number | null = null
+const httpPortPromise = isTauri
+  ? (async () => {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core')
+        httpPort = (await invoke<number>('get_http_port')) || 19090
+      } catch {
+        httpPort = 19090
+      }
+      return httpPort
+    })()
+  : Promise.resolve(null)
+
+const API_ORIGIN = () => (isTauri ? `http://127.0.0.1:${httpPort ?? 19090}` : '')
+const BASE = () => `${API_ORIGIN()}/api`
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
+  await httpPortPromise
+  const res = await fetch(`${BASE()}${path}`, {
     headers: { 'Content-Type': 'application/json', ...(options?.headers ?? {}) },
     ...options,
   })
@@ -389,24 +405,27 @@ export const api = {
 
   // 全流程调用日志
   getCallLog: (limit?: number) =>
-    http.get<CallLogRecord[]>(`/call-log?limit=${limit ?? ''}`),
+    http.get<CallLogRecord[]>(limit === undefined ? '/call-log' : `/call-log?limit=${limit}`),
   callLogFiltered: (filter: CallLogFilter) =>
     http.post<CallLogRecord[]>('/call-log/filtered', filter),
   callLogAggregate: () => http.get<CallLogAggregate[]>('/call-log/aggregate'),
 
   // 报表导出
   exportCallLogCsv: async (limit?: number) => {
-    const res = await fetch(`${BASE}/export/call-log.csv?limit=${limit ?? ''}`)
+    await httpPortPromise
+    const res = await fetch(`${BASE()}${'/export/call-log.csv'}${limit === undefined ? '' : `?limit=${limit}`}`)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     return res.text()
   },
   exportInstancesJson: async () => {
-    const res = await fetch(`${BASE}/export/instances.json`)
+    await httpPortPromise
+    const res = await fetch(`${BASE()}/export/instances.json`)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     return res.text()
   },
   exportStatsJson: async () => {
-    const res = await fetch(`${BASE}/export/stats.json`)
+    await httpPortPromise
+    const res = await fetch(`${BASE()}/export/stats.json`)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     return res.text()
   },

@@ -13,7 +13,7 @@ pub mod server;
 pub mod singbox;
 pub mod subscribe;
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tauri::Manager;
 
 /// 全局共享状态：仅包一层 `Arc<AppCore>`（纯逻辑核心），全部业务走 core。
@@ -102,6 +102,7 @@ pub fn run() {
             commands::hide_to_tray,
             commands::toggle_maximize,
             commands::quit_app,
+            commands::get_http_port,
             commands::gateway_status,
             commands::gateway_set_route_mode,
             commands::gateway_stop,
