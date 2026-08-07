@@ -39,3 +39,7 @@ legacy/opencode2api_enhance/进度.md
 
 # Brainstorm visual companion sessions
 .superpowers/
+
+# Debug/test tooling & agent-run work dirs
+.cdp-test/
+.omo/
