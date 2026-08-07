@@ -4,6 +4,7 @@ import {
   Activity,
   ChevronDown,
   ChevronRight,
+  Download,
   Filter,
   Inbox,
   LayoutList,
@@ -12,6 +13,7 @@ import {
 } from 'lucide-react'
 import {
   api,
+  downloadText,
   type CallLogAggregate,
   type CallLogFilter,
   type CallLogRecord,
@@ -122,6 +124,16 @@ export default function LogsPage({
     setRefreshing(false)
   }
 
+  const doExportCsv = async () => {
+    try {
+      const text = await api.exportCallLogCsv()
+      downloadText(`call-log-${Date.now()}.csv`, text)
+      toast('日志 CSV 已导出', true)
+    } catch (e) {
+      toast(String(e), false)
+    }
+  }
+
   const toggleExpand = (id: string) => {
     setExpanded((prev) => {
       const next = new Set(prev)
@@ -144,14 +156,23 @@ export default function LogsPage({
     <div className="p-6 max-w-4xl mx-auto">
       <div className="flex items-center justify-between mb-5">
         <h1 className="text-2xl font-semibold text-zinc-900">调用日志</h1>
-        <button
-          onClick={doRefresh}
-          disabled={refreshing}
-          className="flex items-center gap-2 bg-zinc-900 text-white rounded-lg px-4 py-2 text-sm hover:bg-zinc-700 disabled:opacity-50"
-        >
-          <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
-          刷新
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => void doExportCsv()}
+            className="flex items-center gap-2 border border-zinc-200 text-zinc-700 rounded-lg px-4 py-2 text-sm hover:bg-zinc-50"
+          >
+            <Download size={14} />
+            导出 CSV
+          </button>
+          <button
+            onClick={doRefresh}
+            disabled={refreshing}
+            className="flex items-center gap-2 bg-zinc-900 text-white rounded-lg px-4 py-2 text-sm hover:bg-zinc-700 disabled:opacity-50"
+          >
+            <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
+            刷新
+          </button>
+        </div>
       </div>
 
       {/* 过滤栏 */}

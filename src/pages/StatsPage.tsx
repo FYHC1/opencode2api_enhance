@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useState } from 'react'
 import clsx from 'clsx'
-import { BarChart3, ChevronDown, ChevronRight, RefreshCw, Inbox, HeartPulse } from 'lucide-react'
-import { api, type HealthSummary, type StatsSummary } from '../lib/api'
+import { BarChart3, ChevronDown, ChevronRight, RefreshCw, Inbox, HeartPulse, Download } from 'lucide-react'
+import { api, downloadText, type HealthSummary, type StatsSummary } from '../lib/api'
 
 /** 千分位格式化 */
 const fmt = (n: number) => n.toLocaleString('en-US')
@@ -104,6 +104,26 @@ export default function StatsPage({
     })
   }
 
+  const doExportCsv = async () => {
+    try {
+      const text = await api.exportCallLogCsv()
+      downloadText(`call-log-${Date.now()}.csv`, text)
+      toast('日志 CSV 已导出', true)
+    } catch (e) {
+      toast(String(e), false)
+    }
+  }
+
+  const doExportJson = async () => {
+    try {
+      const text = await api.exportStatsJson()
+      downloadText(`stats-${Date.now()}.json`, text)
+      toast('统计 JSON 已导出', true)
+    } catch (e) {
+      toast(String(e), false)
+    }
+  }
+
   const instances = stats?.instances ?? []
   const isEmpty = !stats || instances.length === 0
 
@@ -115,14 +135,32 @@ export default function StatsPage({
           <BarChart3 size={18} className="text-teal-700" />
           Token 统计
         </h1>
-        <button
-          type="button"
-          onClick={doRefresh}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-900 text-white text-[12px] font-medium hover:bg-zinc-700 transition-colors"
-        >
-          <RefreshCw size={13} className={refreshing ? 'animate-spin' : ''} />
-          {refreshing ? '刷新中…' : '刷新'}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void doExportCsv()}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-zinc-200 text-zinc-700 text-[12px] font-medium hover:bg-zinc-50 transition-colors"
+          >
+            <Download size={13} />
+            导出 CSV
+          </button>
+          <button
+            type="button"
+            onClick={() => void doExportJson()}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-zinc-200 text-zinc-700 text-[12px] font-medium hover:bg-zinc-50 transition-colors"
+          >
+            <Download size={13} />
+            导出 JSON
+          </button>
+          <button
+            type="button"
+            onClick={doRefresh}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-900 text-white text-[12px] font-medium hover:bg-zinc-700 transition-colors"
+          >
+            <RefreshCw size={13} className={refreshing ? 'animate-spin' : ''} />
+            {refreshing ? '刷新中…' : '刷新'}
+          </button>
+        </div>
       </div>
 
       {/* 总览卡片 */}

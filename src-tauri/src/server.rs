@@ -68,6 +68,9 @@ pub fn build_router(core: Arc<AppCore>) -> Router {
         .route("/api/health/summary", get(health_summary_handler))
         .route("/api/autostart", get(autostart_get_handler))
         .route("/api/autostart", post(autostart_set_handler))
+        .route("/api/export/call-log.csv", get(export_csv_handler))
+        .route("/api/export/instances.json", get(export_instances_handler))
+        .route("/api/export/stats.json", get(export_stats_handler))
         .route("/api/data-clean", post(data_clean_handler))
         .fallback_service(ServeDir::new(dist_dir).append_index_html_on_directories(true))
         .layer(CorsLayer::permissive())
@@ -487,4 +490,58 @@ async fn data_clean_handler(
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     commands::data_clean_core(&core, payload.level).map_err(err)?;
     Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+struct ExportLimitQuery {
+    limit: Option<usize>,
+}
+
+fn export_text_response(
+    body: String,
+    content_type: &'static str,
+    filename: &'static str,
+) -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                axum::http::HeaderValue::from_static(content_type),
+            ),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                axum::http::HeaderValue::from_str(&format!("attachment; filename=\"{}\"", filename))
+                    .unwrap_or_else(|_| axum::http::HeaderValue::from_static("attachment")),
+            ),
+        ],
+        body,
+    )
+}
+
+async fn export_csv_handler(
+    Query(query): Query<ExportLimitQuery>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let csv = commands::export_call_log_csv_core(query.limit).map_err(err)?;
+    Ok(export_text_response(csv, "text/csv; charset=utf-8", "call-log.csv"))
+}
+
+async fn export_instances_handler(
+    State(core): State<Arc<AppCore>>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let json = commands::export_instances_json_core(&core).map_err(err)?;
+    Ok(export_text_response(
+        json,
+        "application/json; charset=utf-8",
+        "instances.json",
+    ))
+}
+
+async fn export_stats_handler() -> Result<impl IntoResponse, (StatusCode, String)> {
+    let json = commands::export_stats_json_core().map_err(err)?;
+    Ok(export_text_response(
+        json,
+        "application/json; charset=utf-8",
+        "stats.json",
+    ))
 }

@@ -2060,6 +2060,65 @@ fn aggregate_stats(runtime_dir: &std::path::Path, known_names: &[String], port_t
     }
 }
 
+fn csv_escape(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
+/// 导出调用日志为 CSV 文本（调用日志页/统计页共用）。
+/// 列按现有 CallLogRecord 字段：ts,model,status,path,err_msg,nodes,duration_ms,req_id。
+pub fn export_call_log_csv_core(limit: Option<usize>) -> Result<String, String> {
+    let (_, _, runtime_dir) = manager_paths();
+    let path = runtime_dir.join("_unified-gateway").join("call_log.jsonl");
+    let records = crate::call_log::read_call_log(&path, limit.unwrap_or(5000).clamp(1, 50000));
+    let header = "ts,model,status,path,err_msg,nodes,duration_ms,req_id\n";
+    let mut out = String::from(header);
+    for r in records {
+        out.push_str(&format!(
+            "{},{},{},{},{},{},{},{}\n",
+            csv_escape(&r.ts),
+            csv_escape(&r.model),
+            if r.has_issue() { "error" } else { "ok" },
+            csv_escape(&r.path),
+            csv_escape(&r.err_msg),
+            csv_escape(&r.nodes.join("|")),
+            r.duration_ms,
+            csv_escape(&r.req_id),
+        ));
+    }
+    Ok(out)
+}
+
+/// 导出全部实例快照为 JSON 文本
+pub fn export_instances_json_core(core: &AppCore) -> Result<String, String> {
+    let instances = list_instances_core(core)?;
+    serde_json::to_string_pretty(&instances).map_err(|e| e.to_string())
+}
+
+/// 导出统计摘要为 JSON 文本
+pub fn export_stats_json_core() -> Result<String, String> {
+    let stats = get_stats_core()?;
+    serde_json::to_string_pretty(&stats).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn export_call_log_csv(limit: Option<usize>) -> Result<String, String> {
+    export_call_log_csv_core(limit)
+}
+
+#[tauri::command]
+pub fn export_instances_json(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    export_instances_json_core(&state.core)
+}
+
+#[tauri::command]
+pub fn export_stats_json() -> Result<String, String> {
+    export_stats_json_core()
+}
+
 #[cfg(test)]
 mod stats_tests {
     use super::*;

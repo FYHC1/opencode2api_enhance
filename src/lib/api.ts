@@ -381,6 +381,23 @@ export const api = {
     http.post<CallLogRecord[]>('/call-log/filtered', filter),
   callLogAggregate: () => http.get<CallLogAggregate[]>('/call-log/aggregate'),
 
+  // 报表导出
+  exportCallLogCsv: async (limit?: number) => {
+    const res = await fetch(`${BASE}/export/call-log.csv?limit=${limit ?? ''}`)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return res.text()
+  },
+  exportInstancesJson: async () => {
+    const res = await fetch(`${BASE}/export/instances.json`)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return res.text()
+  },
+  exportStatsJson: async () => {
+    const res = await fetch(`${BASE}/export/stats.json`)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return res.text()
+  },
+
   // 统一网关（实例池）
   gatewayStatus: () => http.get<GatewayStatus>('/gateway'),
   gatewaySetRouteMode: (mode: 'smart' | 'failover' | 'round_robin') => http.post<void>('/gateway/route-mode', { mode }),
@@ -392,4 +409,15 @@ export const api = {
 
   // 清除数据（1=运行数据, 2=+实例记录, 3=全部重置）
   dataClean: (level: 1 | 2 | 3) => http.post<void>('/data-clean', { level }),
+}
+
+/** 把文本内容以附件形式下载到本地（报表导出共用） */
+export function downloadText(filename: string, text: string) {
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
 }
