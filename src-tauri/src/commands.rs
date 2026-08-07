@@ -243,6 +243,15 @@ pub struct ConfigView {
     pub failover_probe_max: i64,
     pub call_log_max: i64,
     pub show_node_prefix: bool,
+    pub gateway_port: u16,
+    pub gateway_key: String,
+    pub has_gateway_key: bool,
+    pub http_port: u16,
+    pub subscribe_url: String,
+    pub subscribe_interval_min: u32,
+    pub health_check_interval_sec: u32,
+    pub health_restart_threshold: u32,
+    pub log_filter_keywords: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -1535,6 +1544,19 @@ pub fn config_get_core() -> Result<ConfigView, String> {
         failover_probe_max: cfg.failover_probe_max.unwrap_or(3),
         call_log_max: cfg.call_log_max.unwrap_or(5000),
         show_node_prefix: cfg.show_node_prefix.unwrap_or(false),
+        gateway_port: Config::effective_gateway_port(),
+        gateway_key: if cfg.gateway_key.as_deref().unwrap_or("").is_empty() {
+            "".to_string()
+        } else {
+            "***".to_string()
+        },
+        has_gateway_key: !cfg.gateway_key.as_deref().unwrap_or("").is_empty(),
+        http_port: Config::effective_http_port(),
+        subscribe_url: cfg.subscribe_url.unwrap_or_default(),
+        subscribe_interval_min: cfg.subscribe_interval_min.unwrap_or(0),
+        health_check_interval_sec: cfg.health_check_interval_sec.unwrap_or(0),
+        health_restart_threshold: cfg.health_restart_threshold.unwrap_or(0),
+        log_filter_keywords: cfg.log_filter_keywords.unwrap_or_default(),
     })
 }
 
@@ -1577,6 +1599,21 @@ pub fn config_set_core(
             })
             .unwrap_or_default();
         if let Ok(mut g) = core.gateway.lock() {
+            let _ = g.sync(&instances);
+        }
+    }
+    // 网关端口/密钥变更：运行中的 Go 进程不会重读，需重建网关使新配置生效
+    if matches!(key, "gateway_port" | "gateway_key") {
+        let instances = core
+            .manager
+            .lock()
+            .map(|mut mgr| {
+                let _ = mgr.load();
+                mgr.list_instances().to_vec()
+            })
+            .unwrap_or_default();
+        if let Ok(mut g) = core.gateway.lock() {
+            g.stop();
             let _ = g.sync(&instances);
         }
     }

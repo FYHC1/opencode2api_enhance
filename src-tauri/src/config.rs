@@ -20,6 +20,22 @@ pub struct Config {
     pub call_log_max: Option<i64>,
     /// 对话流是否展示「🤖 节点 · 模型」前缀（默认关闭）
     pub show_node_prefix: Option<bool>,
+    /// 统一网关监听端口（None = 默认：debug 21080 / release 18080）
+    pub gateway_port: Option<u16>,
+    /// 统一网关鉴权密钥（None = 默认 "sk-unified-local"；空串=重置为默认）
+    pub gateway_key: Option<String>,
+    /// 管理 HTTP 服务端口（桌面/headless 共用；None = 默认 19090）
+    pub http_port: Option<u16>,
+    /// 订阅 URL（空 = 未配置）
+    pub subscribe_url: Option<String>,
+    /// 订阅自动拉取间隔分钟（0/None = 不自动拉取）
+    pub subscribe_interval_min: Option<u32>,
+    /// 健康巡检间隔秒（0/None = 关闭巡检）
+    pub health_check_interval_sec: Option<u32>,
+    /// 健康巡检失败 N 次自动重启（0/None = 不自动重启）
+    pub health_restart_threshold: Option<u32>,
+    /// 日志过滤关键词（逗号分隔）
+    pub log_filter_keywords: Option<String>,
 }
 
 impl Config {
@@ -52,10 +68,9 @@ impl Config {
     pub fn load() -> Result<Self> {
         let path = Self::config_path();
         if path.exists() {
-            let data = fs::read_to_string(&path)
-                .context("Failed to read config file")?;
-            let config: Config = serde_json::from_str(&data)
-                .context("Failed to parse config file")?;
+            let data = fs::read_to_string(&path).context("Failed to read config file")?;
+            let config: Config =
+                serde_json::from_str(&data).context("Failed to parse config file")?;
             Ok(config)
         } else {
             Ok(Config::default())
@@ -65,9 +80,7 @@ impl Config {
     /// 生效的默认密码：config 未设置时回退 "123456"。
     /// 实例未单独设置密码时，实例 API 门禁与探测均使用该值。
     pub fn effective_default_password() -> String {
-        let password = Self::load()
-            .unwrap_or_default()
-            .default_password;
+        let password = Self::load().unwrap_or_default().default_password;
         if password.is_empty() {
             "123456".to_string()
         } else {
@@ -75,12 +88,41 @@ impl Config {
         }
     }
 
+    /// 生效的统一网关端口：config 未设置时回退默认（debug 21080 / release 18080）
+    pub fn effective_gateway_port() -> u16 {
+        Self::load()
+            .unwrap_or_default()
+            .gateway_port
+            .unwrap_or_else(|| {
+                #[cfg(debug_assertions)]
+                {
+                    21080
+                }
+                #[cfg(not(debug_assertions))]
+                {
+                    18080
+                }
+            })
+    }
+
+    /// 生效的统一网关密钥：config 未设置或为空时回退默认 "sk-unified-local"
+    pub fn effective_gateway_key() -> String {
+        Self::load()
+            .unwrap_or_default()
+            .gateway_key
+            .filter(|k| !k.is_empty())
+            .unwrap_or_else(|| "sk-unified-local".to_string())
+    }
+
+    /// 生效的管理 HTTP 端口：config 未设置时回退 19090
+    pub fn effective_http_port() -> u16 {
+        Self::load().unwrap_or_default().http_port.unwrap_or(19090)
+    }
+
     pub fn save(&self) -> Result<()> {
         let path = Self::config_path();
-        let data = serde_json::to_string_pretty(self)
-            .context("Failed to serialize config")?;
-        fs::write(&path, data)
-            .context("Failed to write config file")?;
+        let data = serde_json::to_string_pretty(self).context("Failed to serialize config")?;
+        fs::write(&path, data).context("Failed to write config file")?;
         Ok(())
     }
 
@@ -98,13 +140,26 @@ impl Config {
             "failover_probe_max" => Some(self.failover_probe_max.unwrap_or(0).to_string()),
             "call_log_max" => Some(self.call_log_max.unwrap_or(0).to_string()),
             "show_node_prefix" => Some(self.show_node_prefix.unwrap_or(false).to_string()),
+            "gateway_port" => Some(self.gateway_port.map(|p| p.to_string()).unwrap_or_default()),
+            "gateway_key" => Some(self.gateway_key.clone().unwrap_or_default()),
+            "http_port" => Some(self.http_port.map(|p| p.to_string()).unwrap_or_default()),
+            "subscribe_url" => Some(self.subscribe_url.clone().unwrap_or_default()),
+            "subscribe_interval_min" => Some(self.subscribe_interval_min.unwrap_or(0).to_string()),
+            "health_check_interval_sec" => {
+                Some(self.health_check_interval_sec.unwrap_or(0).to_string())
+            }
+            "health_restart_threshold" => {
+                Some(self.health_restart_threshold.unwrap_or(0).to_string())
+            }
+            "log_filter_keywords" => Some(self.log_filter_keywords.clone().unwrap_or_default()),
             _ => None,
         }
     }
 
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
         let parse_i64 = |s: &str| -> Result<i64> {
-            s.parse::<i64>().with_context(|| format!("invalid integer for {key}: {s}"))
+            s.parse::<i64>()
+                .with_context(|| format!("invalid integer for {key}: {s}"))
         };
         match key {
             "base_url" => {
@@ -127,9 +182,63 @@ impl Config {
             "failover_probe_max" => self.failover_probe_max = Some(parse_i64(value)?),
             "call_log_max" => self.call_log_max = Some(parse_i64(value)?),
             "show_node_prefix" => {
-                let b = value.parse::<bool>()
+                let b = value
+                    .parse::<bool>()
                     .with_context(|| format!("invalid boolean for show_node_prefix: {value}"))?;
                 self.show_node_prefix = Some(b);
+            }
+            "gateway_port" => {
+                if value.is_empty() {
+                    self.gateway_port = None;
+                } else {
+                    let p = value
+                        .parse::<u16>()
+                        .with_context(|| format!("invalid port for gateway_port: {value}"))?;
+                    self.gateway_port = Some(p);
+                }
+            }
+            "gateway_key" => {
+                // 空串 = 重置为默认；非空需至少 8 字符
+                if value.is_empty() {
+                    self.gateway_key = None;
+                } else if value.len() < 8 {
+                    anyhow::bail!("网关密钥至少 8 个字符");
+                } else {
+                    self.gateway_key = Some(value.to_string());
+                }
+            }
+            "http_port" => {
+                if value.is_empty() {
+                    self.http_port = None;
+                } else {
+                    let p = value
+                        .parse::<u16>()
+                        .with_context(|| format!("invalid port for http_port: {value}"))?;
+                    self.http_port = Some(p);
+                }
+            }
+            "subscribe_url" => {
+                self.subscribe_url = if value.is_empty() {
+                    None
+                } else {
+                    Some(value.to_string())
+                };
+            }
+            "subscribe_interval_min" => {
+                self.subscribe_interval_min = Some(parse_i64(value)? as u32);
+            }
+            "health_check_interval_sec" => {
+                self.health_check_interval_sec = Some(parse_i64(value)? as u32);
+            }
+            "health_restart_threshold" => {
+                self.health_restart_threshold = Some(parse_i64(value)? as u32);
+            }
+            "log_filter_keywords" => {
+                self.log_filter_keywords = if value.is_empty() {
+                    None
+                } else {
+                    Some(value.to_string())
+                };
             }
             _ => {
                 anyhow::bail!("Unknown config key: {}", key);
@@ -163,9 +272,8 @@ mod tests {
         let data = serde_json::to_string_pretty(&config).unwrap();
         fs::write(&config_path, data).unwrap();
 
-        let loaded: Config = serde_json::from_str(
-            &fs::read_to_string(&config_path).unwrap()
-        ).unwrap();
+        let loaded: Config =
+            serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
 
         assert_eq!(loaded.base_url, "http://127.0.0.1:8088/v1");
         assert_eq!(loaded.default_password, "test123");
@@ -177,7 +285,10 @@ mod tests {
     fn test_config_get_set() {
         let mut config = Config::default();
         config.set("base_url", "http://localhost:9090").unwrap();
-        assert_eq!(config.get("base_url"), Some("http://localhost:9090".to_string()));
+        assert_eq!(
+            config.get("base_url"),
+            Some("http://localhost:9090".to_string())
+        );
 
         config.set("default_password", "secret").unwrap();
         assert_eq!(config.get("default_password"), Some("secret".to_string()));
@@ -219,5 +330,39 @@ mod tests {
             None => {}
         }
         fs::remove_dir_all(&test_dir).ok();
+    }
+
+    #[test]
+    fn test_config_new_fields_get_set() {
+        let mut config = Config::default();
+        config.set("gateway_port", "18080").unwrap();
+        assert_eq!(config.gateway_port, Some(18080));
+        assert_eq!(config.get("gateway_port"), Some("18080".to_string()));
+        // 空值回退默认
+        config.set("gateway_port", "").unwrap();
+        assert_eq!(config.gateway_port, None);
+
+        config.set("gateway_key", "my-secret-key").unwrap();
+        assert_eq!(config.gateway_key.as_deref(), Some("my-secret-key"));
+        // 短密钥应报错
+        assert!(config.set("gateway_key", "short").is_err());
+        // 空值重置为默认
+        config.set("gateway_key", "").unwrap();
+        assert_eq!(config.gateway_key, None);
+
+        config.set("http_port", "19100").unwrap();
+        assert_eq!(config.http_port, Some(19100));
+
+        config.set("subscribe_interval_min", "30").unwrap();
+        assert_eq!(config.subscribe_interval_min, Some(30));
+
+        config.set("health_check_interval_sec", "60").unwrap();
+        assert_eq!(config.health_check_interval_sec, Some(60));
+
+        config.set("health_restart_threshold", "3").unwrap();
+        assert_eq!(config.health_restart_threshold, Some(3));
+
+        config.set("log_filter_keywords", "error,timeout").unwrap();
+        assert_eq!(config.log_filter_keywords.as_deref(), Some("error,timeout"));
     }
 }

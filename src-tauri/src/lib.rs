@@ -187,11 +187,11 @@ button: tauri::tray::MouseButton::Left,
         });
 }
 
-/// 本地管理 HTTP 端口：默认 19090，可用 OPCODE2API_HTTP_PORT 覆盖
-/// （headless 的 `serve --port` 与桌面模式共享此环境变量约定）。
+/// 本地管理 HTTP 端口：环境变量 OPCODE2API_HTTP_PORT 优先，其次 config.http_port，
+/// 最后回退 19090（headless 的 `serve --port` 亦可显式覆盖）。
 fn local_http_port() -> u16 {
     std::env::var("OPCODE2API_HTTP_PORT")
         .ok()
         .and_then(|p| p.parse().ok())
-        .unwrap_or(19090)
+        .unwrap_or_else(crate::config::Config::effective_http_port)
 }
