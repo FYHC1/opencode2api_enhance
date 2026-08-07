@@ -16,7 +16,7 @@ use std::time::Duration;
 pub const UNIFIED_GATEWAY_PORT: u16 = 21080;
 #[cfg(not(debug_assertions))]
 pub const UNIFIED_GATEWAY_PORT: u16 = 18080;
-const UNIFIED_GATEWAY_KEY: &str = "sk-unified-local";
+pub(crate) const UNIFIED_GATEWAY_KEY: &str = "sk-unified-local";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct GatewayStatus {

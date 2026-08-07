@@ -777,6 +777,55 @@ pub(crate) fn http_post_json(
     Ok((status, resp_body.trim().to_string()))
 }
 
+/// 向本机实例发简单 HTTP/1.1 DELETE（统计重置等管理操作用），返回 (status, body)。
+/// `auth_token` 非空时附带 `Authorization: Bearer <token>`（apiKeyAuth 门禁）。
+pub(crate) fn http_delete_json(
+    port: u16,
+    path: &str,
+    timeout: Duration,
+    auth_token: Option<&str>,
+) -> Result<(u16, String)> {
+    let addr = format!("127.0.0.1:{}", port);
+    let mut stream =
+        TcpStream::connect(&addr).with_context(|| format!("无法连接 {}", addr))?;
+    stream
+        .set_read_timeout(Some(timeout))
+        .context("设置读超时失败")?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(5)))
+        .context("设置写超时失败")?;
+
+    let auth_line = match auth_token.filter(|t| !t.is_empty()) {
+        Some(t) => format!("Authorization: Bearer {}\r\n", t),
+        None => String::new(),
+    };
+    let req = format!(
+        "DELETE {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\nAccept: application/json\r\n{}User-Agent: opencode2api-manager/0.1\r\n\r\n",
+        auth_line
+    );
+    stream
+        .write_all(req.as_bytes())
+        .context("发送 HTTP DELETE 请求失败")?;
+
+    let mut buf = Vec::new();
+    stream
+        .read_to_end(&mut buf)
+        .context("读取 HTTP DELETE 响应失败")?;
+    let raw = String::from_utf8_lossy(&buf);
+    let (header, resp_body) = raw
+        .split_once("\r\n\r\n")
+        .or_else(|| raw.split_once("\n\n"))
+        .unwrap_or((raw.as_ref(), ""));
+
+    let status = header
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1)?.parse::<u16>().ok())
+        .unwrap_or(0);
+
+    Ok((status, resp_body.trim().to_string()))
+}
+
 
 /// 等待本地 TCP 端口可连接
 pub(crate) fn wait_for_port(port: u16, timeout: Duration) -> bool {

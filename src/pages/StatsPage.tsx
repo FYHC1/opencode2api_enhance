@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useState } from 'react'
 import clsx from 'clsx'
-import { BarChart3, ChevronDown, ChevronRight, RefreshCw, Inbox } from 'lucide-react'
+import { BarChart3, ChevronDown, ChevronRight, RefreshCw, RotateCcw, Inbox } from 'lucide-react'
 import { api, type StatsSummary } from '../lib/api'
 
 /** 千分位格式化 */
@@ -33,7 +33,12 @@ export default function StatsPage({
   const [stats, setStats] = useState<StatsSummary | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+  const [resetting, setResetting] = useState(false)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  // 重置二次确认弹窗
+  const [showResetConfirm, setShowResetConfirm] = useState(false)
+  // 「清除已删除节点」默认勾选
+  const [clearDeleted, setClearDeleted] = useState(true)
 
   const load = useCallback(
     async (silent = true) => {
@@ -63,6 +68,23 @@ export default function StatsPage({
     setRefreshing(false)
   }
 
+  // 重置全部统计：运行中的实例/网关走 HTTP 复位，未运行的覆写磁盘文件
+  const doReset = async (clearDeleted: boolean) => {
+    setResetting(true)
+    setShowResetConfirm(false)
+    try {
+      const r = await api.resetStats(clearDeleted)
+      const fail = r.failed.length > 0 ? `，失败 ${r.failed.length}：${r.failed.join('；')}` : ''
+      const del = r.deleted_count > 0 ? `，清除历史统计 ${r.deleted_count} 项` : ''
+      toast(`已重置 ${r.reset_count} 项统计${del}${fail}`, r.failed.length === 0)
+      await load(false)
+    } catch (e) {
+      toast(String(e), false)
+    } finally {
+      setResetting(false)
+    }
+  }
+
   const toggleExpand = (name: string) => {
     setExpanded((prev) => {
       const next = new Set(prev)
@@ -83,14 +105,25 @@ export default function StatsPage({
           <BarChart3 size={18} className="text-teal-700" />
           Token 统计
         </h1>
-        <button
-          type="button"
-          onClick={doRefresh}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-900 text-white text-[12px] font-medium hover:bg-zinc-700 transition-colors"
-        >
-          <RefreshCw size={13} className={refreshing ? 'animate-spin' : ''} />
-          {refreshing ? '刷新中…' : '刷新'}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setShowResetConfirm(true)}
+            disabled={resetting || !stats}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-zinc-200 text-zinc-600 text-[12px] font-medium hover:bg-zinc-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <RotateCcw size={13} className={resetting ? 'animate-spin' : ''} />
+            {resetting ? '重置中…' : '重置统计'}
+          </button>
+          <button
+            type="button"
+            onClick={doRefresh}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-900 text-white text-[12px] font-medium hover:bg-zinc-700 transition-colors"
+          >
+            <RefreshCw size={13} className={refreshing ? 'animate-spin' : ''} />
+            {refreshing ? '刷新中…' : '刷新'}
+          </button>
+        </div>
       </div>
 
       {/* 总览卡片 */}
@@ -237,6 +270,51 @@ export default function StatsPage({
           </div>
         )}
       </div>
+
+      {/* 重置统计：二次确认弹窗 */}
+      {showResetConfirm && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-900/40"
+          onClick={() => setShowResetConfirm(false)}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-xl w-[420px] p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="text-[15px] font-semibold text-zinc-900 mb-2">重置 Token 统计</div>
+            <p className="text-[13px] text-zinc-600 leading-relaxed">
+              此操作将清空所有实例与统一网关的 Token 用量数据，<b className="text-red-600">且不可恢复</b>。
+            </p>
+            <label className="flex items-center gap-2 mt-4 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={clearDeleted}
+                onChange={(e) => setClearDeleted(e.target.checked)}
+                className="accent-teal-600"
+              />
+              <span className="text-[13px] text-zinc-700">清除已删除节点（历史统计）</span>
+            </label>
+            <div className="flex gap-3 mt-5 justify-end">
+              <button
+                type="button"
+                onClick={() => setShowResetConfirm(false)}
+                disabled={resetting}
+                className="px-4 py-2 rounded-lg text-[13px] text-zinc-600 bg-white border border-zinc-200 hover:bg-zinc-50 disabled:opacity-40 transition-colors"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => void doReset(clearDeleted)}
+                disabled={resetting}
+                className="px-4 py-2 rounded-lg text-[13px] font-medium text-white bg-red-600 hover:bg-red-700 disabled:opacity-40 transition-colors"
+              >
+                {resetting ? '重置中…' : '确定'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
