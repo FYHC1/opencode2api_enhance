@@ -28,10 +28,14 @@ pub async fn serve(bind_addr: &str, core: Arc<AppCore>) -> std::io::Result<()> {
 
 /// 构建 Router（桌面与 headless 共用同一路由表）
 pub fn build_router(core: Arc<AppCore>) -> Router {
-    // 静态目录解析：优先 ../dist（release 打包），回退 ./dist（开发目录）
-    let dist_dir = std::env::current_dir()
-        .unwrap_or_default()
-        .join("dist");
+    // 静态目录解析：优先 ../dist（release 打包，headless 从 src-tauri 运行时 CWD 在仓库根），
+    // 回退 ./dist（从仓库根直接跑 target/debug 时）。两处都不存在时 fallback 为当前目录，
+    // 仅提供 /api 路由（此时前端需另配静态托管，行为与文档一致）。
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let dist_dir = [cwd.join("../dist"), cwd.join("dist")]
+        .into_iter()
+        .find(|p| p.join("index.html").exists())
+        .unwrap_or(cwd.join("dist"));
     Router::new()
         .route("/api/health", get(health_handler))
         .route("/api/instances", get(list_instances_handler))

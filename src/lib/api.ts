@@ -273,8 +273,17 @@ export type HealthSummary = {
 }
 
 // ─── HTTP 基座（桌面与 headless 共用） ─────────────────────────────
+//
+// headless：前端与后端同源（都由 127.0.0.1:19090 托管），相对路径即可。
+// 桌面：WebView 经 Tauri custom-protocol（tauri://localhost）加载内置资源，
+//      相对路径会解析到自定义协议而非后端，必须用绝对地址访问本地 HTTP 服务。
+//      后端已配置 CorsLayer::permissive()，允许跨协议取数。
 
-const BASE = '/api'
+const isTauri =
+  typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+
+const API_ORIGIN = isTauri ? 'http://127.0.0.1:19090' : ''
+const BASE = `${API_ORIGIN}/api`
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
