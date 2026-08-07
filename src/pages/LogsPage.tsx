@@ -7,6 +7,7 @@ import {
   Filter,
   Inbox,
   RefreshCw,
+  Trash2,
 } from 'lucide-react'
 import { api, type CallLogRecord } from '../lib/api'
 
@@ -55,6 +56,8 @@ export default function LogsPage({
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [onlyIssues, setOnlyIssues] = useState(false)
+  // 按天筛选：'' = 全部日期
+  const [dateFilter, setDateFilter] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
 
   const load = useCallback(
@@ -94,10 +97,23 @@ export default function LogsPage({
     })
   }
 
+  // 日志中出现的日期（YYYY-MM-DD，新→旧），供按天筛选
+  const dates = useMemo(() => {
+    const s = new Set<string>()
+    for (const l of logs) {
+      const d = (l.ts || '').slice(0, 10)
+      if (d) s.add(d)
+    }
+    return [...s].sort().reverse()
+  }, [logs])
+
   const visible = useMemo(() => {
-    if (!onlyIssues) return logs
-    return logs.filter(hasIssue)
-  }, [logs, onlyIssues])
+    return logs.filter((l) => {
+      if (onlyIssues && !hasIssue(l)) return false
+      if (dateFilter && (l.ts || '').slice(0, 10) !== dateFilter) return false
+      return true
+    })
+  }, [logs, onlyIssues, dateFilter])
 
   const okCount = logs.filter((l) => l.status === 'ok').length
   const failCount = logs.length - okCount
@@ -107,14 +123,33 @@ export default function LogsPage({
     <div className="p-6 max-w-4xl mx-auto">
       <div className="flex items-center justify-between mb-5">
         <h1 className="text-2xl font-semibold text-zinc-900">调用日志</h1>
-        <button
-          onClick={doRefresh}
-          disabled={refreshing}
-          className="flex items-center gap-2 bg-zinc-900 text-white rounded-lg px-4 py-2 text-sm hover:bg-zinc-700 disabled:opacity-50"
-        >
-          <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
-          刷新
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={async () => {
+              if (!confirm('确定清空全部调用日志？该操作不可恢复。')) return
+              try {
+                await api.clearCallLog()
+                setLogs([])
+                toast('日志已清空')
+              } catch (e) {
+                toast(String(e), false)
+              }
+            }}
+            disabled={logs.length === 0}
+            className="flex items-center gap-2 bg-white border border-zinc-200 text-zinc-600 rounded-lg px-4 py-2 text-sm hover:bg-zinc-50 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Trash2 size={14} />
+            清空
+          </button>
+          <button
+            onClick={doRefresh}
+            disabled={refreshing}
+            className="flex items-center gap-2 bg-zinc-900 text-white rounded-lg px-4 py-2 text-sm hover:bg-zinc-700 disabled:opacity-50"
+          >
+            <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
+            刷新
+          </button>
+        </div>
       </div>
 
       {/* 汇总 + 过滤 */}
@@ -133,6 +168,19 @@ export default function LogsPage({
             异常/切换 <b>{issueCount}</b>
           </span>
         </div>
+        <select
+          value={dateFilter}
+          onChange={(e) => setDateFilter(e.target.value)}
+          className="px-2.5 py-1.5 rounded-lg border border-zinc-200 bg-white text-[13px] text-zinc-600 outline-none"
+          title="按日期筛选"
+        >
+          <option value="">全部日期</option>
+          {dates.map((d) => (
+            <option key={d} value={d}>
+              {d}
+            </option>
+          ))}
+        </select>
         <label className="flex items-center gap-2 text-sm text-zinc-600 cursor-pointer ml-auto">
           <input
             type="checkbox"
