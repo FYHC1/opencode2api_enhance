@@ -124,6 +124,12 @@ pub fn run() {
                 crate::health::health_loop(core_for_health).await;
             });
 
+            // 后台订阅自动拉取（配置 interval>0 且 url 非空时启用）
+            let core_for_sub = core_for_setup.clone();
+            tauri::async_runtime::spawn(async move {
+                crate::subscribe::subscribe_loop(core_for_sub).await;
+            });
+
             // 托盘菜单：右键显示「显示主窗口 / 退出」
             let show_i =
                 tauri::menu::MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;

@@ -10,6 +10,7 @@ use crate::clash_yaml::ClashNode;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::time::Duration;
 
 /// 订阅节点（轻量结构，可落为实例；raw 保留原始链接）
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -439,6 +440,26 @@ pub fn import_subscription(core: &crate::core::AppCore, url: &str) -> Result<usi
     drop(mgr);
     crate::commands::sync_gateway_core(core);
     Ok(imported)
+}
+
+/// 后台订阅循环：按配置间隔自动拉取并入实例。
+/// interval_min <= 0 或 URL 为空时休眠 30s 再查配置（配置变更无需重启）。
+pub async fn subscribe_loop(core: std::sync::Arc<crate::core::AppCore>) {
+    loop {
+        let config = crate::config::Config::load().unwrap_or_default();
+        let interval_min = config.subscribe_interval_min.unwrap_or(0);
+        let url = config.subscribe_url.clone().unwrap_or_default();
+        if interval_min > 0 && !url.is_empty() {
+            let core2 = core.clone();
+            let url2 = url.clone();
+            let _ = tokio::task::spawn_blocking(move || match import_subscription(&core2, &url2) {
+                Ok(n) => println!("订阅自动拉取完成，导入 {} 个节点", n),
+                Err(e) => eprintln!("订阅自动拉取失败: {}", e),
+            })
+            .await;
+        }
+        tokio::time::sleep(Duration::from_secs(interval_min.max(1) as u64 * 60)).await;
+    }
 }
 
 #[cfg(test)]

@@ -37,6 +37,13 @@ fn headless_main(args: &[String]) {
             opencode2api::health::health_loop(core_for_health).await;
         });
     }
+    // 后台订阅自动拉取（headless 模式同样生效）
+    {
+        let core_for_sub = core.clone();
+        rt.spawn(async move {
+            opencode2api::subscribe::subscribe_loop(core_for_sub).await;
+        });
+    }
     if let Err(e) = rt.block_on(server::serve(&format!("0.0.0.0:{}", port), core)) {
         eprintln!("Headless 服务启动失败: {}", e);
         std::process::exit(1);
