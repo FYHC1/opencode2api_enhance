@@ -19,6 +19,9 @@ axum = "0.8"
 tower-http = { version = "0.6", features = ["fs", "cors"] }
 reqwest = { version = "0.12", features = ["blocking", "json"] }
 base64 = "0.22"
+# 编译期把 ../dist 嵌入 exe：浏览器访问 19090 与桌面窗口都从嵌入资源提供前端，
+# 无需磁盘 dist/ 伴行（单文件自包含）。
+rust-embed = "8"
 
 [profile.release]
 strip = true

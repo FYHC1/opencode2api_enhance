@@ -12,7 +12,7 @@
 use crate::commands;
 use crate::core::AppCore;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{header, StatusCode, Uri};
 use axum::response::IntoResponse;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
@@ -20,7 +20,12 @@ use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
-use tower_http::services::ServeDir;
+
+/// 编译期嵌入的前端静态资源（../dist，相对 src-tauri）。浏览器访问 19090
+/// 与桌面 WebView 都从该嵌入资源提供前端，无需磁盘 dist/ 伴行（单文件自包含）。
+#[derive(rust_embed::RustEmbed)]
+#[folder = "../dist/"]
+struct EmbeddedAssets;
 
 /// 启动 headless HTTP 服务（阻塞）。bind_addr 形如 "127.0.0.1:19090" 或 "0.0.0.0:19090"。
 pub async fn serve(bind_addr: &str, core: Arc<AppCore>) -> std::io::Result<()> {
@@ -32,14 +37,6 @@ pub async fn serve(bind_addr: &str, core: Arc<AppCore>) -> std::io::Result<()> {
 
 /// 构建 Router（桌面与 headless 共用同一路由表）
 pub fn build_router(core: Arc<AppCore>) -> Router {
-    // 静态目录解析：优先 ../dist（release 打包，headless 从 src-tauri 运行时 CWD 在仓库根），
-    // 回退 ./dist（从仓库根直接跑 target/debug 时）。两处都不存在时 fallback 为当前目录，
-    // 仅提供 /api 路由（此时前端需另配静态托管，行为与文档一致）。
-    let cwd = std::env::current_dir().unwrap_or_default();
-    let dist_dir = [cwd.join("../dist"), cwd.join("dist")]
-        .into_iter()
-        .find(|p| p.join("index.html").exists())
-        .unwrap_or(cwd.join("dist"));
     Router::new()
         .route("/api/health", get(health_handler))
         .route("/api/instances", get(list_instances_handler))
@@ -83,9 +80,53 @@ pub fn build_router(core: Arc<AppCore>) -> Router {
         .route("/api/export/instances.json", get(export_instances_handler))
         .route("/api/export/stats.json", get(export_stats_handler))
         .route("/api/data-clean", post(data_clean_handler))
-        .fallback_service(ServeDir::new(dist_dir).append_index_html_on_directories(true))
+        // 其余路径由嵌入前端资源提供（SPA：未知路径回退 index.html）
+        .fallback(embedded_assets)
         .layer(cors_layer())
         .with_state(core)
+}
+
+/// 从编译期嵌入资源（EmbeddedAssets）提供前端静态文件。
+/// 支持 SPA 路由回退：未知路径（如 /settings 前端路由）返回 index.html。
+async fn embedded_assets(uri: Uri) -> impl IntoResponse {
+    let path = uri.path().trim_start_matches('/');
+    let asset = if path.is_empty() || path == "index.html" {
+        EmbeddedAssets::get("index.html")
+    } else {
+        EmbeddedAssets::get(path).or_else(|| EmbeddedAssets::get("index.html"))
+    };
+    match asset {
+        Some(f) => {
+            let mime = mime_guess_from_path(path);
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, mime)],
+                f.data.into_owned(),
+            )
+                .into_response()
+        }
+        None => (StatusCode::NOT_FOUND, "not found").into_response(),
+    }
+}
+
+/// 依据扩展名推断 MIME 类型（嵌入资源无磁盘文件，无法依赖 mime_guess crate 的
+/// 文件扩展名嗅探之外的逻辑；这里覆盖前端资源所需的核心类型）。
+fn mime_guess_from_path(path: &str) -> &'static str {
+    let ext = path.rsplit('.').next().unwrap_or("");
+    match ext {
+        "html" => "text/html; charset=utf-8",
+        "js" | "mjs" => "text/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "json" => "application/json; charset=utf-8",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "ico" => "image/x-icon",
+        "woff" | "woff2" => "font/woff2",
+        "ttf" => "font/ttf",
+        "wasm" => "application/wasm",
+        _ => "application/octet-stream",
+    }
 }
 
 /// 构建 CORS 层：仅放行已知前端来源（Tauri 桌面前端 custom-protocol 来源
