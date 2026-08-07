@@ -5,6 +5,7 @@ pub mod config;
 pub mod core;
 pub mod embed;
 pub mod gateway;
+pub mod health;
 pub mod instance;
 pub mod opencode_cfg;
 pub mod probe;
@@ -80,6 +81,8 @@ pub fn run() {
             commands::scan_stop,
             commands::subscribe_preview,
             commands::subscribe_import,
+            commands::health_check_now,
+            commands::health_summary,
             commands::config_get,
             commands::config_set,
             commands::autostart_get,
@@ -108,6 +111,12 @@ pub fn run() {
                 if let Err(e) = server::serve(&addr, core_for_http).await {
                     eprintln!("本地 HTTP 服务启动失败 ({}): {}", addr, e);
                 }
+            });
+
+            // 后台健康巡检（按配置间隔；配置为 0 时不巡检）
+            let core_for_health = core_for_setup.clone();
+            tauri::async_runtime::spawn(async move {
+                crate::health::health_loop(core_for_health).await;
             });
 
             // 托盘菜单：右键显示「显示主窗口 / 退出」

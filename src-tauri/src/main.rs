@@ -30,6 +30,13 @@ fn headless_main(args: &[String]) {
 
     let core = Arc::new(AppCore::new());
     let rt = tokio::runtime::Runtime::new().expect("无法创建运行时");
+    // 后台健康巡检（headless 模式同样生效；配置间隔为 0 时内部自动休眠）
+    {
+        let core_for_health = core.clone();
+        rt.spawn(async move {
+            opencode2api::health::health_loop(core_for_health).await;
+        });
+    }
     if let Err(e) = rt.block_on(server::serve(&format!("0.0.0.0:{}", port), core)) {
         eprintln!("Headless 服务启动失败: {}", e);
         std::process::exit(1);

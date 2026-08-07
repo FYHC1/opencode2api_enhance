@@ -1544,6 +1544,28 @@ pub fn subscribe_import(state: tauri::State<'_, AppState>, url: String) -> Resul
     subscribe_import_core(&state.core, &url)
 }
 
+// ======================== 健康巡检 ========================
+
+/// 立即执行一轮健康巡检
+pub fn health_check_now_core(core: &AppCore) -> crate::health::HealthSummary {
+    crate::health::run_health_check_once(core)
+}
+
+#[tauri::command]
+pub fn health_check_now(state: tauri::State<'_, AppState>) -> crate::health::HealthSummary {
+    health_check_now_core(&state.core)
+}
+
+/// 读取最近一次巡检汇总（立即执行一轮）
+pub fn health_summary_core(core: &AppCore) -> crate::health::HealthSummary {
+    crate::health::run_health_check_once(core)
+}
+
+#[tauri::command]
+pub fn health_summary(state: tauri::State<'_, AppState>) -> crate::health::HealthSummary {
+    health_summary_core(&state.core)
+}
+
 // ======================== 配置 ========================
 
 pub fn config_get_core() -> Result<ConfigView, String> {

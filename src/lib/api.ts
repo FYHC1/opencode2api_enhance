@@ -237,6 +237,24 @@ export type StatsSummary = {
   instances: InstanceStat[]
 }
 
+// ─── 健康巡检 ─────────────────────────────────────────────
+
+export type HealthRecord = {
+  name: string
+  healthy: boolean
+  last_check_ts: number
+  consecutive_failures: number
+  last_error?: string | null
+}
+
+export type HealthSummary = {
+  total: number
+  healthy: number
+  unhealthy: number
+  records: HealthRecord[]
+  last_scan_ts: number
+}
+
 // ─── HTTP 基座（桌面与 headless 共用） ─────────────────────────────
 
 const BASE = '/api'
@@ -334,6 +352,10 @@ export const api = {
 
   // Token 统计（按实例）
   getStats: () => http.get<StatsSummary>('/stats'),
+
+  // 健康巡检
+  healthCheck: () => http.post<HealthSummary>('/health/check'),
+  healthSummary: () => http.get<HealthSummary>('/health/summary'),
 
   // 全流程调用日志
   getCallLog: (limit?: number) =>

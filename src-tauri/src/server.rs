@@ -62,6 +62,8 @@ pub fn build_router(core: Arc<AppCore>) -> Router {
         .route("/api/scan/stop", post(scan_stop_handler))
         .route("/api/subscribe/preview", post(subscribe_preview_handler))
         .route("/api/subscribe/import", post(subscribe_import_handler))
+        .route("/api/health/check", post(health_check_handler))
+        .route("/api/health/summary", get(health_summary_handler))
         .route("/api/autostart", get(autostart_get_handler))
         .route("/api/autostart", post(autostart_set_handler))
         .route("/api/data-clean", post(data_clean_handler))
@@ -436,6 +438,18 @@ async fn subscribe_import_handler(
         .map_err(|e| err(format!("订阅导入任务失败: {}", e)))?
         .map_err(err)?;
     Ok(to_json(json!({ "imported": result })))
+}
+
+async fn health_check_handler(
+    State(core): State<Arc<AppCore>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    Ok(to_json(commands::health_check_now_core(&core)))
+}
+
+async fn health_summary_handler(
+    State(core): State<Arc<AppCore>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    Ok(to_json(commands::health_summary_core(&core)))
 }
 
 async fn autostart_get_handler() -> Result<Json<serde_json::Value>, (StatusCode, String)> {
