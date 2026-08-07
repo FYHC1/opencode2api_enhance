@@ -107,6 +107,22 @@ export type ConfigView = {
   failover_probe_max: number
   call_log_max: number
   show_node_prefix: boolean
+  /** 统一网关监听端口（配置化，0 表示回退默认） */
+  gateway_port: number
+  /** 网关 API 密钥（已配置时返回 "***" 掩码） */
+  gateway_key: string
+  has_gateway_key: boolean
+  /** 管理器自身 HTTP 服务端口（headless/桌面内嵌共用，0 表示回退默认） */
+  http_port: number
+  subscribe_url: string
+  /** 订阅自动拉取间隔（分钟），0 = 不自动拉取 */
+  subscribe_interval_min: number
+  /** 健康巡检间隔（秒），0 = 关闭巡检 */
+  health_check_interval_sec: number
+  /** 连续失败达到该次数则自动重启实例 */
+  health_restart_threshold: number
+  /** 调用日志过滤关键词（逗号分隔，空 = 不过滤） */
+  log_filter_keywords: string
 }
 
 export type BinariesInfo = {
