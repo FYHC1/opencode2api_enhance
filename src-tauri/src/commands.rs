@@ -1688,7 +1688,9 @@ let out = no_window(&mut std::process::Command::new("reg"))
 
 #[cfg(not(windows))]
 fn autostart_status() -> anyhow::Result<bool> {
-    anyhow::bail!("仅 Windows 支持开机自启")
+    // 非 Windows 平台不支持开机自启：读取状态返回「未启用」（合理状态），
+    // 仅 SET 时报错（autostart_set_impl），避免设置页加载因 GET 失败整体崩溃
+    Ok(false)
 }
 
 #[cfg(windows)]
