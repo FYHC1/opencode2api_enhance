@@ -39,6 +39,12 @@ UI 参照 Windsurf Account Manager 的浅色官网风格：Tauri 2 无边框窗�
 3. **节点扫描**页 →「一键扫描全部」→ 勾选可用 →「添加选中为实例」
 4. **实例**页 →「启动」→ 用 `http://127.0.0.1:{实例端口}/v1` 作为 API 地址
 
+## Linux / Headless 部署
+
+- **Headless（无图形界面 / 服务器）**：`opencode2api serve --port 19090`，监听 `0.0.0.0` 并托管前端 `dist/`，纯浏览器完成全部管理。生产环境建议配合 systemd + 反向代理，见 [部署文档](docs/DEPLOYMENT.md)。
+- **桌面（Linux）**：安装 .deb / AppImage 即可；桌面模式内置本地 HTTP 服务（`127.0.0.1:19090`），前端经它取数，行为与 Windows 版一致。
+- 数据目录与配置：`OPCODE2API_DATA_DIR` 隔离数据；`OPCODE2API_HTTP_PORT` 覆盖管理端口；`config.json` 支持网关端口/密钥、订阅、健康巡检、日志过滤等配置项。
+
 ## 常见问题
 
 使用中遇到问题？先看 [常见问题（FAQ）](docs/FAQ.md) —— 包含 `max_tokens` 超限报错、Token 统计疑问等。

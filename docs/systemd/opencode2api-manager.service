@@ -1,0 +1,21 @@
+[Unit]
+Description=opencode2api Manager (headless)
+After=network.target
+
+[Service]
+Type=simple
+User=opencode2api
+# 二进制路径按实际安装位置修改
+ExecStart=/usr/local/bin/opencode2api serve --port 19090
+Restart=on-failure
+RestartSec=5
+# 数据目录（实例配置、运行态、日志均在此）
+Environment=OPCODE2API_DATA_DIR=/var/lib/opencode2api
+# headless 模式默认监听 0.0.0.0（公网可达）；如需仅本机访问，
+# 建议用防火墙放行规则或在前置 nginx 反代层限制来源 IP
+# 日志
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
