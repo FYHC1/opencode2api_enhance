@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import clsx from 'clsx'
-import { Copy, Loader2, Power, RefreshCw, ShieldCheck, Network, Search, Play, Square, TestTube2, Trash2 } from 'lucide-react'
+import { Copy, Loader2, Power, RefreshCw, ShieldCheck, Network, Search, Play, Square, TestTube2, Trash2, KeyRound, Pencil, Check, X } from 'lucide-react'
 import { api, type GatewayStatus, type Instance } from '../lib/api'
 
 function statusBadge(st: Instance['status']): [string, string] {
@@ -27,6 +27,13 @@ export default function PoolPage({
   const [rowBusy, setRowBusy] = useState<Record<string, 'start' | 'stop' | 'test'>>({})
   const [allBusy, setAllBusy] = useState<'start' | 'stop' | 'test' | null>(null)
   const [restarting, setRestarting] = useState(false)
+
+  // 统一网关自定义密钥：编辑弹窗（输入新密钥 / 重置默认）
+  const [keyOpen, setKeyOpen] = useState(false)
+  const [keyValue, setKeyValue] = useState('')
+  const [keyBusy, setKeyBusy] = useState(false)
+  // 一键释放全部池成员忙态
+  const [releaseAllBusy, setReleaseAllBusy] = useState(false)
 
   // 池成员 = 已入池（join_gateway=true）的实例；支持前端搜索（名称/节点/IP/端口）
   const members = instances
@@ -114,7 +121,6 @@ export default function PoolPage({
     }
   }
 
-  // 释放池成员：一条龙（自动关闭实例 → 删除记录 → 释放节点），无「恢复独享」中间态
   const doRelease = async (name: string) => {
     if (!confirm(`确定释放实例 ${name}？将关闭实例并释放节点。`)) return
     setKickBusy(name)
@@ -126,6 +132,42 @@ export default function PoolPage({
       toast(String(e), false)
     } finally {
       setKickBusy(null)
+    }
+  }
+
+  // 设置统一网关自定义密钥（≥8 字符；空串 = 重置默认）
+  const doSaveKey = async () => {
+    setKeyBusy(true)
+    try {
+      await api.configSet('gateway_key', keyValue.trim())
+      toast(keyValue.trim() ? '网关自定义密钥已设置并生效' : '网关密钥已重置为默认', true)
+      setKeyOpen(false)
+      setKeyValue('')
+      await load()
+    } catch (e) {
+      toast(String(e), false)
+    } finally {
+      setKeyBusy(false)
+    }
+  }
+
+  // 一键释放全部池成员：批量删除实例 + 同步网关
+  const doReleaseAll = async () => {
+    const names = members.map((i) => i.name)
+    if (names.length === 0) {
+      toast('池中暂无成员')
+      return
+    }
+    if (!confirm(`确定一键释放全部 ${names.length} 个池成员？将关闭并删除这些实例。`)) return
+    setReleaseAllBusy(true)
+    try {
+      const r = await api.batchDelete(names)
+      toast(`已释放 ${r.success_count} 个成员${r.error_count ? `，失败 ${r.error_count}` : ''}`, r.error_count === 0)
+      await load()
+    } catch (e) {
+      toast(String(e), false)
+    } finally {
+      setReleaseAllBusy(false)
     }
   }
 
@@ -270,7 +312,16 @@ export default function PoolPage({
 
           {/* 密钥 */}
           <div className="rounded-xl border border-zinc-100 bg-zinc-50/60 p-4">
-            <div className="text-[12px] text-zinc-500 mb-1.5">统一密钥</div>
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="text-[12px] text-zinc-500">统一密钥</div>
+              <button
+                onClick={() => { setKeyValue(''); setKeyOpen(true) }}
+                className="flex items-center gap-1 text-[11px] text-teal-700 hover:underline"
+                title="设置自定义密钥 / 重置默认"
+              >
+                <Pencil size={11} /> 自定义
+              </button>
+            </div>
             <button
               onClick={() => void copyText(gw?.api_key ?? 'sk-unified-local', '统一密钥')}
               className="flex items-center gap-1 text-zinc-600 hover:underline"
@@ -362,6 +413,14 @@ export default function PoolPage({
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-teal-700 bg-teal-50 border border-teal-100 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-40"
             >
               {allBusy === 'test' ? <Loader2 size={14} className="animate-spin" /> : <TestTube2 size={14} />} 一键测试
+            </button>
+            <button
+              onClick={() => void doReleaseAll()}
+              disabled={members.length === 0 || !!releaseAllBusy}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-red-600 bg-red-50 border border-red-100 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {releaseAllBusy ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+              {releaseAllBusy ? '释放中…' : '一键释放全部'}
             </button>
             <div
               className={clsx(
@@ -470,6 +529,53 @@ export default function PoolPage({
           </div>
         )}
       </div>
+
+      {keyOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => { if (!keyBusy) setKeyOpen(false) }}
+        >
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-5 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-2">
+              <KeyRound size={16} className="text-teal-600" />
+              <h3 className="text-lg font-semibold text-zinc-900">统一网关密钥</h3>
+              <span className="flex-1" />
+              <button onClick={() => setKeyOpen(false)} className="text-zinc-400 hover:text-zinc-600">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-zinc-700">自定义密钥</label>
+              <input
+                type="text"
+                placeholder="至少 8 个字符；留空 + 保存 = 重置默认"
+                value={keyValue}
+                onChange={(e) => setKeyValue(e.target.value)}
+                className="w-full px-3 py-2 border rounded-lg"
+              />
+              <p className="text-zinc-500 text-xs">设置后需重新配置已连接的客户端；运行中的网关将自动重启生效</p>
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                onClick={() => void doSaveKey()}
+                disabled={keyBusy}
+                className="flex items-center justify-center gap-1.5 flex-1 px-4 py-2 rounded-lg text-sm text-white bg-teal-600 hover:bg-teal-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {keyBusy ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+                {keyBusy ? '保存中…' : '保存'}
+              </button>
+              <button
+                onClick={() => setKeyOpen(false)}
+                className="px-4 py-2 rounded-lg text-sm text-zinc-700 bg-white border border-zinc-200 hover:bg-zinc-50"
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

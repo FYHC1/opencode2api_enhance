@@ -62,6 +62,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::list_nodes,
+            commands::delete_node,
+            commands::delete_nodes,
             commands::list_instances,
             commands::refresh_states,
             commands::add_instance,
@@ -81,6 +83,7 @@ pub fn run() {
             commands::scan_stop,
             commands::subscribe_preview,
             commands::subscribe_import,
+            commands::subscribe_import_pool,
             commands::health_check_now,
             commands::health_summary,
             commands::config_get,

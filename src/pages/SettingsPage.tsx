@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import clsx from 'clsx'
 import { api } from '../lib/api'
 import type { ConfigView, BinariesInfo } from '../lib/api'
 
@@ -32,6 +33,9 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
   // 订阅表单
   const [subscribeUrl, setSubscribeUrl] = useState('')
   const [subscribeIntervalMin, setSubscribeIntervalMin] = useState(0)
+  // 一键拉取目标：独享 / 进池
+  const [subscribeTarget, setSubscribeTarget] = useState<'solo' | 'pool'>('solo')
+  const [subscribeBusy, setSubscribeBusy] = useState(false)
 
   // 健康巡检表单
   const [healthCheckIntervalSec, setHealthCheckIntervalSec] = useState(0)
@@ -201,6 +205,23 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
     } catch (e) {
       console.error('保存订阅配置失败', e)
       toast('保存失败', false)
+    }
+  }
+
+  const handleSubscribeImport = async () => {
+    if (!subscribeUrl.trim()) {
+      toast('请先填写订阅 URL', false)
+      return
+    }
+    setSubscribeBusy(true)
+    try {
+      const n = await api.subscribeImport(subscribeUrl.trim(), subscribeTarget === 'pool')
+      toast(`订阅拉取成功：批量导入 ${n} 个实例（${subscribeTarget === 'pool' ? '已入池' : '独享'}）`, true)
+    } catch (e) {
+      console.error('订阅导入失败', e)
+      toast(String(e), false)
+    } finally {
+      setSubscribeBusy(false)
     }
   }
 
@@ -504,6 +525,42 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
             className="w-28 px-3 py-2 border rounded-lg"
           />
           <p className="text-zinc-500 text-xs">0 = 关闭自动拉取</p>
+        </div>
+
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-zinc-700">立即拉取批量导入为实例</label>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center rounded-lg border border-zinc-200 bg-white p-0.5">
+              <button
+                onClick={() => setSubscribeTarget('solo')}
+                className={clsx(
+                  'px-3 py-1 rounded-md text-[13px] transition-colors',
+                  subscribeTarget === 'solo' ? 'bg-zinc-900 text-white' : 'text-zinc-500 hover:bg-zinc-100',
+                )}
+                title="导入为独享实例（一人一实例，默认）"
+              >
+                独享
+              </button>
+              <button
+                onClick={() => setSubscribeTarget('pool')}
+                className={clsx(
+                  'px-3 py-1 rounded-md text-[13px] transition-colors',
+                  subscribeTarget === 'pool' ? 'bg-zinc-900 text-white' : 'text-zinc-500 hover:bg-zinc-100',
+                )}
+                title="导入并标记进实例池（聚合到统一网关）"
+              >
+                进池
+              </button>
+            </div>
+            <button
+              onClick={() => void handleSubscribeImport()}
+              disabled={subscribeBusy}
+              className="flex items-center gap-1.5 bg-green-600 text-white rounded-lg px-4 py-2 hover:bg-green-700 disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {subscribeBusy ? '拉取中…' : '一键拉取并导入'}
+            </button>
+          </div>
+          <p className="text-zinc-500 text-xs">立即从上方订阅 URL 拉取并批量导入为实例，目标可选「独享/进池」；仅拉取节点请到「节点池」页</p>
         </div>
 
         <button

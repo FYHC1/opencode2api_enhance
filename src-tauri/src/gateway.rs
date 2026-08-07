@@ -201,6 +201,10 @@ impl GatewayManager {
     /// 同步网关：只把「运行中且已入池（join_gateway=true）」的实例加入池。
     /// 未入池实例保持独享访问，不受网关影响。
     pub fn sync(&mut self, instances: &[Instance]) -> Result<()> {
+        // 每次同步都重读生效密钥/端口：config_set 改 gateway_key/gateway_port 后
+        // 走 stop()+sync() 重建网关，此处刷新才能让新值真正传给 Go 进程并反映到 status()。
+        self.password = Config::effective_gateway_key();
+        self.port = Config::effective_gateway_port();
         let members: Vec<&Instance> = instances
             .iter()
             .filter(|instance| instance.status == InstanceStatus::Running && instance.join_gateway)

@@ -364,6 +364,37 @@ pub fn load_subscription_cache() -> Vec<SubscribeNode> {
         .unwrap_or_default()
 }
 
+/// 从订阅缓存中删除节点（按名称），返回实际删除数量。
+/// 供节点池「删除节点」使用——仅订阅缓存中的节点可删（外部 Clash 节点只读）。
+pub fn remove_subscription_node(name: &str) -> Result<usize, String> {
+    let mut nodes = load_subscription_cache();
+    let before = nodes.len();
+    nodes.retain(|n| n.name != name);
+    if nodes.len() == before {
+        return Ok(0);
+    }
+    save_subscription_cache(&nodes)?;
+    Ok(before - nodes.len())
+}
+
+/// 批量删除订阅缓存节点（一次加载 + 持久化），返回实际删除数量。
+/// 供节点池「删除选中」使用——仅订阅缓存中的节点可删（外部 Clash 节点只读）。
+/// 已入实例的节点照常列入（实例仍保留其完整配置），对外部 Clash 节点静默跳过。
+pub fn remove_subscription_nodes(names: &[String]) -> Result<usize, String> {
+    if names.is_empty() {
+        return Ok(0);
+    }
+    let wanted: std::collections::HashSet<&String> = names.iter().collect();
+    let mut nodes = load_subscription_cache();
+    let before = nodes.len();
+    nodes.retain(|n| !wanted.contains(&n.name));
+    if nodes.len() == before {
+        return Ok(0);
+    }
+    save_subscription_cache(&nodes)?;
+    Ok(before - nodes.len())
+}
+
 /// 订阅节点 → ClashNode（供 sing-box 生成与节点列表合并）
 pub fn to_clash_node(n: &SubscribeNode) -> ClashNode {
     ClashNode {
@@ -396,8 +427,25 @@ pub fn to_clash_node(n: &SubscribeNode) -> ClashNode {
     }
 }
 
-/// 批量导入订阅节点为实例（name 冲突自动加序号，端口冲突自动递增）
-pub fn import_subscription(core: &crate::core::AppCore, url: &str) -> Result<usize, String> {
+/// 仅拉取并缓存订阅节点（不创建实例），返回节点数。
+/// 节点池页「从订阅导入」使用：节点进入订阅缓存，随后用户可在节点池页
+/// 勾选并按「独享 / 进池」批量添加为实例。
+pub fn import_subscription_pool(url: &str) -> Result<usize, String> {
+    let nodes = fetch_subscription(url)?;
+    if nodes.is_empty() {
+        return Err("订阅中未解析到任何节点".to_string());
+    }
+    save_subscription_cache(&nodes)?;
+    Ok(nodes.len())
+}
+
+/// 批量导入订阅节点为实例（含持久化订阅缓存）。
+/// `join_gateway` 为 true 时导入的实例打上入池标记（不自动启动，启停由实例池页控制）。
+pub fn import_subscription(
+    core: &crate::core::AppCore,
+    url: &str,
+    join_gateway: bool,
+) -> Result<usize, String> {
     let nodes = fetch_subscription(url)?;
     if nodes.is_empty() {
         return Err("订阅中未解析到任何节点".to_string());
@@ -432,6 +480,9 @@ pub fn import_subscription(core: &crate::core::AppCore, url: &str) -> Result<usi
         let sk = crate::commands::gen_sk_key();
         mgr.add_instance(name.clone(), port, node.name.clone(), sk, ip)
             .map_err(|e| format!("导入实例 '{}' 失败: {}", node.name, e))?;
+        if join_gateway {
+            let _ = mgr.set_join_gateway(&name, true);
+        }
         existing.insert(name);
         used_ports.insert(port);
         imported += 1;
@@ -452,7 +503,7 @@ pub async fn subscribe_loop(core: std::sync::Arc<crate::core::AppCore>) {
         if interval_min > 0 && !url.is_empty() {
             let core2 = core.clone();
             let url2 = url.clone();
-            let _ = tokio::task::spawn_blocking(move || match import_subscription(&core2, &url2) {
+            let _ = tokio::task::spawn_blocking(move || match import_subscription(&core2, &url2, false) {
                 Ok(n) => println!("订阅自动拉取完成，导入 {} 个节点", n),
                 Err(e) => eprintln!("订阅自动拉取失败: {}", e),
             })
@@ -565,5 +616,56 @@ mod tests {
         assert_eq!(cn.server, "1.2.3.4");
         assert_eq!(cn.node_type, "trojan");
         assert_eq!(cn.password.as_deref(), Some("pw"));
+    }
+
+    #[test]
+    fn test_remove_subscription_nodes_batch() {
+        // 触碰进程级 OPCODE2API_DATA_DIR env，需与 config/opencode_cfg 测试持同一串行锁，
+        // 避免全量并行时互相覆盖 env 导致偶发失败。
+        let _guard = crate::config::CONFIG_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // 与 config.rs 测试相同的隔离方式：临时数据目录
+        let orig = std::env::var("OPCODE2API_DATA_DIR").ok();
+        let test_dir = std::env::temp_dir().join("opencode2api-manager-sub-rm-test");
+        unsafe { std::env::set_var("OPCODE2API_DATA_DIR", &test_dir) };
+        let _ = std::fs::remove_dir_all(&test_dir);
+
+        let mk = |name: &str| SubscribeNode {
+            name: name.to_string(),
+            server: "1.2.3.4".to_string(),
+            port: 443,
+            node_type: "trojan".to_string(),
+            password: Some("pw".to_string()),
+            uuid: None,
+            cipher: None,
+            sni: None,
+            network: None,
+            ws_path: None,
+            flow: None,
+            tls: true,
+            raw: format!("trojan://pw@1.2.3.4:443#{}", name),
+        };
+        save_subscription_cache(&[mk("A"), mk("B"), mk("C")]).unwrap();
+
+        // 删两个存在的 + 一个不存在的 → 只删 2
+        let removed = remove_subscription_nodes(&["A".to_string(), "B".to_string(), "X".to_string()]).unwrap();
+        assert_eq!(removed, 2);
+        let left = load_subscription_cache();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].name, "C");
+
+        // 空列表 → 0
+        assert_eq!(remove_subscription_nodes(&[]).unwrap(), 0);
+
+        // 全部删光 → 缓存文件为空列表
+        assert_eq!(remove_subscription_nodes(&["C".to_string()]).unwrap(), 1);
+        assert_eq!(load_subscription_cache().len(), 0);
+
+        let _ = std::fs::remove_dir_all(&test_dir);
+        match orig {
+            Some(v) => unsafe { std::env::set_var("OPCODE2API_DATA_DIR", v) },
+            None => unsafe { std::env::remove_var("OPCODE2API_DATA_DIR") },
+        }
     }
 }

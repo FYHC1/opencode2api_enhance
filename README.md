@@ -55,9 +55,11 @@ UI 参照 Windsurf Account Manager 的浅色官网风格：Tauri 2 无边框窗�
 
 ```bash
 npm install
-npm run tauri:build -- --no-bundle   # 产出 src-tauri/target/release/opencode2api.exe（含内嵌子程序）
+bash scripts/build-windows.sh        # WSL 构建 dist，Windows 直接构建 MSVC exe
 bash scripts/make-portable.sh        # 组装 dist/opencode2api-manager-<ver>-portable.zip
 ```
+
+`scripts/build-windows.sh` 是跨 WSL/Windows 的推荐构建入口：前端在 WSL 侧构建，避免 Windows 侧 Vite 配置解析问题；Rust/Tauri 二进制在 Windows 侧直接运行 `build-win.bat` 构建。Windows 产物位于 `src-tauri/target-win-direct/x86_64-pc-windows-msvc/release/opencode2api.exe`。`build-win.bat` 可以单独从 Windows CMD 直接运行；`schtasks` 仅适用于需要后台运行长构建的场景，不是必需步骤。
 
 ### 内嵌二进制（bin/）
 

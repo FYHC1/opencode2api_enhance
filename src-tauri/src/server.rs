@@ -60,6 +60,8 @@ pub fn build_router(core: Arc<AppCore>) -> Router {
         .route("/api/call-log/filtered", post(call_log_filtered_handler))
         .route("/api/call-log/aggregate", get(call_log_aggregate_handler))
         .route("/api/nodes", get(nodes_handler))
+        .route("/api/nodes/delete", post(node_delete_handler))
+        .route("/api/nodes/delete-batch", post(node_delete_batch_handler))
         .route("/api/binaries", get(binaries_handler))
         .route("/api/port/suggest", get(port_suggest_handler))
         .route("/api/port/check", get(port_check_handler))
@@ -68,6 +70,7 @@ pub fn build_router(core: Arc<AppCore>) -> Router {
         .route("/api/scan/stop", post(scan_stop_handler))
         .route("/api/subscribe/preview", post(subscribe_preview_handler))
         .route("/api/subscribe/import", post(subscribe_import_handler))
+        .route("/api/subscribe/import-pool", post(subscribe_import_pool_handler))
         .route("/api/health/check", post(health_check_handler))
         .route("/api/health/summary", get(health_summary_handler))
         .route("/api/autostart", get(autostart_get_handler))
@@ -357,6 +360,30 @@ async fn nodes_handler() -> Result<Json<serde_json::Value>, (StatusCode, String)
     Ok(to_json(commands::list_nodes_core().map_err(err)?))
 }
 
+#[derive(Deserialize)]
+struct NodeDeletePayload {
+    name: String,
+}
+
+async fn node_delete_handler(
+    Json(payload): Json<NodeDeletePayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let removed = commands::delete_node_core(&payload.name).map_err(err)?;
+    Ok(to_json(json!({ "removed": removed })))
+}
+
+#[derive(Deserialize)]
+struct NodeNamesPayload {
+    names: Vec<String>,
+}
+
+async fn node_delete_batch_handler(
+    Json(payload): Json<NodeNamesPayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let removed = commands::delete_nodes_core(payload.names).map_err(err)?;
+    Ok(to_json(json!({ "removed": removed })))
+}
+
 async fn binaries_handler() -> Json<serde_json::Value> {
     to_json(commands::get_binaries_info_core())
 }
@@ -431,6 +458,8 @@ async fn scan_stop_handler(
 #[derive(Deserialize)]
 struct SubscribePayload {
     url: String,
+    #[serde(default)]
+    join_gateway: bool,
 }
 
 async fn subscribe_preview_handler(
@@ -450,7 +479,21 @@ async fn subscribe_import_handler(
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let core2 = core.clone();
     let url = payload.url;
-    let result = tokio::task::spawn_blocking(move || commands::subscribe_import_core(&core2, &url))
+    let join_gateway = payload.join_gateway;
+    let result = tokio::task::spawn_blocking(move || {
+        commands::subscribe_import_core(&core2, &url, join_gateway)
+    })
+        .await
+        .map_err(|e| err(format!("订阅导入任务失败: {}", e)))?
+        .map_err(err)?;
+    Ok(to_json(json!({ "imported": result })))
+}
+
+async fn subscribe_import_pool_handler(
+    Json(payload): Json<SubscribePayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let url = payload.url;
+    let result = tokio::task::spawn_blocking(move || commands::subscribe_import_pool_core(&url))
         .await
         .map_err(|e| err(format!("订阅导入任务失败: {}", e)))?
         .map_err(err)?;

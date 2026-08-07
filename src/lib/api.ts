@@ -318,6 +318,8 @@ const http = {
 export const api = {
   // 节点
   listNodes: () => http.get<NodeView[]>('/nodes'),
+  deleteNode: (name: string) => http.post<{ removed: number }>('/nodes/delete', { name }).then((r) => r.removed),
+  deleteNodes: (names: string[]) => http.post<{ removed: number }>('/nodes/delete-batch', { names }).then((r) => r.removed),
 
   // 实例
   listInstances: () => http.get<Instance[]>('/instances'),
@@ -362,8 +364,10 @@ export const api = {
 
   // 订阅拉取
   subscribePreview: (url: string) => http.post<SubscribeNode[]>('/subscribe/preview', { url }),
-  subscribeImport: (url: string) =>
-    http.post<{ imported: number }>('/subscribe/import', { url }).then((r) => r.imported),
+  subscribeImport: (url: string, joinGateway?: boolean) =>
+    http.post<{ imported: number }>('/subscribe/import', { url, join_gateway: joinGateway ?? false }).then((r) => r.imported),
+  subscribePoolImport: (url: string) =>
+    http.post<{ imported: number }>('/subscribe/import-pool', { url }).then((r) => r.imported),
 
   // 配置
   configGet: () => http.get<ConfigView>('/config'),

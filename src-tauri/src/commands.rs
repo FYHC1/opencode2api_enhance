@@ -286,6 +286,24 @@ pub fn list_nodes() -> Result<Vec<NodeView>, String> {
     list_nodes_core()
 }
 
+/// 从订阅缓存中删除节点（按名称），返回实际删除数量。
+pub fn delete_node_core(name: &str) -> Result<usize, String> {
+    crate::subscribe::remove_subscription_node(name)
+}
+pub fn delete_nodes_core(names: Vec<String>) -> Result<usize, String> {
+    crate::subscribe::remove_subscription_nodes(&names)
+}
+
+#[tauri::command]
+pub fn delete_node(name: String) -> Result<usize, String> {
+    delete_node_core(&name)
+}
+
+#[tauri::command]
+pub fn delete_nodes(names: Vec<String>) -> Result<usize, String> {
+    delete_nodes_core(names)
+}
+
 
 /// 查询节点在 Clash 配置中的地址（server:port），供实例 IP 列展示
 fn node_ip(node_name: &str) -> String {
@@ -1534,14 +1552,33 @@ pub fn subscribe_preview(url: String) -> Result<Vec<crate::subscribe::SubscribeN
     subscribe_preview_core(&url)
 }
 
-/// 拉取订阅并批量导入为实例（同时持久化订阅缓存）
-pub fn subscribe_import_core(core: &AppCore, url: &str) -> Result<usize, String> {
-    crate::subscribe::import_subscription(core, url)
+/// 拉取订阅并批量导入为实例（同时持久化订阅缓存）。
+/// `join_gateway` 为 true 时导入的实例打上入池标记（不自动启动）。
+pub fn subscribe_import_core(
+    core: &AppCore,
+    url: &str,
+    join_gateway: bool,
+) -> Result<usize, String> {
+    crate::subscribe::import_subscription(core, url, join_gateway)
 }
 
 #[tauri::command]
-pub fn subscribe_import(state: tauri::State<'_, AppState>, url: String) -> Result<usize, String> {
-    subscribe_import_core(&state.core, &url)
+pub fn subscribe_import(
+    state: tauri::State<'_, AppState>,
+    url: String,
+    join_gateway: bool,
+) -> Result<usize, String> {
+    subscribe_import_core(&state.core, &url, join_gateway)
+}
+
+/// 仅拉取并缓存订阅节点（不创建实例），供节点池页「从订阅导入」使用。
+pub fn subscribe_import_pool_core(url: &str) -> Result<usize, String> {
+    crate::subscribe::import_subscription_pool(url)
+}
+
+#[tauri::command]
+pub fn subscribe_import_pool(url: String) -> Result<usize, String> {
+    subscribe_import_pool_core(&url)
 }
 
 // ======================== 健康巡检 ========================
