@@ -207,6 +207,15 @@ export type StatsSummary = {
   instances: InstanceStat[]
 }
 
+export type ResetStatsResult = {
+  /** 成功重置的项数（含实例与统一网关） */
+  reset_count: number
+  /** 清除的「已删除实例」历史统计目录数 */
+  deleted_count: number
+  /** 失败明细 */
+  failed: string[]
+}
+
 // ─── Tauri command 封装 ─────────────────────────────────────────────
 
 export const api = {
@@ -244,12 +253,15 @@ export const api = {
     apiPort?: number
     socksPort?: number
     timeout?: number
+    /** 并发 worker 数（可选，默认后端 8） */
+    concurrency?: number
   }) =>
     invoke<ScanProgress>('scan_start', {
       nodes: opts?.nodes ?? null,
       apiPort: opts?.apiPort ?? null,
       socksPort: opts?.socksPort ?? null,
       timeout: opts?.timeout ?? null,
+      concurrency: opts?.concurrency ?? null,
     }),
   scanStatus: () => invoke<ScanProgress>('scan_status'),
   scanStop: () => invoke<ScanProgress>('scan_stop'),
@@ -267,10 +279,15 @@ export const api = {
 
   // Token 统计（按实例）
   getStats: () => invoke<StatsSummary>('get_stats'),
+  /** 重置全部 Token 统计（clearDeleted=同时清除已删除节点历史统计） */
+  resetStats: (clearDeleted?: boolean) =>
+    invoke<ResetStatsResult>('reset_stats', { clearDeleted: clearDeleted ?? null }),
 
   // 全流程调用日志
   getCallLog: (limit?: number) =>
     invoke<CallLogRecord[]>('get_call_log', { limit: limit ?? null }),
+  /** 清空全部调用日志 */
+  clearCallLog: () => invoke<void>('clear_call_log'),
 
   // 统一网关（实例池）
   gatewayStatus: () => invoke<GatewayStatus>('gateway_status'),

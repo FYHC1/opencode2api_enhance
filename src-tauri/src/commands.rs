@@ -680,7 +680,18 @@ pub fn batch_add(
 
     let mut mgr = lock_manager(&state)?;
     let _ = mgr.load();
+    Ok(batch_add_inner(&mut mgr, &nodes, base_port, use_node_name, &prefix))
+}
 
+/// batch_add 核心逻辑（独立纯函数便于单元测试）：
+/// 按节点去重——同一节点只允许例化一次（已在实例列表中的节点跳过）。
+fn batch_add_inner(
+    mgr: &mut InstanceManager,
+    nodes: &[BatchAddItem],
+    base_port: u16,
+    use_node_name: bool,
+    prefix: &str,
+) -> BatchAddResult {
     let mut added = Vec::new();
     let mut errors = Vec::new();
 
@@ -748,12 +759,12 @@ pub fn batch_add(
 
     let added_count = added.len();
     let error_count = errors.len();
-    Ok(BatchAddResult {
+    BatchAddResult {
         added,
         errors,
         added_count,
         error_count,
-    })
+    }
 }
 
 /// 对一批实例执行同一操作，汇总成功与失败明细。
@@ -1325,6 +1336,7 @@ pub fn scan_start(
     api_port: Option<u16>,
     socks_port: Option<u16>,
     timeout: Option<u64>,
+    concurrency: Option<usize>,
 ) -> Result<crate::probe::ScanProgress, String> {
     let (_, binary_dir, runtime_dir) = manager_paths();
     let password = default_password();
@@ -1341,6 +1353,7 @@ pub fn scan_start(
         socks_port,
         filter,
         timeout,
+        concurrency,
     ) {
         Ok(()) => Ok(state.scan.progress_snapshot()),
         Err(e) => Err(e.to_string()),
@@ -1643,6 +1656,155 @@ pub fn get_call_log(limit: Option<usize>) -> Vec<crate::call_log::CallLogRecord>
     crate::call_log::read_call_log(&path, max)
 }
 
+/// 清空统一网关调用日志（删除 call_log.jsonl）。
+/// Go 网关进程的内存环形缓冲不会把旧记录重新写回文件（Append 只追加新记录），
+/// 因此删除文件后日志页即为空，后续新请求从空文件开始记录。
+#[tauri::command]
+pub fn clear_call_log() -> Result<(), String> {
+    let (_, _, runtime_dir) = manager_paths();
+    let path = runtime_dir.join("_unified-gateway").join("call_log.jsonl");
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(|e| format!("删除日志文件失败: {}", e))?;
+    }
+    Ok(())
+}
+
+/// 重置 Token 统计的结果汇总
+#[derive(Debug, Serialize)]
+pub struct ResetStatsResult {
+    /// 成功重置的项数（含实例与统一网关）
+    pub reset_count: usize,
+    /// 清除的「已删除实例」历史统计目录数（勾选清除时）
+    pub deleted_count: usize,
+    /// 失败明细（每项一条）
+    pub failed: Vec<String>,
+}
+
+/// 覆写为空统计文件（stats.json 或 node_stats.json，字段与 Go 侧一致）
+fn write_empty_stats_file(path: &std::path::Path, is_nodes: bool) -> std::io::Result<()> {
+    let empty = if is_nodes {
+        serde_json::json!({ "total_requests": 0, "nodes": {} })
+    } else {
+        serde_json::json!({ "total_requests": 0, "models": {} })
+    };
+    std::fs::write(path, serde_json::to_string_pretty(&empty).unwrap_or_default())
+}
+
+/// 重置 Token 统计：
+/// - 运行中的实例 / 统一网关：调用其 HTTP DELETE /api/reset-stats（Bearer 密钥，apiKeyAuth 门禁）
+/// - 未运行的实例 / 网关：直接覆写磁盘 stats.json / node_stats.json 为空
+/// 返回成功重置的项数与失败明细（单条失败不阻断整体）。
+#[tauri::command]
+pub async fn reset_stats(
+    state: tauri::State<'_, AppState>,
+    clear_deleted: Option<bool>,
+) -> Result<ResetStatsResult, String> {
+    let clear_deleted = clear_deleted.unwrap_or(true);
+    let manager = Arc::clone(&state.manager);
+    tauri::async_runtime::spawn_blocking(move || -> Result<ResetStatsResult, String> {
+        let (_, _, runtime_dir) = manager_paths();
+        let default_pw = Config::effective_default_password();
+        let mut reset_count = 0usize;
+        let mut failed: Vec<String> = Vec::new();
+
+        // 1) 实例：先校正状态，运行中走 HTTP，其余覆盖磁盘文件
+        let instances = {
+            let mut mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
+            mgr.load().ok();
+            let _ = mgr.reconcile_states();
+            mgr.list_instances().to_vec()
+        };
+        for inst in &instances {
+            let stats_path = runtime_dir.join(&inst.name).join("stats.json");
+            if inst.status == crate::instance::InstanceStatus::Running {
+                let pw = if inst.password.is_empty() {
+                    default_pw.clone()
+                } else {
+                    inst.password.clone()
+                };
+                match crate::instance::http_delete_json(
+                    inst.port,
+                    "/api/reset-stats",
+                    std::time::Duration::from_secs(6),
+                    Some(&pw),
+                ) {
+                    Ok((status, _)) if (200..300).contains(&status) => reset_count += 1,
+                    Ok((status, _)) => failed.push(format!("{}: HTTP {}", inst.name, status)),
+                    Err(e) => failed.push(format!("{}: {}", inst.name, e)),
+                }
+            } else if stats_path.exists() {
+                match write_empty_stats_file(&stats_path, false) {
+                    Ok(()) => reset_count += 1,
+                    Err(e) => failed.push(format!("{}: 覆写 stats.json 失败 ({})", inst.name, e)),
+                }
+            }
+        }
+
+        // 2) 统一网关：先尝试 HTTP；失败（未运行 / 旧二进制无该端点）则覆写磁盘文件
+        let gw_dir = runtime_dir.join("_unified-gateway");
+        let gw_reset_ok = crate::instance::http_delete_json(
+            crate::gateway::UNIFIED_GATEWAY_PORT,
+            "/api/reset-stats",
+            std::time::Duration::from_secs(6),
+            Some(crate::gateway::UNIFIED_GATEWAY_KEY),
+        )
+        .map(|(status, _)| (200..300).contains(&status))
+        .unwrap_or(false);
+        if gw_reset_ok {
+            reset_count += 1;
+        } else {
+            let mut any = false;
+            for (fname, is_nodes) in [("stats.json", false), ("node_stats.json", true)] {
+                let p = gw_dir.join(fname);
+                if p.exists() && write_empty_stats_file(&p, is_nodes).is_ok() {
+                    any = true;
+                }
+            }
+            if any {
+                reset_count += 1;
+            }
+        }
+
+        // 3) 清除「已删除实例」的历史目录（勾选时）：删除节点数据与节点本身。
+        //    遍历 runtime/ 下名不在当前实例列表、非 _unified-gateway/_probe、
+        //    且含统计文件（stats.json / node_stats.json）的目录，整目录删除。
+        let mut deleted_count = 0usize;
+        if clear_deleted {
+            let known: HashSet<&String> = instances.iter().map(|i| &i.name).collect();
+            if let Ok(entries) = std::fs::read_dir(&runtime_dir) {
+                for entry in entries.flatten() {
+                    let dir = entry.path();
+                    if !dir.is_dir() {
+                        continue;
+                    }
+                    let name = dir.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                    if name == "_unified-gateway" || name == "_probe" {
+                        continue;
+                    }
+                    if known.contains(&name.to_string()) {
+                        continue;
+                    }
+                    // 仅处理真实含统计文件的历史实例目录
+                    let has_stats = ["stats.json", "node_stats.json"]
+                        .iter()
+                        .any(|f| dir.join(f).exists());
+                    if !has_stats {
+                        continue;
+                    }
+                    match std::fs::remove_dir_all(&dir) {
+                        Ok(()) => deleted_count += 1,
+                        Err(e) => failed.push(format!("{}: 删除历史目录失败 ({})", name, e)),
+                    }
+                }
+            }
+        }
+
+        Ok(ResetStatsResult { reset_count, deleted_count, failed })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// 聚合逻辑（独立函数便于单元测试）：遍历 runtime_dir 各子目录读取 stats.json。
 /// port_to_name 提供 sing-box 端口 → 实例名映射，用于把统一网关 node_stats.json
 /// 中的 SOCKS5 出口地址（127.0.0.1:281xx）解析为实例名。
@@ -1887,5 +2049,91 @@ mod stats_tests {
         assert_eq!(gw.nodes.len(), 1);
         assert_eq!(gw.nodes[0].name, "127.0.0.1:28999");
         let _ = fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod batch_add_tests {
+    use super::*;
+    use crate::instance::InstanceManager;
+    use std::path::PathBuf;
+
+    fn ephemeral_mgr() -> InstanceManager {
+        // 不持久化：add_instance 不会写盘，测试无需清理
+        InstanceManager::new_ephemeral(PathBuf::from("bin"), PathBuf::from("runtime"))
+    }
+
+    #[test]
+    fn test_batch_add_dedup_same_node() {
+        let mut mgr = ephemeral_mgr();
+        // 先占用节点 A
+        mgr.add_instance(
+            "a-1".to_string(),
+            18001,
+            "节点A".to_string(),
+            "sk-x".to_string(),
+            "".to_string(),
+        )
+        .unwrap();
+
+        let items = vec![
+            BatchAddItem { node: "节点A".to_string(), name: None, port: None },
+            BatchAddItem { node: "节点B".to_string(), name: None, port: None },
+        ];
+        let r = batch_add_inner(&mut mgr, &items, 30000, true, "n");
+        assert_eq!(r.added_count, 1, "节点A 已存在应被去重，只应新增节点B");
+        assert_eq!(r.error_count, 1);
+        assert!(
+            r.errors.iter().any(|e| e["node"] == "节点A"),
+            "错误明细应包含已存在的节点A"
+        );
+        assert!(
+            mgr.list_instances().iter().any(|i| i.node == "节点B"),
+            "节点B 应被成功添加"
+        );
+    }
+
+    #[test]
+    fn test_batch_add_repeat_pool_is_idempotent() {
+        let mut mgr = ephemeral_mgr();
+        mgr.add_instance(
+            "a-1".to_string(),
+            18001,
+            "节点A".to_string(),
+            "sk-x".to_string(),
+            "".to_string(),
+        )
+        .unwrap();
+        mgr.set_join_gateway("a-1", true).unwrap();
+
+        // 再次对同一节点入池：应被去重，不产生第二个实例
+        let items = vec![BatchAddItem { node: "节点A".to_string(), name: None, port: None }];
+        let r = batch_add_inner(&mut mgr, &items, 30000, true, "n");
+        assert_eq!(r.added_count, 0, "重复入池同一节点应被去重");
+        assert_eq!(mgr.list_instances().len(), 1, "不应产生重复实例");
+        assert!(
+            mgr.list_instances()[0].join_gateway,
+            "原实例的入池标记应保留"
+        );
+    }
+
+    #[test]
+    fn test_batch_add_name_conflict_gets_suffix() {
+        let mut mgr = ephemeral_mgr();
+        mgr.add_instance(
+            "节点B".to_string(),
+            18001,
+            "节点B".to_string(),
+            "sk-x".to_string(),
+            "".to_string(),
+        )
+        .unwrap();
+
+        // 不同节点、同名冲突：自动加后缀，仍应成功
+        let items = vec![BatchAddItem { node: "节点C".to_string(), name: Some("节点B".to_string()), port: None }];
+        let r = batch_add_inner(&mut mgr, &items, 30000, true, "n");
+        assert_eq!(r.added_count, 1);
+        let names: Vec<&str> = mgr.list_instances().iter().map(|i| i.name.as_str()).collect();
+        assert!(names.contains(&"节点B-2"), "同名冲突应加后缀: {:?}", names);
     }
 }
