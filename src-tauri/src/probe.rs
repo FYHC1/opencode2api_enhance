@@ -24,8 +24,8 @@ pub const DEFAULT_PROBE_API_PORT: u16 = 19090;
 pub const DEFAULT_PROBE_SOCKS_PORT: u16 = 49090;
 #[cfg(not(debug_assertions))]
 pub const DEFAULT_PROBE_SOCKS_PORT: u16 = 29090;
-/// 并发扫描最大 worker 数
-const MAX_SCAN_CONCURRENCY: usize = 4;
+/// 并发扫描最大 worker 数（默认上限；实际并发 = min(节点数, 请求并发, 可用端口对数)）
+const MAX_SCAN_CONCURRENCY: usize = 8;
 
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -132,6 +132,7 @@ impl ScanController {
         socks_port: u16,
         node_filter: Option<Vec<String>>,
         per_node_timeout_secs: u64,
+        concurrency: Option<usize>,
     ) -> Result<()> {
         if self
             .running
@@ -170,6 +171,7 @@ impl ScanController {
         let running = Arc::clone(&self.running);
 
         thread::spawn(move || {
+            let max_workers = concurrency.unwrap_or(MAX_SCAN_CONCURRENCY).clamp(1, MAX_SCAN_CONCURRENCY);
             let result = run_scan_loop_parallel(
                 &binary_dir,
                 &runtime_dir,
@@ -177,6 +179,7 @@ impl ScanController {
                 api_port,
                 socks_port,
                 &nodes,
+                max_workers,
                 Duration::from_secs(per_node_timeout_secs.max(3)),
                 &progress,
                 &cancel,
@@ -381,12 +384,15 @@ fn run_scan_loop_parallel(
     api_port: u16,
     socks_port: u16,
     nodes: &[ClashNode],
+    max_workers: usize,
     per_node_timeout: Duration,
     progress: &Arc<Mutex<ScanProgress>>,
     cancel: &Arc<AtomicBool>,
 ) -> Result<()> {
-    let worker_count = nodes.len().min(MAX_SCAN_CONCURRENCY).max(1);
-    let port_pairs = choose_probe_port_pairs(api_port, socks_port, worker_count)?;
+    let desired = nodes.len().min(max_workers).max(1);
+    let port_pairs = choose_probe_port_pairs(api_port, socks_port, desired)?;
+    // worker 数 = 实际分配到的端口对数（choose 失败时整体报错，不会静默降级）
+    let worker_count = port_pairs.len().max(1);
     let probe_root = runtime_dir.join("_probe");
     fs::create_dir_all(&probe_root).context("创建并发探测目录失败")?;
     let singbox_bin = resolve_bin(binary_dir, "sing-box")?;
