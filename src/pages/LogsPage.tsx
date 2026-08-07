@@ -6,9 +6,16 @@ import {
   ChevronRight,
   Filter,
   Inbox,
+  LayoutList,
   RefreshCw,
+  Table2,
 } from 'lucide-react'
-import { api, type CallLogRecord } from '../lib/api'
+import {
+  api,
+  type CallLogAggregate,
+  type CallLogFilter,
+  type CallLogRecord,
+} from '../lib/api'
 
 const fmtTime = (ts: string) => {
   try {
@@ -46,30 +53,53 @@ const issueLabel = (rec: CallLogRecord): string => {
   return '异常'
 }
 
+const inputCls =
+  'border border-zinc-200 rounded-lg px-2.5 py-1.5 text-sm text-zinc-800 focus:outline-none focus:border-zinc-400 bg-white'
+
 export default function LogsPage({
   toast,
 }: {
   toast: (msg: string, ok?: boolean) => void
 }) {
   const [logs, setLogs] = useState<CallLogRecord[]>([])
+  const [agg, setAgg] = useState<CallLogAggregate[]>([])
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [onlyIssues, setOnlyIssues] = useState(false)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [view, setView] = useState<'list' | 'agg'>('list')
+
+  const [fNode, setFNode] = useState('')
+  const [fKeyword, setFKeyword] = useState('')
+  const [fStatus, setFStatus] = useState('')
+
+  const buildFilter = useCallback(
+    (): CallLogFilter => ({
+      node: fNode.trim() || undefined,
+      keyword: fKeyword.trim() || undefined,
+      status: fStatus || undefined,
+      limit: 500,
+      offset: 0,
+    }),
+    [fNode, fKeyword, fStatus],
+  )
 
   const load = useCallback(
     async (silent = true) => {
       try {
-        const recs = await api.getCallLog(5000)
-        // 最新在前
-        setLogs([...recs].reverse())
+        if (view === 'agg') {
+          setAgg(await api.callLogAggregate())
+        } else {
+          const recs = await api.callLogFiltered(buildFilter())
+          setLogs(recs)
+        }
         setError(null)
       } catch (e) {
         if (!silent) toast(String(e), false)
         else setError(String(e))
       }
     },
-    [toast],
+    [view, buildFilter, toast],
   )
 
   // 自动轮询（静默，5s）
@@ -78,6 +108,13 @@ export default function LogsPage({
     const t = setInterval(() => void load(true), 5000)
     return () => clearInterval(t)
   }, [load])
+
+  // 过滤条件变化立即重查（防抖 300ms）
+  useEffect(() => {
+    if (view !== 'list') return
+    const t = setTimeout(() => void load(true), 300)
+    return () => clearTimeout(t)
+  }, [fNode, fKeyword, fStatus, view, load])
 
   const doRefresh = async () => {
     setRefreshing(true)
@@ -117,38 +154,145 @@ export default function LogsPage({
         </button>
       </div>
 
-      {/* 汇总 + 过滤 */}
-      <div className="bg-white rounded-2xl border p-4 mb-4 flex flex-wrap items-center gap-4">
-        <div className="flex gap-5 text-sm">
-          <span className="text-zinc-600">
-            共 <b className="text-zinc-900">{logs.length}</b> 条
-          </span>
-          <span className="text-green-600">
-            【成功】<b>{okCount}</b>
-          </span>
-          <span className="text-red-600">
-            【失败】<b>{failCount}</b>
-          </span>
-          <span className="text-amber-600">
-            异常/切换 <b>{issueCount}</b>
+      {/* 过滤栏 */}
+      <div className="bg-white rounded-2xl border p-4 mb-4 flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-2 text-sm text-zinc-500">
+          <Filter size={14} />
+          <span className="text-zinc-700">过滤</span>
+        </div>
+        <input
+          value={fNode}
+          onChange={(e) => setFNode(e.target.value)}
+          placeholder="节点名包含"
+          className={clsx(inputCls, 'w-36')}
+        />
+        <input
+          value={fKeyword}
+          onChange={(e) => setFKeyword(e.target.value)}
+          placeholder="关键词（模型/路径/错误）"
+          className={clsx(inputCls, 'w-52')}
+        />
+        <select
+          value={fStatus}
+          onChange={(e) => setFStatus(e.target.value)}
+          className={clsx(inputCls, 'w-28')}
+        >
+          <option value="">全部状态</option>
+          <option value="ok">成功</option>
+          <option value="error">失败/异常</option>
+        </select>
+
+        <div className="ml-auto flex items-center gap-2">
+          <span className="text-zinc-400 text-xs">视图</span>
+          <div className="flex rounded-lg border border-zinc-200 overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setView('list')}
+              className={clsx(
+                'flex items-center gap-1.5 px-3 py-1.5 text-xs',
+                view === 'list' ? 'bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-zinc-100',
+              )}
+            >
+              <LayoutList size={13} />
+              明细
+            </button>
+            <button
+              type="button"
+              onClick={() => setView('agg')}
+              className={clsx(
+                'flex items-center gap-1.5 px-3 py-1.5 text-xs',
+                view === 'agg' ? 'bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-zinc-100',
+              )}
+            >
+              <Table2 size={13} />
+              汇总
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* 汇总 + 只看失败（明细视图） */}
+      {view === 'list' ? (
+        <div className="bg-white rounded-2xl border p-4 mb-4 flex flex-wrap items-center gap-4">
+          <div className="flex gap-5 text-sm">
+            <span className="text-zinc-600">
+              共 <b className="text-zinc-900">{logs.length}</b> 条
+            </span>
+            <span className="text-green-600">
+              【成功】<b>{okCount}</b>
+            </span>
+            <span className="text-red-600">
+              【失败】<b>{failCount}</b>
+            </span>
+            <span className="text-amber-600">
+              异常/切换 <b>{issueCount}</b>
+            </span>
+          </div>
+          <label className="flex items-center gap-2 text-sm text-zinc-600 cursor-pointer ml-auto">
+            <input
+              type="checkbox"
+              checked={onlyIssues}
+              onChange={(e) => setOnlyIssues(e.target.checked)}
+              className="accent-zinc-900"
+            />
+            <Filter size={14} />
+            只看失败/切换
+          </label>
+        </div>
+      ) : (
+        <div className="bg-white rounded-2xl border p-4 mb-4">
+          <span className="text-sm text-zinc-600">
+            共 <b className="text-zinc-900">{agg.length}</b> 个节点组合
           </span>
         </div>
-        <label className="flex items-center gap-2 text-sm text-zinc-600 cursor-pointer ml-auto">
-          <input
-            type="checkbox"
-            checked={onlyIssues}
-            onChange={(e) => setOnlyIssues(e.target.checked)}
-            className="accent-zinc-900"
-          />
-          <Filter size={14} />
-          只看失败/切换
-        </label>
-      </div>
+      )}
 
       {error && <div className="text-red-600 text-sm mb-4">加载失败：{error}</div>}
 
-      {/* 日志列表 */}
-      {visible.length === 0 ? (
+      {/* 汇总视图 */}
+      {view === 'agg' ? (
+        agg.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-16 text-zinc-400">
+            <Inbox size={40} strokeWidth={1.5} />
+            <p className="mt-3 text-sm">暂无日志</p>
+            <p className="text-xs mt-1">网关尚未记录调用（需以网关模式运行）</p>
+          </div>
+        ) : (
+          <div className="bg-white rounded-2xl border overflow-hidden">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-zinc-500 border-b bg-zinc-50/60">
+                  <th className="px-4 py-2.5 font-medium">节点组合</th>
+                  <th className="px-4 py-2.5 font-medium text-right w-28">总条数</th>
+                  <th className="px-4 py-2.5 font-medium text-right w-28">异常/错误</th>
+                  <th className="px-4 py-2.5 font-medium text-right w-48">最近时间</th>
+                </tr>
+              </thead>
+              <tbody>
+                {agg.map((a) => (
+                  <tr key={a.instance} className="border-b border-zinc-100 last:border-0">
+                    <td className="px-4 py-2.5 font-mono text-xs text-zinc-800 break-all">
+                      {a.instance}
+                    </td>
+                    <td className="px-4 py-2.5 text-right tabular-nums text-zinc-800">{a.total}</td>
+                    <td
+                      className={clsx(
+                        'px-4 py-2.5 text-right tabular-nums',
+                        a.errors > 0 ? 'text-red-600 font-medium' : 'text-zinc-400',
+                      )}
+                    >
+                      {a.errors}
+                    </td>
+                    <td className="px-4 py-2.5 text-right text-xs text-zinc-500 tabular-nums">
+                      {fmtTime(a.last_ts)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+      ) : visible.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 text-zinc-400">
           <Inbox size={40} strokeWidth={1.5} />
           <p className="mt-3 text-sm">暂无日志</p>
@@ -206,7 +350,7 @@ export default function LogsPage({
                   </span>
                   {issue && (
                     <span className="shrink-0 text-zinc-400">
-                      {isExpanded ? <ChevronUpIcon /> : <ChevronRight size={16} />}
+                      {isExpanded ? <ChevronDown size={16} className="rotate-180" /> : <ChevronRight size={16} />}
                     </span>
                   )}
                 </button>
@@ -255,16 +399,10 @@ export default function LogsPage({
         </div>
       )}
 
-      {/* 空态提示 */}
-      {logs.length > 0 && visible.length === 0 && null}
       <div className="flex items-center gap-2 text-zinc-400 text-xs mt-4">
         <Activity size={12} />
         每 5 秒自动刷新 · 保留上限可在设置页调整
       </div>
     </div>
   )
-}
-
-function ChevronUpIcon() {
-  return <ChevronDown size={16} className="rotate-180" />
 }

@@ -91,6 +91,8 @@ pub fn run() {
 
             commands::get_stats,
             commands::get_call_log,
+            commands::call_log_filtered,
+            commands::call_log_aggregate,
             commands::hide_to_tray,
             commands::toggle_maximize,
             commands::quit_app,

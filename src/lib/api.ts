@@ -172,6 +172,23 @@ export type CallLogRecord = {
   err_msg?: string
 }
 
+export type CallLogFilter = {
+  node?: string
+  keyword?: string
+  status?: string
+  limit?: number
+  offset?: number
+  from_ts?: string
+  to_ts?: string
+}
+
+export type CallLogAggregate = {
+  instance: string
+  total: number
+  errors: number
+  last_ts: string
+}
+
 // ─── 统一网关（实例池） ─────────────────────────────────────────────
 
 export type GatewayStatus = {
@@ -360,6 +377,9 @@ export const api = {
   // 全流程调用日志
   getCallLog: (limit?: number) =>
     http.get<CallLogRecord[]>(`/call-log?limit=${limit ?? ''}`),
+  callLogFiltered: (filter: CallLogFilter) =>
+    http.post<CallLogRecord[]>('/call-log/filtered', filter),
+  callLogAggregate: () => http.get<CallLogAggregate[]>('/call-log/aggregate'),
 
   // 统一网关（实例池）
   gatewayStatus: () => http.get<GatewayStatus>('/gateway'),

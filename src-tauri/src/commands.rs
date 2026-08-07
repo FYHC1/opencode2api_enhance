@@ -1918,6 +1918,34 @@ pub fn get_call_log(limit: Option<usize>) -> Vec<crate::call_log::CallLogRecord>
     get_call_log_core(limit)
 }
 
+/// 按过滤条件查询调用日志（read_call_log_filtered 的 core 入口）。
+pub fn call_log_filtered_core(
+    filter: &crate::call_log::CallLogFilter,
+) -> Vec<crate::call_log::CallLogRecord> {
+    let (_, _, runtime_dir) = manager_paths();
+    let path = runtime_dir.join("_unified-gateway").join("call_log.jsonl");
+    crate::call_log::read_call_log_filtered(&path, filter)
+}
+
+#[tauri::command]
+pub fn call_log_filtered(
+    filter: crate::call_log::CallLogFilter,
+) -> Vec<crate::call_log::CallLogRecord> {
+    call_log_filtered_core(&filter)
+}
+
+/// 日志聚合统计（call_log_aggregate 的 core 入口）。
+pub fn call_log_aggregate_core() -> Vec<crate::call_log::CallLogAggregate> {
+    let (_, _, runtime_dir) = manager_paths();
+    let path = runtime_dir.join("_unified-gateway").join("call_log.jsonl");
+    crate::call_log::call_log_aggregate(&path)
+}
+
+#[tauri::command]
+pub fn call_log_aggregate() -> Vec<crate::call_log::CallLogAggregate> {
+    call_log_aggregate_core()
+}
+
 /// 聚合逻辑（独立函数便于单元测试）：遍历 runtime_dir 各子目录读取 stats.json。
 /// port_to_name 提供 sing-box 端口 → 实例名映射，用于把统一网关 node_stats.json
 /// 中的 SOCKS5 出口地址（127.0.0.1:281xx）解析为实例名。

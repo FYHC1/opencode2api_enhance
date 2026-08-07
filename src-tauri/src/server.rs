@@ -53,6 +53,8 @@ pub fn build_router(core: Arc<AppCore>) -> Router {
         .route("/api/config/{key}", post(config_set_handler))
         .route("/api/stats", get(stats_handler))
         .route("/api/call-log", get(call_log_handler))
+        .route("/api/call-log/filtered", post(call_log_filtered_handler))
+        .route("/api/call-log/aggregate", get(call_log_aggregate_handler))
         .route("/api/nodes", get(nodes_handler))
         .route("/api/binaries", get(binaries_handler))
         .route("/api/port/suggest", get(port_suggest_handler))
@@ -334,6 +336,14 @@ struct CallLogQuery {
 
 async fn call_log_handler(Query(query): Query<CallLogQuery>) -> Json<serde_json::Value> {
     to_json(commands::get_call_log_core(query.limit))
+}
+
+async fn call_log_filtered_handler(Json(filter): Json<crate::call_log::CallLogFilter>) -> Json<serde_json::Value> {
+    to_json(commands::call_log_filtered_core(&filter))
+}
+
+async fn call_log_aggregate_handler() -> Json<serde_json::Value> {
+    to_json(commands::call_log_aggregate_core())
 }
 
 async fn nodes_handler() -> Result<Json<serde_json::Value>, (StatusCode, String)> {
