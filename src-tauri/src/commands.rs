@@ -300,7 +300,7 @@ fn node_ip(node_name: &str) -> String {
 }
 
 /// 随机生成 sk- 开头的实例密钥（无外部随机库，用时间种子+LCG）
-fn gen_sk_key() -> String {
+pub(crate) fn gen_sk_key() -> String {
     let seed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos() as u128)
@@ -733,7 +733,7 @@ pub async fn test_instance(
 }
 // ======================== 批量操作 ========================
 
-fn sanitize_instance_name(node: &str) -> String {
+pub(crate) fn sanitize_instance_name(node: &str) -> String {
     let s: String = node
         .chars()
         .map(|c| match c {
@@ -1520,6 +1520,28 @@ pub fn scan_stop_core(core: &AppCore) -> Result<crate::probe::ScanProgress, Stri
 #[tauri::command]
 pub fn scan_stop(state: tauri::State<'_, AppState>) -> Result<crate::probe::ScanProgress, String> {
     scan_stop_core(&state.core)
+}
+
+// ======================== 订阅拉取 ========================
+
+/// 拉取订阅并返回节点预览（不落库）
+pub fn subscribe_preview_core(url: &str) -> Result<Vec<crate::subscribe::SubscribeNode>, String> {
+    crate::subscribe::fetch_subscription(url)
+}
+
+#[tauri::command]
+pub fn subscribe_preview(url: String) -> Result<Vec<crate::subscribe::SubscribeNode>, String> {
+    subscribe_preview_core(&url)
+}
+
+/// 拉取订阅并批量导入为实例（同时持久化订阅缓存）
+pub fn subscribe_import_core(core: &AppCore, url: &str) -> Result<usize, String> {
+    crate::subscribe::import_subscription(core, url)
+}
+
+#[tauri::command]
+pub fn subscribe_import(state: tauri::State<'_, AppState>, url: String) -> Result<usize, String> {
+    subscribe_import_core(&state.core, &url)
 }
 
 // ======================== 配置 ========================

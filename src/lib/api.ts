@@ -67,6 +67,22 @@ export type PortCheckResult = {
 
 export type ScanStatus = 'idle' | 'running' | 'stopping' | 'done' | 'error'
 
+export type SubscribeNode = {
+  name: string
+  server: string
+  port: number
+  node_type: string
+  password?: string | null
+  uuid?: string | null
+  cipher?: string | null
+  sni?: string | null
+  network?: string | null
+  ws_path?: string | null
+  flow?: string | null
+  tls: boolean
+  raw: string
+}
+
 export type ProbeResult = {
   node: string
   node_type: string
@@ -299,6 +315,11 @@ export const api = {
     }),
   scanStatus: () => http.get<ScanProgress>('/scan/status'),
   scanStop: () => http.post<ScanProgress>('/scan/stop'),
+
+  // 订阅拉取
+  subscribePreview: (url: string) => http.post<SubscribeNode[]>('/subscribe/preview', { url }),
+  subscribeImport: (url: string) =>
+    http.post<{ imported: number }>('/subscribe/import', { url }).then((r) => r.imported),
 
   // 配置
   configGet: () => http.get<ConfigView>('/config'),

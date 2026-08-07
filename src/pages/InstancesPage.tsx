@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import clsx from 'clsx'
-import { RefreshCw, Play, Square, Trash2, TestTube2, Copy, Loader2, Search, Server } from 'lucide-react'
-import { api, type Instance } from '../lib/api'
+import { RefreshCw, Play, Square, Trash2, TestTube2, Copy, Loader2, Search, Server, Link2, X, Plus } from 'lucide-react'
+import { api, type Instance, type SubscribeNode } from '../lib/api'
 
 function statusBadge(st: Instance['status']): [string, string] {
   if (st === 'Running') return ['bg-green-50 text-green-700', '运行中']
@@ -109,9 +109,59 @@ export default function InstancesPage({
     else setSelected(new Set(filtered.map((i) => i.name)))
   }
 
-// 忙态：optimistic —— 变化触发重渲染；key=实例名，值为该实例正在进行的操作
+  // 忙态：optimistic —— 变化触发重渲染；key=实例名，值为该实例正在进行的操作
   const [pending, setPending] = useState<Record<string, 'start' | 'stop'>>({})
   const [batchBusy, setBatchBusy] = useState(false)
+
+  // 订阅导入：Modal（输入 URL → 预览节点 → 确认导入）
+  const [subOpen, setSubOpen] = useState(false)
+  const [subUrl, setSubUrl] = useState('')
+  const [subPreview, setSubPreview] = useState<SubscribeNode[] | null>(null)
+  const [subBusy, setSubBusy] = useState(false)
+  const [subImporting, setSubImporting] = useState(false)
+  const [subError, setSubError] = useState<string | null>(null)
+
+  const doSubPreview = async () => {
+    if (!subUrl.trim()) {
+      setSubError('请输入订阅 URL')
+      return
+    }
+    setSubBusy(true)
+    setSubError(null)
+    setSubPreview(null)
+    try {
+      const nodes = await api.subscribePreview(subUrl.trim())
+      if (nodes.length === 0) setSubError('订阅中未解析到任何节点')
+      setSubPreview(nodes)
+    } catch (e) {
+      setSubError(String(e))
+    } finally {
+      setSubBusy(false)
+    }
+  }
+
+  const doSubImport = async () => {
+    setSubImporting(true)
+    setSubError(null)
+    try {
+      const n = await api.subscribeImport(subUrl.trim())
+      toast(`订阅导入成功：新增 ${n} 个实例`, true)
+      setSubOpen(false)
+      setSubPreview(null)
+      setSubUrl('')
+      await load()
+    } catch (e) {
+      setSubError(String(e))
+    } finally {
+      setSubImporting(false)
+    }
+  }
+
+  const closeSub = () => {
+    setSubOpen(false)
+    setSubPreview(null)
+    setSubError(null)
+  }
 
   // 标记/清除某实例的进行中操作
   const setOp = (name: string, op: 'start' | 'stop' | null) => {
@@ -250,6 +300,12 @@ if (kind === 'delete' && !confirm(`确定释放选中的 ${names.length} 个实�
           <span className="text-[12px] text-zinc-400">{soloInstances.length} 个</span>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => { setSubUrl(''); setSubPreview(null); setSubError(null); setSubOpen(true) }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-teal-700 bg-teal-50 border border-teal-100 hover:bg-teal-100"
+          >
+            <Link2 size={14} /> 从订阅导入
+          </button>
           <button
             onClick={() => void doRefresh()}
             disabled={refreshing}
@@ -429,6 +485,73 @@ if (kind === 'delete' && !confirm(`确定释放选中的 ${names.length} 个实�
         </div>
       )}
 
+      {subOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={closeSub}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-5 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-zinc-900">从订阅导入</h3>
+              <button onClick={closeSub} className="text-zinc-400 hover:text-zinc-600">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-zinc-700">订阅 URL</label>
+              <input
+                type="text"
+                placeholder="https://example.com/subscribe"
+                value={subUrl}
+                onChange={(e) => { setSubUrl(e.target.value); setSubPreview(null); setSubError(null) }}
+                className="w-full px-3 py-2 border rounded-lg"
+              />
+              <p className="text-zinc-500 text-xs">支持 Clash YAML / V2Ray base64 / 明文链接，导入后节点在「节点池-订阅」分组可见</p>
+            </div>
+
+            {subError && <p className="text-sm text-red-600">{subError}</p>}
+
+            {subPreview === null ? (
+              <button
+                onClick={() => void doSubPreview()}
+                disabled={subBusy}
+                className="flex items-center justify-center gap-1.5 w-full px-4 py-2 rounded-lg text-sm text-white bg-zinc-900 hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {subBusy ? <Loader2 size={14} className="animate-spin" /> : <Link2 size={14} />}
+                预览节点
+              </button>
+            ) : (
+              <div className="space-y-3">
+                <div className="max-h-56 overflow-y-auto border rounded-lg divide-y divide-zinc-100">
+                  {subPreview.map((n) => (
+                    <div key={n.name} className="flex items-center justify-between px-3 py-2 text-[13px]">
+                      <span className="font-medium text-zinc-800 truncate">{n.name}</span>
+                      <span className="text-zinc-400 text-xs shrink-0 ml-3">
+                        {n.node_type} · {n.server}:{n.port}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => void doSubImport()}
+                    disabled={subImporting}
+                    className="flex items-center justify-center gap-1.5 flex-1 px-4 py-2 rounded-lg text-sm text-white bg-green-600 hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {subImporting ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+                    确认导入 {subPreview.length} 个节点
+                  </button>
+                  <button
+                    onClick={doSubPreview}
+                    disabled={subBusy}
+                    className="px-4 py-2 rounded-lg text-sm text-zinc-700 bg-white border border-zinc-200 hover:bg-zinc-50"
+                  >
+                    重新预览
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
     </div>
   )

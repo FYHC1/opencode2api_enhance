@@ -60,6 +60,8 @@ pub fn build_router(core: Arc<AppCore>) -> Router {
         .route("/api/scan/start", post(scan_start_handler))
         .route("/api/scan/status", get(scan_status_handler))
         .route("/api/scan/stop", post(scan_stop_handler))
+        .route("/api/subscribe/preview", post(subscribe_preview_handler))
+        .route("/api/subscribe/import", post(subscribe_import_handler))
         .route("/api/autostart", get(autostart_get_handler))
         .route("/api/autostart", post(autostart_set_handler))
         .route("/api/data-clean", post(data_clean_handler))
@@ -405,6 +407,35 @@ async fn scan_stop_handler(
     State(core): State<Arc<AppCore>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     Ok(to_json(commands::scan_stop_core(&core).map_err(err)?))
+}
+
+#[derive(Deserialize)]
+struct SubscribePayload {
+    url: String,
+}
+
+async fn subscribe_preview_handler(
+    Json(payload): Json<SubscribePayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let url = payload.url;
+    let result = tokio::task::spawn_blocking(move || commands::subscribe_preview_core(&url))
+        .await
+        .map_err(|e| err(format!("订阅预览任务失败: {}", e)))?
+        .map_err(err)?;
+    Ok(to_json(result))
+}
+
+async fn subscribe_import_handler(
+    State(core): State<Arc<AppCore>>,
+    Json(payload): Json<SubscribePayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let core2 = core.clone();
+    let url = payload.url;
+    let result = tokio::task::spawn_blocking(move || commands::subscribe_import_core(&core2, &url))
+        .await
+        .map_err(|e| err(format!("订阅导入任务失败: {}", e)))?
+        .map_err(err)?;
+    Ok(to_json(json!({ "imported": result })))
 }
 
 async fn autostart_get_handler() -> Result<Json<serde_json::Value>, (StatusCode, String)> {

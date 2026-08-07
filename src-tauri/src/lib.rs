@@ -10,6 +10,7 @@ pub mod opencode_cfg;
 pub mod probe;
 pub mod server;
 pub mod singbox;
+pub mod subscribe;
 
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
@@ -77,6 +78,8 @@ pub fn run() {
             commands::scan_start,
             commands::scan_status,
             commands::scan_stop,
+            commands::subscribe_preview,
+            commands::subscribe_import,
             commands::config_get,
             commands::config_set,
             commands::autostart_get,
