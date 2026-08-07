@@ -249,10 +249,20 @@ impl Config {
     }
 }
 
+// Config::set() 内部会 save() 到全局 config_path()，而 config_dir() 读取进程级
+// OPCODE2API_DATA_DIR env 变量；并行测试互相覆盖 env/配置文件会导致偶发失败，
+// 故所有触碰 env 或配置文件的测试（config 与 opencode_cfg 模块）需持同一把串行锁执行。
+#[cfg(test)]
+pub(crate) static CONFIG_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::env;
+
+    fn lock() -> std::sync::MutexGuard<'static, ()> {
+        CONFIG_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
 
     fn temp_config_dir() -> PathBuf {
         let dir = env::temp_dir().join("opencode2api-manager-test");
@@ -283,6 +293,7 @@ mod tests {
 
     #[test]
     fn test_config_get_set() {
+        let _guard = lock();
         let mut config = Config::default();
         config.set("base_url", "http://localhost:9090").unwrap();
         assert_eq!(
@@ -296,6 +307,7 @@ mod tests {
 
     #[test]
     fn test_config_show_node_prefix_get_set() {
+        let _guard = lock();
         let mut config = Config::default();
         // 默认关闭
         assert_eq!(config.get("show_node_prefix"), Some("false".to_string()));
@@ -308,6 +320,7 @@ mod tests {
 
     #[test]
     fn test_config_unknown_key() {
+        let _guard = lock();
         let mut config = Config::default();
         let result = config.set("unknown_key", "value");
         assert!(result.is_err());
@@ -315,6 +328,7 @@ mod tests {
 
     #[test]
     fn test_config_dir_env_override() {
+        let _guard = lock();
         // 保存原环境变量
         let orig = env::var("OPCODE2API_DATA_DIR").ok();
         let test_dir = env::temp_dir().join("opencode2api-manager-env-test");
@@ -334,6 +348,7 @@ mod tests {
 
     #[test]
     fn test_config_new_fields_get_set() {
+        let _guard = lock();
         let mut config = Config::default();
         config.set("gateway_port", "18080").unwrap();
         assert_eq!(config.gateway_port, Some(18080));
@@ -364,5 +379,23 @@ mod tests {
 
         config.set("log_filter_keywords", "error,timeout").unwrap();
         assert_eq!(config.log_filter_keywords.as_deref(), Some("error,timeout"));
+    }
+
+    #[test]
+    fn test_config_gateway_key_persisted() {
+        let _guard = lock();
+        let orig = env::var("OPCODE2API_DATA_DIR").ok();
+        let test_dir = env::temp_dir().join(format!("oc2api-cfg-key-{}", std::process::id()));
+        unsafe { env::set_var("OPCODE2API_DATA_DIR", &test_dir) };
+        let mut config = Config::default();
+        config.set("gateway_key", "my-secret-key").unwrap();
+        let on_disk = fs::read_to_string(Config::config_path()).unwrap();
+        assert!(on_disk.contains("\"gateway_key\": \"my-secret-key\""));
+        unsafe { env::remove_var("OPCODE2API_DATA_DIR") };
+        match orig {
+            Some(v) => unsafe { env::set_var("OPCODE2API_DATA_DIR", v) },
+            None => {}
+        }
+        fs::remove_dir_all(&test_dir).ok();
     }
 }
