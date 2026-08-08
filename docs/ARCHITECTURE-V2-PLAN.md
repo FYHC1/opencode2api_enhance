@@ -245,9 +245,10 @@ type PoolVendor interface {
 | 1 | P0 | 分支 `feat/architecture-v2` 建立（自 feature/debug-tooling） | ✅ | 2026-08-08 | `git branch --show-current` |
 | 2 | P0 | `go test ./...` 全绿 | ✅ | 2026-08-08 | `go -C <proj> test -count=1 ./...`（全绿）+ `go vet ./...` |
 | 3 | P0 | 行为快照记录（路由表/配置/`/v1/models` 输出） | ✅ | 2026-08-08 | 见「一、现状分析摘要」 |
-| 4 | P1 | `core/` 六个包拆分完成，main.go 仅留装配入口 | ⬜ | | |
-| 5 | P1 | 拆分过程每包测试全绿，行为与基线一致 | ⬜ | | 逐包 `go test ./...` |
-| 6 | P1 | 过时文档清理 + config.example.json 补全 + 版本号口径说明 | ⬜ | | |
+| 4 | P1.1 | 文件拆分：main.go(5320行) → 21 个同包领域文件，main.go 仅留入口 | ✅ | 2026-08-08 | commit `dcb217b`；`go test -count=1 ./...` 全绿 |
+| 4b | P1.2 | 包化：拆成 `core/{contract,protocol,router,aggregator,gateway,server}` 六个独立包 | ⬜ | | 动工前先出 P1.2 子计划 |
+| 5 | P1 | 拆分过程每阶段测试全绿，行为与基线一致 | ⬜ | | 每步 `go test -count=1 ./...` |
+| 6 | P1 | 过时文档清理 + config.example.json 补全 + 版本号口径说明 | ⬜ | | 随 P1.2 收尾处理 |
 | 7 | P2 | `core/contract` 定稿（基础 + PoolVendor） | ⬜ | | |
 | 8 | P2 | `vendors/opencode/` 实现并接入，单厂商配置下行为与基线一致 | ⬜ | | |
 | 9 | P2 | 硬编码 URL 断言测试改写为对厂商 mock | ⬜ | | |
@@ -267,7 +268,7 @@ type PoolVendor interface {
 | 阶段 | 状态 |
 |---|---|
 | P0 基线 | ✅ 已完成（分支已建，测试全绿，行为快照已记录） |
-| P1 拆 core | ⬜ 未开始 |
+| P1 拆 core | 🔄 进行中（P1.1 文件拆分 ✅，P1.2 包化 ⬜） |
 | P2 收厂商 | ⬜ 未开始 |
 | P3 加厂商 | ⬜ 未开始 |
 | P4 统一 UI | ⬜ 未开始 |
