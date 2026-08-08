@@ -287,9 +287,9 @@ type PoolVendor interface {
 | 子步骤 | 状态 | 日期 | commit / 备注 |
 |---|---|---|---|
 | P4-1 管理 API 层 | ✅ | 2026-08-08 | `2cca241`：core/manager（config/calllog/stats/registry/tcp/netstat）+ `/api/admin/*`HTTP（config/stats/reset/call-log/binaries/instances），单测全绿 |
-| P4-2 实例生命周期 | ⬜ | | 进行中 |
-| P4-3 节点扫描探针 | ⬜ | | |
-| P4-4 网关/批量/restart/data_clean | ⬜ | | |
+| P4-2 实例生命周期 | ✅ | 2026-08-08 | `797e2af`：Runner 抽象（CREATE_NO_WINDOW/taskkill/SIGKILL/pidAlive）、短锁启动（sing-box→opencode→等口）、stop/remove/reconcile/refresh、端口 LCG suggest/check/force-free、Content-Length 精确读；fake runner+占口单测 |
+| P4-3 节点扫描探针 | ✅ | 2026-08-08 | `c7cb80f`：yaml.go 最小 YAML（零依赖）、clash_parse.go（本地 profiles+外部 API+junk/group 过滤）、singbox.go 逐类型配置、opencodecfg.go 实例/网关配置、probe.go 并发控制器+逐节点免费模型测试；main 装配 SeamFuncs；单测全绿 |
+| P4-4 网关/批量/restart/data_clean | 🔄 | | 进行中（gateway.go 起始） |
 | P4-5 前端改走 HTTP + Tauri 薄壳化 | ⬜ | | |
 | P4-6 联动联调 | ⬜ | | |
 
