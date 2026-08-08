@@ -279,8 +279,9 @@ type PoolVendor interface {
 | 9f | P2 | P2-C4：`/v1/models` 多厂商聚合（同名加厂商前缀；单厂商零变化）+ 单测 | ✅ | 2026-08-08 | `b045d94` |
 
 > **P2-B3 续接注记（供后续清理）**：main 侧适配层已稳定；剩余小项——convert.go/chat_protocol.go 中 Anthropic 转换重复代码（死代码，可留可清）。核心链路已全部经 `contract` 与 `vendors/`。
-| 10 | P3 | `vendors/windsurf/` Go 移植完成（注册/聊天/健康/存储/用量） | ⬜ | | 下一阶段 |
-| 11 | P3 | ★24h 冷却 / ★额度≤20% 预注册 / ★中途无感换号 三能力完成 | ⬜ | | 三能力为新建 |
+| 10 | P3 | `vendors/windsurf/` 池型厂商（池/冷却/健康/自动注册/借号换号 + PoolVendor 契约） | 🔄 | 2026-08-08 | 池层+契约+P34单测 ✅ `edde8b8`；接缝实现（Chatter Connect-RPC / TMaily / Registrar）待 P3-B |
+| 10b | P3 | P3-B：Chatter（Connect-RPC 协议移植）/ Mailbox（TMaily）/ Registrar（devin_auth 注册链）真实实现 | ⬜ | | 上游协议移植，工作量最大 |
+| 11 | P3 | ★24h 冷却 / ★额度≤20% 预注册 / ★中途无感换号 三能力完成 | 🔄 | | 冷却+预注册 ✅（池层）；"流中无感换号"待 P3-B（涉及网关续写衔接） |
 280→| 12 | P3 | `/v1/models` 双厂商聚合（前缀区分），分发与厂商级 failover 通过 | ✅ | 2026-08-08 | 聚合/前缀/分发/failover 已由 P2-C 落地（待 windsurf 真接） |
 | 13 | P3 | 池型全链路冒烟：无号自动注册→对话→额度低预注册→换号续写 | ⬜ | | |
 | 14 | P4 | P4 详细子计划制定（P4-1~P4-6） | ⬜ | | 动工前必须先行 |
@@ -295,8 +296,9 @@ type PoolVendor interface {
 | 阶段 | 状态 |
 |---|---|
 | P0 基线 | ✅ 已完成（分支已建，测试全绿，行为快照已记录） |
-| P1 拆 core | 🔄 进行中（P1.1 文件拆分 ✅；P1.2 包化部分完成——contract/aggregator/router 已独立成包，protocol/gateway/server 随 P3/P4 继续收敛） |
-| P2 收厂商 | ✅ 完成（契约/聚合/分发/failover 全绿；单厂商行为与基线一致） |
+| P1 拆 core | 🔄 进行中（P1.1 文件拆分 ✅；P1.2 已出 contract/aggregator/router 三包，protocol/gateway/server 随后续收敛） |
+| P2 收厂商（opencode 收拢） | ✅ 完成（契约/聚合/分发/failover 全绿；单厂商行为与基线一致） |
+| P3 池型厂商（windsurf） | 🔄 池层 ✅（P3-A）；上游协议移植（Chatter/TMaily/Registrar）为 P3-B |
 | P3 加厂商 | ⬜ 未开始 |
 | P4 统一 UI | ⬜ 未开始 |
 | P5 多平台 | ⬜ 未开始 |
