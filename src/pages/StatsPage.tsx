@@ -283,7 +283,7 @@ export default function StatsPage({
           >
             <div className="text-[15px] font-semibold text-zinc-900 mb-2">重置 Token 统计</div>
             <p className="text-[13px] text-zinc-600 leading-relaxed">
-              此操作将清空所有实例与统一网关的 Token 用量数据，<b className="text-red-600">且不可恢复</b>。
+              此操作将清空所有实例与统一网关的 Token 用量数据。
             </p>
             <label className="flex items-center gap-2 mt-4 cursor-pointer select-none">
               <input
@@ -292,7 +292,7 @@ export default function StatsPage({
                 onChange={(e) => setClearDeleted(e.target.checked)}
                 className="accent-teal-600"
               />
-              <span className="text-[13px] text-zinc-700">清除已删除节点（历史统计）</span>
+              <span className="text-[13px] text-zinc-700">清除已删除节点（若存在）</span>
             </label>
             <div className="flex gap-3 mt-5 justify-end">
               <button
