@@ -33,6 +33,7 @@ func DefaultDataDir() string {
 // Paths 是管理器常用的路径集合。
 type Paths struct {
 	DataDir    string
+	Config     string // dataDir/config.json
 	Instances  string // dataDir/instances.json
 	RuntimeDir string // dataDir/runtime
 	BinDir     string // <exe>/bin
@@ -49,6 +50,7 @@ func ResolvePaths(dataDir string) Paths {
 	}
 	return Paths{
 		DataDir:    dataDir,
+		Config:     filepath.Join(dataDir, "config.json"),
 		Instances:  filepath.Join(dataDir, "instances.json"),
 		RuntimeDir: filepath.Join(dataDir, "runtime"),
 		BinDir:     filepath.Join(filepath.Dir(exeDir), "bin"),
