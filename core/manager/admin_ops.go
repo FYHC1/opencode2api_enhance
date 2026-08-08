@@ -273,7 +273,7 @@ func (m *Manager) BatchAddHandler() http.HandlerFunc {
 			writeErr(w, http.StatusBadRequest, "bad body")
 			return
 		}
-		basePort := uint16(defaultBasePort)
+		basePort := instanceBasePort()
 		if req.BasePort != nil {
 			basePort = *req.BasePort
 		}
@@ -476,6 +476,9 @@ func (m *Manager) httpBatchAdd(items []BatchAddHTTPItem, basePort uint16, useNod
 			finalName = name + "-" + itoa(suffix)
 		}
 		name = finalName
+		if basePort == 0 {
+			basePort = instanceBasePort()
+		}
 		port := basePort
 		if item.Port != nil {
 			port = *item.Port

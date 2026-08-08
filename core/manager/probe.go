@@ -4,6 +4,7 @@ package manager
 
 import (
 	"fmt"
+	"os"
 	"sync"
 	"time"
 )
@@ -18,6 +19,27 @@ const (
 	ScanDone     ScanStatus = "done"
 	ScanError    ScanStatus = "error"
 )
+
+// probeAPIPort 探针 API 端口：优先环境变量 OPCODE2API_PROBE_API_PORT
+// （便携测试/多开隔离用），否则默认 19000（正式版语义，与 Rust 一致）。
+func probeAPIPort() uint16 {
+	if s := os.Getenv("OPCODE2API_PROBE_API_PORT"); s != "" {
+		if n := parsePositiveInt(s); n > 0 && n < 65536 {
+			return uint16(n)
+		}
+	}
+	return 19000
+}
+
+// probeSocksPort 探针 SOCKS 端口：优先环境变量 OPCODE2API_PROBE_SOCKS_PORT，否则 29000。
+func probeSocksPort() uint16 {
+	if s := os.Getenv("OPCODE2API_PROBE_SOCKS_PORT"); s != "" {
+		if n := parsePositiveInt(s); n > 0 && n < 65536 {
+			return uint16(n)
+		}
+	}
+	return 29000
+}
 
 // ProbeResult 单节点探测结果（前端契约）。
 type ProbeResult struct {
@@ -96,10 +118,10 @@ func (c *ScanController) RequestStop() ScanProgress {
 // Start 启动扫描（已运行则报错）。
 func (c *ScanController) Start(opts ScanOptions) (ScanProgress, error) {
 	if opts.APIPort == 0 {
-		opts.APIPort = 19000
+		opts.APIPort = probeAPIPort()
 	}
 	if opts.SocksPort == 0 {
-		opts.SocksPort = 29000
+		opts.SocksPort = probeSocksPort()
 	}
 	if opts.TimeoutSec < 3 {
 		opts.TimeoutSec = 3

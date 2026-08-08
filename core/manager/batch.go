@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"sync"
 )
 
@@ -14,6 +15,17 @@ const (
 	batchStopWorkers  = 8
 	defaultBasePort   = 18100
 )
+
+// instanceBasePort 实例 API 端口起始：优先环境变量 OPCODE2API_INSTANCE_BASE_PORT
+// （便携测试/多开隔离用），否则默认 18100（正式版语义，与 Rust 一致）。
+func instanceBasePort() uint16 {
+	if s := os.Getenv("OPCODE2API_INSTANCE_BASE_PORT"); s != "" {
+		if n := parsePositiveInt(s); n > 0 && n < 65536 {
+			return uint16(n)
+		}
+	}
+	return defaultBasePort
+}
 
 // BatchAddResult 批量添加结果。
 type BatchAddResult struct {
@@ -34,7 +46,7 @@ func genSkKey() string {
 //   - 名称：useNodeName 用节点名，否则「实例N」（N 从 1 起递增到不冲突）。
 func (m *Manager) BatchAdd(nodes []ClashNode, basePort uint16, useNodeName bool, namePrefix string) BatchAddResult {
 	if basePort == 0 {
-		basePort = defaultBasePort
+		basePort = instanceBasePort()
 	}
 	result := BatchAddResult{Added: []string{}, Skipped: []string{}}
 	existing := m.ListInstances()

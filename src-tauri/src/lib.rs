@@ -37,6 +37,22 @@ const CORE_GATEWAY_PORT: &str = "21080";
 #[cfg(not(debug_assertions))]
 const CORE_GATEWAY_PORT: &str = "18080";
 
+// 实例/探针端口随构建环境（与 Rust 正式版语义一致）；便携测试包在 run() 里以 50000+ 段覆盖。
+#[cfg(debug_assertions)]
+const CORE_INSTANCE_BASE_PORT: &str = "30000";
+#[cfg(not(debug_assertions))]
+const CORE_INSTANCE_BASE_PORT: &str = "18100";
+
+#[cfg(debug_assertions)]
+const CORE_PROBE_API_PORT: &str = "39090";
+#[cfg(not(debug_assertions))]
+const CORE_PROBE_API_PORT: &str = "19090";
+
+#[cfg(debug_assertions)]
+const CORE_PROBE_SOCKS_PORT: &str = "49090";
+#[cfg(not(debug_assertions))]
+const CORE_PROBE_SOCKS_PORT: &str = "29090";
+
 /// core 管理器实际端口：优先环境变量 OPCODE2API_MANAGER_PORT（便携测试包覆盖），否则按构建环境。
 fn manager_port() -> u16 {
     if let Ok(s) = std::env::var("OPCODE2API_MANAGER_PORT") {
@@ -114,9 +130,21 @@ pub fn run() {
     if is_portable {
         let base = dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
         data_dir = base.join("opencode2api-manager-test");
+        // 便携版端口段全隔离（50000+），与正式版（18000-29000 段）零重叠：
+        //   - 管理器   50000+ 动态
+        //   - 网关     50100+ 动态
+        //   - 实例 API 51000+ 动态（sing-box 自动 = +10000 → 61000+，FAQ 规则）
+        //   - 探针 API 52000+ 动态
+        //   - 探针 SOCKS 52100+ 动态
         let gw = pick_free_port(50100, 64).to_string();
+        let inst_base = pick_free_port(51000, 256).to_string();
+        let probe_api = pick_free_port(52000, 64).to_string();
+        let probe_socks = pick_free_port(52100, 64).to_string();
         unsafe {
             std::env::set_var("OPCODE2API_GATEWAY_PORT", &gw);
+            std::env::set_var("OPCODE2API_INSTANCE_BASE_PORT", &inst_base);
+            std::env::set_var("OPCODE2API_PROBE_API_PORT", &probe_api);
+            std::env::set_var("OPCODE2API_PROBE_SOCKS_PORT", &probe_socks);
         }
     }
     let mut manager = instance::InstanceManager::new(
@@ -284,10 +312,25 @@ fn spawn_core_manager(data_dir: &std::path::Path, port: u16) -> std::io::Result<
         ));
     }
     let cfg_path = data_dir.join("config.json");
-    // 网关端口随构建环境（debug 21080 / release 18080）；便携测试包已在 run() 里覆盖。
+    // 网关/实例/探针端口随构建环境；便携测试包已在 run() 里覆盖。
     if std::env::var_os("OPCODE2API_GATEWAY_PORT").is_none() {
         unsafe {
             std::env::set_var("OPCODE2API_GATEWAY_PORT", CORE_GATEWAY_PORT);
+        }
+    }
+    if std::env::var_os("OPCODE2API_INSTANCE_BASE_PORT").is_none() {
+        unsafe {
+            std::env::set_var("OPCODE2API_INSTANCE_BASE_PORT", CORE_INSTANCE_BASE_PORT);
+        }
+    }
+    if std::env::var_os("OPCODE2API_PROBE_API_PORT").is_none() {
+        unsafe {
+            std::env::set_var("OPCODE2API_PROBE_API_PORT", CORE_PROBE_API_PORT);
+        }
+    }
+    if std::env::var_os("OPCODE2API_PROBE_SOCKS_PORT").is_none() {
+        unsafe {
+            std::env::set_var("OPCODE2API_PROBE_SOCKS_PORT", CORE_PROBE_SOCKS_PORT);
         }
     }
     let port_str = port.to_string();

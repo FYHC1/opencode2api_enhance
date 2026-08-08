@@ -3,6 +3,7 @@ package manager
 
 import (
 	"errors"
+	"os"
 	"time"
 )
 
@@ -46,8 +47,14 @@ func (m *Manager) PortSuggest() (uint16, error) {
 	return 0, errors.New("无法找到可用端口（200 次尝试后）")
 }
 
-// basePortForSuggest release 模式基址 10000（debug 30001 由壳层配置）。
+// basePortForSuggest 端口建议基址：优先环境变量 OPCODE2API_INSTANCE_BASE_PORT
+// （与批量添加同段，便携测试隔离），否则默认 10000（Rust 正式版语义）。
 func (m *Manager) basePortForSuggest() (uint16, error) {
+	if s := os.Getenv("OPCODE2API_INSTANCE_BASE_PORT"); s != "" {
+		if n := parsePositiveInt(s); n > 0 && n < 65536 {
+			return uint16(n), nil
+		}
+	}
 	return 10000, nil
 }
 
