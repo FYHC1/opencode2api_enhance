@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::instance::{no_window, Instance, InstanceStatus};
+use crate::instance::{Instance, InstanceStatus, no_window};
 use crate::opencode_cfg;
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -18,7 +18,6 @@ use std::time::Duration;
 pub const UNIFIED_GATEWAY_PORT: u16 = 21080;
 #[cfg(not(debug_assertions))]
 pub const UNIFIED_GATEWAY_PORT: u16 = 18080;
-
 #[derive(Debug, Clone, Serialize)]
 pub struct GatewayStatus {
     pub running: bool,

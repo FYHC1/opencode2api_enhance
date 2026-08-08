@@ -329,6 +329,15 @@ const http = {
     }),
 }
 
+export type ResetStatsResult = {
+  /** 成功重置的项数（含实例与统一网关） */
+  reset_count: number
+  /** 清除的「已删除实例」历史统计目录数 */
+  deleted_count: number
+  /** 失败明细 */
+  failed: string[]
+}
+
 // ─── Tauri command 封装（经本地 HTTP API，桌面/headless 同源） ─────────────
 
 export const api = {
@@ -368,12 +377,15 @@ export const api = {
     apiPort?: number
     socksPort?: number
     timeout?: number
+    /** 并发 worker 数（可选，默认后端 8） */
+    concurrency?: number
   }) =>
     http.post<ScanProgress>('/scan/start', {
       nodes: opts?.nodes ?? null,
       apiPort: opts?.apiPort ?? null,
       socksPort: opts?.socksPort ?? null,
       timeout: opts?.timeout ?? null,
+      concurrency: opts?.concurrency ?? null,
     }),
   scanStatus: () => http.get<ScanProgress>('/scan/status'),
   scanStop: () => http.post<ScanProgress>('/scan/stop'),
@@ -398,6 +410,9 @@ export const api = {
 
   // Token 统计（按实例）
   getStats: () => http.get<StatsSummary>('/stats'),
+  /** 重置全部 Token 统计（clearDeleted=同时清除已删除节点历史统计） */
+  resetStats: (clearDeleted?: boolean) =>
+    http.post<ResetStatsResult>('/stats/reset', { clear_deleted: clearDeleted ?? null }),
 
   // 健康巡检
   healthCheck: () => http.post<HealthSummary>('/health/check'),
@@ -409,6 +424,8 @@ export const api = {
   callLogFiltered: (filter: CallLogFilter) =>
     http.post<CallLogRecord[]>('/call-log/filtered', filter),
   callLogAggregate: () => http.get<CallLogAggregate[]>('/call-log/aggregate'),
+  /** 清空全部调用日志 */
+  clearCallLog: () => http.post<void>('/call-log/clear'),
 
   // 报表导出
   exportCallLogCsv: async (limit?: number) => {

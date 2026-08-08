@@ -22,7 +22,6 @@ pub struct AppState {
     pub core: Arc<core::AppCore>,
 }
 
-
 /// 桌面入口：构建 AppCore（含内嵌二进制释放）→ 启动 Tauri（托盘常驻）
 pub fn run() {
     // 调试构建默认隔离数据目录：与正式版（%APPDATA%\opencode2api-manager）
@@ -37,10 +36,7 @@ pub fn run() {
             let base = dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
             // 单线程启动阶段设置环境变量，安全
             unsafe {
-                std::env::set_var(
-                    "OPCODE2API_DATA_DIR",
-                    base.join("opencode2api-manager-dev"),
-                );
+                std::env::set_var("OPCODE2API_DATA_DIR", base.join("opencode2api-manager-dev"));
             }
         }
     }
@@ -57,9 +53,7 @@ pub fn run() {
     let core_for_setup = core.clone();
 
     tauri::Builder::default()
-        .manage(AppState {
-            core: core.clone(),
-        })
+        .manage(AppState { core: core.clone() })
         .invoke_handler(tauri::generate_handler![
             commands::list_nodes,
             commands::delete_node,
@@ -91,7 +85,6 @@ pub fn run() {
             commands::autostart_get,
             commands::autostart_set,
             commands::get_binaries_info,
-
             commands::get_stats,
             commands::get_call_log,
             commands::call_log_filtered,
@@ -99,6 +92,8 @@ pub fn run() {
             commands::export_call_log_csv,
             commands::export_instances_json,
             commands::export_stats_json,
+            commands::clear_call_log,
+            commands::reset_stats,
             commands::hide_to_tray,
             commands::toggle_maximize,
             commands::quit_app,
@@ -109,7 +104,7 @@ pub fn run() {
             commands::data_clean,
             commands::set_join_gateway
         ])
-.setup(move |app| {
+        .setup(move |app| {
             use tauri::Manager;
 
             // 启动本地管理 HTTP 服务（桌面与 headless 共用同一 API；端口可被
@@ -137,11 +132,10 @@ pub fn run() {
             // 托盘菜单：右键显示「显示主窗口 / 退出」
             let show_i =
                 tauri::menu::MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
-            let quit_i =
-                tauri::menu::MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+            let quit_i = tauri::menu::MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
             let menu = tauri::menu::Menu::with_items(app, &[&show_i, &quit_i])?;
 
-// 图标：取 built-in 窗口图标（由 tauri.conf bundle.icon 提供，打包后必有）
+            // 图标：取 built-in 窗口图标（由 tauri.conf bundle.icon 提供，打包后必有）
             let tray_icon = app.default_window_icon().cloned();
 
             let mut tray = tauri::tray::TrayIconBuilder::with_id("main-tray")
@@ -175,7 +169,7 @@ pub fn run() {
             .on_tray_icon_event(|tray, event| {
                 // 左键单击显示窗口；右键由系统自动弹菜单（无需手动处理）
                 if let tauri::tray::TrayIconEvent::Click {
-button: tauri::tray::MouseButton::Left,
+                    button: tauri::tray::MouseButton::Left,
                     ..
                 } = event
                 {
@@ -205,7 +199,7 @@ button: tauri::tray::MouseButton::Left,
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 if let Some(state) = app.try_state::<AppState>() {
                     // 先停网关（释放网关端口），再停实例（释放实例端口）
-                     if let Ok(mut gateway) = state.core.gateway.lock() {
+                    if let Ok(mut gateway) = state.core.gateway.lock() {
                         gateway.stop();
                     }
                     commands::stop_all_instances(&state);

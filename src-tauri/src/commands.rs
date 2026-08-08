@@ -1,21 +1,20 @@
 //! Tauri command 层：替代原 enhance 的 axum Web API。
 //! 所有前端交互经由 #[tauri::command] invoke 进入本模块。
 
+use crate::AppState;
 use crate::clash_yaml;
 use crate::config::Config;
+use crate::core::AppCore;
 #[cfg(windows)]
 use crate::instance::no_window;
 use crate::instance::{Instance, InstanceManager};
 use crate::probe::{DEFAULT_PROBE_API_PORT, DEFAULT_PROBE_SOCKS_PORT};
-use crate::AppState;
-use crate::core::AppCore;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
-
 
 // ======================== 路径与共享状态 ========================
 
@@ -67,9 +66,7 @@ pub fn sync_gateway(state: &tauri::State<'_, AppState>) {
     sync_gateway_core(&state.core);
 }
 
-pub fn gateway_status_core(
-    core: &AppCore,
-) -> Result<crate::gateway::GatewayStatus, String> {
+pub fn gateway_status_core(core: &AppCore) -> Result<crate::gateway::GatewayStatus, String> {
     let total_instances = core
         .manager
         .lock()
@@ -78,10 +75,7 @@ pub fn gateway_status_core(
         .iter()
         .filter(|i| i.join_gateway)
         .count();
-    let mut gateway = core
-        .gateway
-        .lock()
-        .map_err(|_| "网关锁失败".to_string())?;
+    let mut gateway = core.gateway.lock().map_err(|_| "网关锁失败".to_string())?;
     Ok(gateway.status(total_instances))
 }
 
@@ -94,10 +88,7 @@ pub fn gateway_status(
 
 /// 切换网关路由模式（smart / failover / round_robin）：写入网关配置并重启网关进程。
 /// smart（默认）= failover 游标 + 健康计数/坏池/超时切换完整容错。
-pub fn gateway_set_route_mode_core(
-    core: &AppCore,
-    mode: &str,
-) -> Result<(), String> {
+pub fn gateway_set_route_mode_core(core: &AppCore, mode: &str) -> Result<(), String> {
     if mode != "smart" && mode != "failover" && mode != "round_robin" {
         return Err("路由模式仅支持 smart / failover / round_robin".to_string());
     }
@@ -107,10 +98,7 @@ pub fn gateway_set_route_mode_core(
         .map_err(|_| "状态锁失败".to_string())?
         .list_instances()
         .to_vec();
-    let mut gateway = core
-        .gateway
-        .lock()
-        .map_err(|_| "网关锁失败".to_string())?;
+    let mut gateway = core.gateway.lock().map_err(|_| "网关锁失败".to_string())?;
     gateway.set_route_mode(mode);
     gateway.stop();
     gateway
@@ -128,10 +116,7 @@ pub fn gateway_set_route_mode(
 
 /// 关闭统一网关：停止网关进程、清空池（实例的 join_gateway 标记保留，重启后可恢复）。
 pub fn gateway_stop_core(core: &AppCore) -> Result<(), String> {
-    let mut gateway = core
-        .gateway
-        .lock()
-        .map_err(|_| "网关锁失败".to_string())?;
+    let mut gateway = core.gateway.lock().map_err(|_| "网关锁失败".to_string())?;
     gateway.stop();
     Ok(())
 }
@@ -142,14 +127,11 @@ pub fn gateway_stop(state: tauri::State<'_, AppState>) -> Result<(), String> {
 }
 
 /// 切换实例是否加入统一网关池（join_gateway），并同步网关。
-pub fn set_join_gateway_core(
-    core: &AppCore,
-    name: &str,
-    join: bool,
-) -> Result<(), String> {
+pub fn set_join_gateway_core(core: &AppCore, name: &str, join: bool) -> Result<(), String> {
     let mut mgr = core.manager.lock().map_err(|_| "状态锁失败".to_string())?;
     let _ = mgr.load();
-    mgr.set_join_gateway(name, join).map_err(|e| e.to_string())?;
+    mgr.set_join_gateway(name, join)
+        .map_err(|e| e.to_string())?;
     mgr.save_state().map_err(|e| e.to_string())?;
     let instances = mgr.list_instances().to_vec();
     drop(mgr);
@@ -171,7 +153,6 @@ pub fn set_join_gateway(
 }
 
 // ======================== 响应结构 ========================
-
 
 #[derive(Debug, Serialize)]
 pub struct NodeView {
@@ -298,7 +279,6 @@ pub fn delete_nodes(names: Vec<String>) -> Result<usize, String> {
     delete_nodes_core(names)
 }
 
-
 /// 查询节点在 Clash 配置中的地址（server:port），供实例 IP 列展示
 fn node_ip(node_name: &str) -> String {
     clash_yaml::list_nodes_with_group()
@@ -322,7 +302,9 @@ pub(crate) fn gen_sk_key() -> String {
     let mut out = String::from("sk-");
     const CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
     for _ in 0..16 {
-        s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        s = s
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         out.push(CHARS[((s >> 40) % 36) as usize] as char);
     }
     out
@@ -337,7 +319,9 @@ pub fn stop_all_instances(state: &tauri::State<'_, AppState>) {
 }
 
 pub fn stop_all_instances_core(core: &AppCore) {
-    let Ok(mut mgr) = core.manager.lock() else { return };
+    let Ok(mut mgr) = core.manager.lock() else {
+        return;
+    };
     let _ = mgr.load();
     let names: Vec<String> = mgr
         .list_instances()
@@ -402,16 +386,14 @@ fn clean_data_at(config_dir: &std::path::Path, level: u8) -> Result<(), String> 
 
     // 1) 删除 runtime 目录（运行数据）
     if runtime_dir.exists() {
-        std::fs::remove_dir_all(&runtime_dir)
-            .map_err(|e| format!("删除运行数据失败: {}", e))?;
+        std::fs::remove_dir_all(&runtime_dir).map_err(|e| format!("删除运行数据失败: {}", e))?;
     }
 
     let instances_path = config_dir.join("instances.json");
 
     // 2) 清空实例记录（回到空实例池）
     if level >= 2 && instances_path.exists() {
-        std::fs::write(&instances_path, "[]")
-            .map_err(|e| format!("清空实例记录失败: {}", e))?;
+        std::fs::write(&instances_path, "[]").map_err(|e| format!("清空实例记录失败: {}", e))?;
     }
 
     // 3) 删除配置（回到出厂默认），并备份一份便于误操作恢复
@@ -420,8 +402,7 @@ fn clean_data_at(config_dir: &std::path::Path, level: u8) -> Result<(), String> 
         if config_path.exists() {
             let backup = config_dir.join("config.json.bak");
             let _ = std::fs::copy(&config_path, &backup);
-            std::fs::remove_file(&config_path)
-                .map_err(|e| format!("删除配置失败: {}", e))?;
+            std::fs::remove_file(&config_path).map_err(|e| format!("删除配置失败: {}", e))?;
         }
     }
 
@@ -436,11 +417,8 @@ mod clean_tests {
     fn temp_dir() -> std::path::PathBuf {
         static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "oc2api-clean-test-{}-{}",
-            std::process::id(),
-            n
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("oc2api-clean-test-{}-{}", std::process::id(), n));
         fs::create_dir_all(&dir).ok();
         dir
     }
@@ -519,10 +497,7 @@ pub fn list_instances(state: tauri::State<'_, AppState>) -> Result<Vec<Instance>
 
 /// 手动刷新：只校正指定名称的实例状态，返回这些实例的最新状态。
 /// 前端分批（每批少量并发）调用，按返回数量累计显示进度。
-pub fn refresh_states_core(
-    core: &AppCore,
-    names: Vec<String>,
-) -> Result<Vec<Instance>, String> {
+pub fn refresh_states_core(core: &AppCore, names: Vec<String>) -> Result<Vec<Instance>, String> {
     let mut mgr = core.manager.lock().map_err(|_| "状态锁失败".to_string())?;
     let _ = mgr.load();
     mgr.reconcile_batch(&names).map_err(|e| e.to_string())
@@ -639,8 +614,7 @@ pub fn start_instance_core(core: &AppCore, name: &str) -> Result<(), String> {
             (instance, mgr.binary_dir.clone(), mgr.runtime_dir.clone())
         };
         // 放锁：执行实际启动（临时 manager，不持共享锁）
-        let outcome =
-            crate::instance::start_instance_process(instance, &binary_dir, &runtime_dir);
+        let outcome = crate::instance::start_instance_process(instance, &binary_dir, &runtime_dir);
         // 短锁：回写结果
         let mut mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
         let apply_result = mgr.apply_start_result(&name, outcome);
@@ -677,9 +651,7 @@ pub fn stop_instance_core(core: &AppCore, name: &str) -> Result<(), String> {
         let (pid, singbox_pid) = {
             let mut mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
             let _ = mgr.load();
-            let pids = mgr
-                .prepare_stop(&name)
-                .map_err(|error| error.to_string())?;
+            let pids = mgr.prepare_stop(&name).map_err(|error| error.to_string())?;
             mgr.save_state().map_err(|error| error.to_string())?;
             pids
         };
@@ -711,27 +683,30 @@ pub async fn stop_instance(state: tauri::State<'_, AppState>, name: String) -> R
         .map_err(|e| format!("停止实例任务失败: {}", e))?
 }
 
-pub fn test_instance_core(core: &AppCore, name: &str) -> Result<crate::instance::TestResult, String> {
+pub fn test_instance_core(
+    core: &AppCore,
+    name: &str,
+) -> Result<crate::instance::TestResult, String> {
     let manager = Arc::clone(&core.manager);
     (|| {
-let mut mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
+        let mut mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
         let _ = mgr.load();
         let name_owned = name.to_string();
-        let port = mgr
-            .prepare_test(&name_owned)
-            .map_err(|e| e.to_string())?;
+        let port = mgr.prepare_test(&name_owned).map_err(|e| e.to_string())?;
         // 启用 401 门禁后，自检需带实例密钥；实例未设密码时回退全局默认密码
-        let auth = mgr
-            .find_instance(&name_owned)
-            .map(|i| {
-                if i.password.is_empty() {
-                    crate::config::Config::effective_default_password()
-                } else {
-                    i.password.clone()
-                }
-            });
+        let auth = mgr.find_instance(&name_owned).map(|i| {
+            if i.password.is_empty() {
+                crate::config::Config::effective_default_password()
+            } else {
+                i.password.clone()
+            }
+        });
         drop(mgr); // 探测在锁外进行，避免长阻塞
-        Ok(crate::instance::probe_free_completion(&name_owned, port, auth.as_deref()))
+        Ok(crate::instance::probe_free_completion(
+            &name_owned,
+            port,
+            auth.as_deref(),
+        ))
     })()
 }
 
@@ -782,7 +757,24 @@ pub fn batch_add_core(
 
     let mut mgr = core.manager.lock().map_err(|_| "状态锁失败".to_string())?;
     let _ = mgr.load();
+    Ok(batch_add_inner(
+        &mut mgr,
+        &nodes,
+        base_port,
+        use_node_name,
+        &prefix,
+    ))
+}
 
+/// batch_add 核心逻辑（独立纯函数便于单元测试）：
+/// 按节点去重——同一节点只允许例化一次（已在实例列表中的节点跳过）。
+fn batch_add_inner(
+    mgr: &mut InstanceManager,
+    nodes: &[BatchAddItem],
+    base_port: u16,
+    use_node_name: bool,
+    prefix: &str,
+) -> BatchAddResult {
     let mut added = Vec::new();
     let mut errors = Vec::new();
 
@@ -850,12 +842,12 @@ pub fn batch_add_core(
 
     let added_count = added.len();
     let error_count = errors.len();
-    Ok(BatchAddResult {
+    BatchAddResult {
         added,
         errors,
         added_count,
         error_count,
-    })
+    }
 }
 
 #[tauri::command]
@@ -970,11 +962,7 @@ fn run_parallel_stop_jobs(jobs: Vec<(String, Option<u32>, Option<u32>)>) -> Vec<
         .unwrap_or_default()
 }
 
-
-pub fn batch_start_core(
-    core: &AppCore,
-    names: Vec<String>,
-) -> Result<BatchOpResult, String> {
+pub fn batch_start_core(core: &AppCore, names: Vec<String>) -> Result<BatchOpResult, String> {
     let manager = Arc::clone(&core.manager);
     let gateway = Arc::clone(&core.gateway);
     (|| {
@@ -988,9 +976,7 @@ pub fn batch_start_core(
 
         // 短锁：标记全部实例为 Starting
         let (jobs, mut errors, binary_dir, runtime_dir) = {
-            let mut mgr = manager
-                .lock()
-                .map_err(|_| "状态锁失败".to_string())?;
+            let mut mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
             let _ = mgr.load();
             let mut jobs = Vec::new();
             let mut errs = serde_json::Map::new();
@@ -1012,9 +998,7 @@ pub fn batch_start_core(
         // 短锁：回写结果
         let mut success = Vec::new();
         {
-            let mut mgr = manager
-                .lock()
-                .map_err(|_| "状态锁失败".to_string())?;
+            let mut mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
             for (name, outcome) in outcomes {
                 match outcome {
                     Ok(instance) => match mgr.apply_start_result(&name, Ok(instance)) {
@@ -1068,10 +1052,7 @@ pub async fn batch_start(
         .map_err(|e| format!("批量启动任务失败: {}", e))?
 }
 
-pub fn batch_stop_core(
-    core: &AppCore,
-    names: Vec<String>,
-) -> Result<BatchOpResult, String> {
+pub fn batch_stop_core(core: &AppCore, names: Vec<String>) -> Result<BatchOpResult, String> {
     let manager = Arc::clone(&core.manager);
     let gateway = Arc::clone(&core.gateway);
     (|| {
@@ -1085,9 +1066,7 @@ pub fn batch_stop_core(
 
         // 短锁：标记全部实例为 Stopping，取出 PID
         let (jobs, mut errors) = {
-            let mut mgr = manager
-                .lock()
-                .map_err(|_| "状态锁失败".to_string())?;
+            let mut mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
             let _ = mgr.load();
             let mut jobs = Vec::new();
             let mut errs = serde_json::Map::new();
@@ -1109,9 +1088,7 @@ pub fn batch_stop_core(
         // 短锁：回写停止状态
         let mut success = Vec::new();
         {
-            let mut mgr = manager
-                .lock()
-                .map_err(|_| "状态锁失败".to_string())?;
+            let mut mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
             for name in completed {
                 match mgr.finish_stop(&name) {
                     Ok(()) => success.push(name),
@@ -1358,10 +1335,7 @@ pub async fn restart_pool(state: tauri::State<'_, AppState>) -> Result<RestartPo
         .map_err(|e| format!("重启实例池任务失败: {}", e))?
 }
 
-pub fn batch_delete_core(
-    core: &AppCore,
-    names: Vec<String>,
-) -> Result<BatchOpResult, String> {
+pub fn batch_delete_core(core: &AppCore, names: Vec<String>) -> Result<BatchOpResult, String> {
     let manager = Arc::clone(&core.manager);
     let gateway = Arc::clone(&core.gateway);
     (|| {
@@ -1447,10 +1421,7 @@ pub async fn port_suggest(state: tauri::State<'_, AppState>) -> Result<u16, Stri
         .map_err(|e| format!("端口建议任务失败: {}", e))?
 }
 
-pub fn port_check_core(
-    core: &AppCore,
-    port: u16,
-) -> Result<PortCheckResult, String> {
+pub fn port_check_core(core: &AppCore, port: u16) -> Result<PortCheckResult, String> {
     if port < 1024 {
         return Err("端口需 >= 1024".to_string());
     }
@@ -1495,6 +1466,7 @@ pub struct ScanStartOpts {
     pub api_port: Option<u16>,
     pub socks_port: Option<u16>,
     pub timeout: Option<u64>,
+    pub concurrency: Option<usize>,
 }
 
 pub fn scan_start_core(
@@ -1507,6 +1479,7 @@ pub fn scan_start_core(
     let socks_port = opts.socks_port.unwrap_or(DEFAULT_PROBE_SOCKS_PORT);
     let timeout = opts.timeout.unwrap_or(25);
     let filter = opts.nodes.filter(|v| !v.is_empty());
+    let concurrency = opts.concurrency;
 
     match core.scan.start_scan(
         binary_dir,
@@ -1516,6 +1489,7 @@ pub fn scan_start_core(
         socks_port,
         filter,
         timeout,
+        concurrency,
     ) {
         Ok(()) => Ok(core.scan.progress_snapshot()),
         Err(e) => Err(e.to_string()),
@@ -1529,8 +1503,18 @@ pub fn scan_start(
     api_port: Option<u16>,
     socks_port: Option<u16>,
     timeout: Option<u64>,
+    concurrency: Option<usize>,
 ) -> Result<crate::probe::ScanProgress, String> {
-    scan_start_core(&state.core, ScanStartOpts { nodes, api_port, socks_port, timeout })
+    scan_start_core(
+        &state.core,
+        ScanStartOpts {
+            nodes,
+            api_port,
+            socks_port,
+            timeout,
+            concurrency,
+        },
+    )
 }
 
 pub fn scan_status_core(core: &AppCore) -> Result<crate::probe::ScanProgress, String> {
@@ -1538,7 +1522,9 @@ pub fn scan_status_core(core: &AppCore) -> Result<crate::probe::ScanProgress, St
 }
 
 #[tauri::command]
-pub fn scan_status(state: tauri::State<'_, AppState>) -> Result<crate::probe::ScanProgress, String> {
+pub fn scan_status(
+    state: tauri::State<'_, AppState>,
+) -> Result<crate::probe::ScanProgress, String> {
     scan_status_core(&state.core)
 }
 
@@ -1658,11 +1644,7 @@ pub fn config_get() -> Result<ConfigView, String> {
     config_get_core()
 }
 
-pub fn config_set_core(
-    core: &AppCore,
-    key: &str,
-    value: &str,
-) -> Result<(), String> {
+pub fn config_set_core(core: &AppCore, key: &str, value: &str) -> Result<(), String> {
     let mut cfg = Config::load().unwrap_or_default();
     cfg.set(key, value).map_err(|e| e.to_string())?;
 
@@ -1731,7 +1713,7 @@ const RUN_NAME: &str = "opencode2api-manager";
 
 #[cfg(windows)]
 fn autostart_status() -> anyhow::Result<bool> {
-let out = no_window(&mut std::process::Command::new("reg"))
+    let out = no_window(&mut std::process::Command::new("reg"))
         .args(["query", RUN_KEY, "/v", RUN_NAME])
         .output()?;
     Ok(out.status.success())
@@ -1749,12 +1731,14 @@ fn set_autostart(enabled: bool) -> anyhow::Result<()> {
     if enabled {
         let exe = std::env::current_exe().unwrap_or_default();
         let val = format!("\"{}\"", exe.display());
-no_window(&mut std::process::Command::new("reg"))
-            .args(["add", RUN_KEY, "/v", RUN_NAME, "/t", "REG_SZ", "/d", &val, "/f"])
+        no_window(&mut std::process::Command::new("reg"))
+            .args([
+                "add", RUN_KEY, "/v", RUN_NAME, "/t", "REG_SZ", "/d", &val, "/f",
+            ])
             .output()?;
     } else {
         // 幂等：值不存在时删除失败也可接受
-let _ = no_window(&mut std::process::Command::new("reg"))
+        let _ = no_window(&mut std::process::Command::new("reg"))
             .args(["delete", RUN_KEY, "/v", RUN_NAME, "/f"])
             .output();
     }
@@ -1799,8 +1783,7 @@ pub fn get_binaries_info_core() -> BinariesInfo {
         bin_dir: binary_dir.display().to_string(),
         oc_exists: binary_dir.join("opencode2api.exe").exists()
             || binary_dir.join("opencode2api").exists(),
-        sb_exists: binary_dir.join("sing-box.exe").exists()
-            || binary_dir.join("sing-box").exists(),
+        sb_exists: binary_dir.join("sing-box.exe").exists() || binary_dir.join("sing-box").exists(),
     }
 }
 
@@ -2006,20 +1989,192 @@ pub fn call_log_aggregate() -> Vec<crate::call_log::CallLogAggregate> {
     call_log_aggregate_core()
 }
 
+/// 清空统一网关调用日志（删除 call_log.jsonl）。
+/// Go 网关进程的内存环形缓冲不会把旧记录重新写回文件（Append 只追加新记录），
+/// 因此删除文件后日志页即为空，后续新请求从空文件开始记录。
+pub fn clear_call_log_core() -> Result<(), String> {
+    let (_, _, runtime_dir) = manager_paths();
+    let path = runtime_dir.join("_unified-gateway").join("call_log.jsonl");
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(|e| format!("删除日志文件失败: {}", e))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn clear_call_log() -> Result<(), String> {
+    clear_call_log_core()
+}
+
+/// 重置 Token 统计的结果汇总
+#[derive(Debug, Serialize)]
+pub struct ResetStatsResult {
+    /// 成功重置的项数（含实例与统一网关）
+    pub reset_count: usize,
+    /// 清除的「已删除实例」历史统计目录数（勾选清除时）
+    pub deleted_count: usize,
+    /// 失败明细（每项一条）
+    pub failed: Vec<String>,
+}
+
+/// 覆写为空统计文件（stats.json 或 node_stats.json，字段与 Go 侧一致）
+fn write_empty_stats_file(path: &std::path::Path, is_nodes: bool) -> std::io::Result<()> {
+    let empty = if is_nodes {
+        serde_json::json!({ "total_requests": 0, "nodes": {} })
+    } else {
+        serde_json::json!({ "total_requests": 0, "models": {} })
+    };
+    std::fs::write(
+        path,
+        serde_json::to_string_pretty(&empty).unwrap_or_default(),
+    )
+}
+
+/// 重置 Token 统计核心逻辑（纯函数，桌面 command 与 headless HTTP 共用）：
+/// - 运行中的实例 / 统一网关：调用其 HTTP DELETE /api/reset-stats（Bearer 密钥，apiKeyAuth 门禁）
+/// - 未运行的实例 / 网关：直接覆写磁盘 stats.json / node_stats.json 为空
+/// 返回成功重置的项数与失败明细（单条失败不阻断整体）。
+pub fn reset_stats_core(
+    manager: Arc<Mutex<InstanceManager>>,
+    clear_deleted: bool,
+) -> Result<ResetStatsResult, String> {
+    let (_, _, runtime_dir) = manager_paths();
+    let default_pw = Config::effective_default_password();
+    let mut reset_count = 0usize;
+    let mut failed: Vec<String> = Vec::new();
+
+    // 1) 实例：先校正状态，运行中走 HTTP，其余覆盖磁盘文件
+    let instances = {
+        let mut mgr = manager.lock().map_err(|_| "状态锁失败".to_string())?;
+        mgr.load().ok();
+        let _ = mgr.reconcile_states();
+        mgr.list_instances().to_vec()
+    };
+    for inst in &instances {
+        let stats_path = runtime_dir.join(&inst.name).join("stats.json");
+        if inst.status == crate::instance::InstanceStatus::Running {
+            let pw = if inst.password.is_empty() {
+                default_pw.clone()
+            } else {
+                inst.password.clone()
+            };
+            match crate::instance::http_delete_json(
+                inst.port,
+                "/api/reset-stats",
+                std::time::Duration::from_secs(6),
+                Some(&pw),
+            ) {
+                Ok((status, _)) if (200..300).contains(&status) => reset_count += 1,
+                Ok((status, _)) => failed.push(format!("{}: HTTP {}", inst.name, status)),
+                Err(e) => failed.push(format!("{}: {}", inst.name, e)),
+            }
+        } else if stats_path.exists() {
+            match write_empty_stats_file(&stats_path, false) {
+                Ok(()) => reset_count += 1,
+                Err(e) => failed.push(format!("{}: 覆写 stats.json 失败 ({})", inst.name, e)),
+            }
+        }
+    }
+
+    // 2) 统一网关：先尝试 HTTP；失败（未运行 / 旧二进制无该端点）则覆写磁盘文件
+    let gw_dir = runtime_dir.join("_unified-gateway");
+    let gw_reset_ok = crate::instance::http_delete_json(
+        crate::config::Config::effective_gateway_port(),
+        "/api/reset-stats",
+        std::time::Duration::from_secs(6),
+        Some(&crate::config::Config::effective_gateway_key()),
+    )
+    .map(|(status, _)| (200..300).contains(&status))
+    .unwrap_or(false);
+    if gw_reset_ok {
+        reset_count += 1;
+    } else {
+        let mut any = false;
+        for (fname, is_nodes) in [("stats.json", false), ("node_stats.json", true)] {
+            let p = gw_dir.join(fname);
+            if p.exists() && write_empty_stats_file(&p, is_nodes).is_ok() {
+                any = true;
+            }
+        }
+        if any {
+            reset_count += 1;
+        }
+    }
+
+    // 3) 清除「已删除实例」的历史目录（勾选时）：删除节点数据与节点本身。
+    //    遍历 runtime/ 下名不在当前实例列表、非 _unified-gateway/_probe、
+    //    且含统计文件（stats.json / node_stats.json）的目录，整目录删除。
+    let mut deleted_count = 0usize;
+    if clear_deleted {
+        let known: HashSet<&String> = instances.iter().map(|i| &i.name).collect();
+        if let Ok(entries) = std::fs::read_dir(&runtime_dir) {
+            for entry in entries.flatten() {
+                let dir = entry.path();
+                if !dir.is_dir() {
+                    continue;
+                }
+                let name = dir.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                if name == "_unified-gateway" || name == "_probe" {
+                    continue;
+                }
+                if known.contains(&name.to_string()) {
+                    continue;
+                }
+                // 仅处理真实含统计文件的历史实例目录
+                let has_stats = ["stats.json", "node_stats.json"]
+                    .iter()
+                    .any(|f| dir.join(f).exists());
+                if !has_stats {
+                    continue;
+                }
+                match std::fs::remove_dir_all(&dir) {
+                    Ok(()) => deleted_count += 1,
+                    Err(e) => failed.push(format!("{}: 删除历史目录失败 ({})", name, e)),
+                }
+            }
+        }
+    }
+
+    Ok(ResetStatsResult {
+        reset_count,
+        deleted_count,
+        failed,
+    })
+}
+
+/// Tauri command 壳：逻辑复用 reset_stats_core（headless 走 /api/stats/reset）。
+#[tauri::command]
+pub async fn reset_stats(
+    state: tauri::State<'_, AppState>,
+    clear_deleted: Option<bool>,
+) -> Result<ResetStatsResult, String> {
+    let clear_deleted = clear_deleted.unwrap_or(true);
+    let manager = Arc::clone(&state.core.manager);
+    tauri::async_runtime::spawn_blocking(move || reset_stats_core(manager, clear_deleted))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// 聚合逻辑（独立函数便于单元测试）：遍历 runtime_dir 各子目录读取 stats.json。
 /// port_to_name 提供 sing-box 端口 → 实例名映射，用于把统一网关 node_stats.json
 /// 中的 SOCKS5 出口地址（127.0.0.1:281xx）解析为实例名。
-fn aggregate_stats(runtime_dir: &std::path::Path, known_names: &[String], port_to_name: &std::collections::HashMap<u16, String>) -> StatsSummary {
+fn aggregate_stats(
+    runtime_dir: &std::path::Path,
+    known_names: &[String],
+    port_to_name: &std::collections::HashMap<u16, String>,
+) -> StatsSummary {
     let mut instances: Vec<InstanceStat> = Vec::new();
     let entries = match std::fs::read_dir(runtime_dir) {
         Ok(e) => e,
-        Err(_) => return StatsSummary {
-            total_requests: 0,
-            total_prompt_tokens: 0,
-            total_completion_tokens: 0,
-            total_tokens: 0,
-            instances,
-        },
+        Err(_) => {
+            return StatsSummary {
+                total_requests: 0,
+                total_prompt_tokens: 0,
+                total_completion_tokens: 0,
+                total_tokens: 0,
+                instances,
+            };
+        }
     };
 
     for entry in entries.flatten() {
@@ -2193,8 +2348,14 @@ mod stats_tests {
     fn test_stats_aggregate_basic() {
         let root = std::env::temp_dir().join("opencode2api-stats-test-basic");
         let _ = fs::remove_dir_all(&root);
-        write_stats(&root.join("user1"), r#"{"total_requests":2,"models":{"gpt-4o-mini":{"request_count":2,"prompt_tokens":400,"completion_tokens":70,"total_tokens":470}}}"#);
-        write_stats(&root.join("user2"), r#"{"total_requests":1,"models":{"claude-3-5":{"request_count":1,"prompt_tokens":100,"completion_tokens":30,"total_tokens":130}}}"#);
+        write_stats(
+            &root.join("user1"),
+            r#"{"total_requests":2,"models":{"gpt-4o-mini":{"request_count":2,"prompt_tokens":400,"completion_tokens":70,"total_tokens":470}}}"#,
+        );
+        write_stats(
+            &root.join("user2"),
+            r#"{"total_requests":1,"models":{"claude-3-5":{"request_count":1,"prompt_tokens":100,"completion_tokens":30,"total_tokens":130}}}"#,
+        );
 
         let known = vec!["user1".to_string(), "user2".to_string()];
         let s = aggregate_stats(&root, &known, &std::collections::HashMap::new());
@@ -2218,8 +2379,14 @@ mod stats_tests {
         let root = std::env::temp_dir().join("opencode2api-stats-test-deleted");
         let _ = fs::remove_dir_all(&root);
         // user_old 目录存在但不在实例列表中（已删除）
-        write_stats(&root.join("user_old"), r#"{"total_requests":5,"models":{"a":{"request_count":5,"prompt_tokens":50,"completion_tokens":5,"total_tokens":55}}}"#);
-        write_stats(&root.join("user_live"), r#"{"total_requests":1,"models":{"b":{"request_count":1,"prompt_tokens":10,"completion_tokens":1,"total_tokens":11}}}"#);
+        write_stats(
+            &root.join("user_old"),
+            r#"{"total_requests":5,"models":{"a":{"request_count":5,"prompt_tokens":50,"completion_tokens":5,"total_tokens":55}}}"#,
+        );
+        write_stats(
+            &root.join("user_live"),
+            r#"{"total_requests":1,"models":{"b":{"request_count":1,"prompt_tokens":10,"completion_tokens":1,"total_tokens":11}}}"#,
+        );
 
         let known = vec!["user_live".to_string()];
         let s = aggregate_stats(&root, &known, &std::collections::HashMap::new());
@@ -2241,9 +2408,16 @@ mod stats_tests {
         // stats.json 是坏 JSON
         write_stats(&root.join("bad_json"), r#"{not-json"#);
         // 正常实例
-        write_stats(&root.join("good"), r#"{"total_requests":1,"models":{"m":{"request_count":1,"prompt_tokens":9,"completion_tokens":1,"total_tokens":10}}}"#);
+        write_stats(
+            &root.join("good"),
+            r#"{"total_requests":1,"models":{"m":{"request_count":1,"prompt_tokens":9,"completion_tokens":1,"total_tokens":10}}}"#,
+        );
 
-        let s = aggregate_stats(&root, &["good".to_string()], &std::collections::HashMap::new());
+        let s = aggregate_stats(
+            &root,
+            &["good".to_string()],
+            &std::collections::HashMap::new(),
+        );
         assert_eq!(s.instances.len(), 1);
         assert_eq!(s.instances[0].name, "good");
         assert_eq!(s.total_requests, 1);
@@ -2254,7 +2428,10 @@ mod stats_tests {
     fn test_stats_models_sorted_desc() {
         let root = std::env::temp_dir().join("opencode2api-stats-test-sort");
         let _ = fs::remove_dir_all(&root);
-        write_stats(&root.join("u"), r#"{"total_requests":2,"models":{"small":{"request_count":1,"prompt_tokens":1,"completion_tokens":1,"total_tokens":2},"big":{"request_count":1,"prompt_tokens":100,"completion_tokens":50,"total_tokens":150}}}"#);
+        write_stats(
+            &root.join("u"),
+            r#"{"total_requests":2,"models":{"small":{"request_count":1,"prompt_tokens":1,"completion_tokens":1,"total_tokens":2},"big":{"request_count":1,"prompt_tokens":100,"completion_tokens":50,"total_tokens":150}}}"#,
+        );
 
         let s = aggregate_stats(&root, &["u".to_string()], &std::collections::HashMap::new());
         assert_eq!(s.instances[0].models[0].model, "big");
@@ -2266,7 +2443,10 @@ mod stats_tests {
     fn test_stats_gateway_nodes_resolved() {
         let root = std::env::temp_dir().join("opencode2api-stats-test-gw-nodes");
         let _ = fs::remove_dir_all(&root);
-        write_stats(&root.join("_unified-gateway"), r#"{"total_requests":2,"models":{"deepseek":{"request_count":2,"prompt_tokens":300,"completion_tokens":200,"total_tokens":500}}}"#);
+        write_stats(
+            &root.join("_unified-gateway"),
+            r#"{"total_requests":2,"models":{"deepseek":{"request_count":2,"prompt_tokens":300,"completion_tokens":200,"total_tokens":500}}}"#,
+        );
         fs::write(
             root.join("_unified-gateway/node_stats.json"),
             r#"{"total_requests":2,"nodes":{"127.0.0.1:28100":{"request_count":1,"prompt_tokens":100,"completion_tokens":50,"total_tokens":150},"127.0.0.1:28112":{"request_count":1,"prompt_tokens":200,"completion_tokens":150,"total_tokens":350}}}"#,
@@ -2296,7 +2476,10 @@ mod stats_tests {
     fn test_stats_gateway_nodes_unmapped_addr() {
         let root = std::env::temp_dir().join("opencode2api-stats-test-gw-unmapped");
         let _ = fs::remove_dir_all(&root);
-        write_stats(&root.join("_unified-gateway"), r#"{"total_requests":1,"models":{"m":{"request_count":1,"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}}"#);
+        write_stats(
+            &root.join("_unified-gateway"),
+            r#"{"total_requests":1,"models":{"m":{"request_count":1,"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}}"#,
+        );
         // 端口不在映射表（实例已删除）→ 显示原始 addr
         fs::write(
             root.join("_unified-gateway/node_stats.json"),
@@ -2309,5 +2492,111 @@ mod stats_tests {
         assert_eq!(gw.nodes.len(), 1);
         assert_eq!(gw.nodes[0].name, "127.0.0.1:28999");
         let _ = fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod batch_add_tests {
+    use super::*;
+    use crate::instance::InstanceManager;
+    use std::path::PathBuf;
+
+    fn ephemeral_mgr() -> InstanceManager {
+        // 不持久化：add_instance 不会写盘，测试无需清理
+        InstanceManager::new_ephemeral(PathBuf::from("bin"), PathBuf::from("runtime"))
+    }
+
+    #[test]
+    fn test_batch_add_dedup_same_node() {
+        let mut mgr = ephemeral_mgr();
+        // 先占用节点 A
+        mgr.add_instance(
+            "a-1".to_string(),
+            18001,
+            "节点A".to_string(),
+            "sk-x".to_string(),
+            "".to_string(),
+        )
+        .unwrap();
+
+        let items = vec![
+            BatchAddItem {
+                node: "节点A".to_string(),
+                name: None,
+                port: None,
+            },
+            BatchAddItem {
+                node: "节点B".to_string(),
+                name: None,
+                port: None,
+            },
+        ];
+        let r = batch_add_inner(&mut mgr, &items, 30000, true, "n");
+        assert_eq!(r.added_count, 1, "节点A 已存在应被去重，只应新增节点B");
+        assert_eq!(r.error_count, 1);
+        assert!(
+            r.errors.iter().any(|e| e["node"] == "节点A"),
+            "错误明细应包含已存在的节点A"
+        );
+        assert!(
+            mgr.list_instances().iter().any(|i| i.node == "节点B"),
+            "节点B 应被成功添加"
+        );
+    }
+
+    #[test]
+    fn test_batch_add_repeat_pool_is_idempotent() {
+        let mut mgr = ephemeral_mgr();
+        mgr.add_instance(
+            "a-1".to_string(),
+            18001,
+            "节点A".to_string(),
+            "sk-x".to_string(),
+            "".to_string(),
+        )
+        .unwrap();
+        mgr.set_join_gateway("a-1", true).unwrap();
+
+        // 再次对同一节点入池：应被去重，不产生第二个实例
+        let items = vec![BatchAddItem {
+            node: "节点A".to_string(),
+            name: None,
+            port: None,
+        }];
+        let r = batch_add_inner(&mut mgr, &items, 30000, true, "n");
+        assert_eq!(r.added_count, 0, "重复入池同一节点应被去重");
+        assert_eq!(mgr.list_instances().len(), 1, "不应产生重复实例");
+        assert!(
+            mgr.list_instances()[0].join_gateway,
+            "原实例的入池标记应保留"
+        );
+    }
+
+    #[test]
+    fn test_batch_add_name_conflict_gets_suffix() {
+        let mut mgr = ephemeral_mgr();
+        mgr.add_instance(
+            "节点B".to_string(),
+            18001,
+            "节点B".to_string(),
+            "sk-x".to_string(),
+            "".to_string(),
+        )
+        .unwrap();
+
+        // 不同节点、同名冲突：自动加后缀，仍应成功
+        let items = vec![BatchAddItem {
+            node: "节点C".to_string(),
+            name: Some("节点B".to_string()),
+            port: None,
+        }];
+        let r = batch_add_inner(&mut mgr, &items, 30000, true, "n");
+        assert_eq!(r.added_count, 1);
+        let names: Vec<&str> = mgr
+            .list_instances()
+            .iter()
+            .map(|i| i.name.as_str())
+            .collect();
+        assert!(names.contains(&"节点B-2"), "同名冲突应加后缀: {:?}", names);
     }
 }

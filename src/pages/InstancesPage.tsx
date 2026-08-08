@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import clsx from 'clsx'
 import { RefreshCw, Play, Square, Trash2, TestTube2, Copy, Loader2, Search, Server } from 'lucide-react'
-import { api, type Instance } from '../lib/api'
+import { api, type Instance, type TestResult } from '../lib/api'
 
 function statusBadge(st: Instance['status']): [string, string] {
   if (st === 'Running') return ['bg-green-50 text-green-700', '运行中']
@@ -18,6 +18,8 @@ export default function InstancesPage({
 }) {
   const [instances, setInstances] = useState<Instance[]>([])
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  // 测试结果（行内徽章正反馈）：name → TestResult
+  const [testResults, setTestResults] = useState<Record<string, TestResult>>({})
   const [search, setSearch] = useState('')
   const [searchFocus, setSearchFocus] = useState(false)
   const [filter, setFilter] = useState<'all' | 'running' | 'stopped'>('all')
@@ -168,6 +170,7 @@ const doRemove = async (name: string) => {
   const doTest = async (name: string) => {
     try {
       const r = await api.testInstance(name)
+      setTestResults((prev) => ({ ...prev, [name]: r }))
       if (r.ok) toast(`「${name}」测试通过：${r.message}（${r.latency_ms}ms）`)
       else toast(`「${name}」测试失败：${r.message}`, false)
     } catch (e) {
@@ -204,7 +207,7 @@ if (kind === 'delete' && !confirm(`确定释放选中的 ${names.length} 个实�
     }
   }
 
-  // 一键测试：对勾选的实例逐个探测连通性，汇总结果
+  // 一键测试：对勾选的实例并行探测连通性，结果逐行回填徽章，汇总提示
   const [testBusy, setTestBusy] = useState(false)
   const doBatchTest = async () => {
     const names = [...selected]
@@ -214,17 +217,29 @@ if (kind === 'delete' && !confirm(`确定释放选中的 ${names.length} 个实�
     }
     setTestBusy(true)
     try {
+      const results = await Promise.allSettled(names.map((n) => api.testInstance(n)))
       let ok = 0
       let fail = 0
-      for (const n of names) {
-        try {
-          const r = await api.testInstance(n)
-          if (!r.ok) throw new Error(r.message)
+      const updated: Record<string, TestResult> = {}
+      names.forEach((n, i) => {
+        const r = results[i]!
+        if (r.status === 'fulfilled' && r.value.ok) {
           ok++
-        } catch {
+          updated[n] = r.value
+        } else {
           fail++
+          updated[n] = {
+            name: n,
+            port: 0,
+            ok: false,
+            status_code: null,
+            model_count: null,
+            message: r.status === 'fulfilled' ? r.value.message : String(r.reason),
+            latency_ms: 0,
+          }
         }
-      }
+      })
+      setTestResults((prev) => ({ ...prev, ...updated }))
       toast(`测试完成：成功 ${ok} 个${fail ? `，失败 ${fail}` : ''}`, fail === 0)
       await load()
     } finally {
@@ -376,8 +391,11 @@ if (kind === 'delete' && !confirm(`确定释放选中的 ${names.length} 个实�
                       </button>
                     </td>
 <td className="py-2.5 pl-2">
-                      <div className="flex items-center gap-1.5">
-                        <span className={clsx('inline-block px-2 py-0.5 rounded-full text-xs font-medium', cls)}>{label}</span>
+                      <div className="flex flex-col items-start gap-1">
+                        <div className="flex items-center gap-1.5">
+                          <span className={clsx('inline-block px-2 py-0.5 rounded-full text-xs font-medium', cls)}>{label}</span>
+                        </div>
+                        {testBadge(testResults[i.name])}
                       </div>
                     </td>
                     <td className="py-2.5 pl-2 pr-4">
@@ -430,6 +448,29 @@ if (kind === 'delete' && !confirm(`确定释放选中的 ${names.length} 个实�
       )}
 
     </div>
+  )
+}
+
+/** 测试结果徽章：✓ 通过+延迟+详情 / ✗ 失败+原因（无结果返回 null 不占位） */
+function testBadge(r?: TestResult) {
+  if (!r) return null
+  if (r.ok) {
+    return (
+      <span
+        className="inline-block max-w-[240px] px-2 py-0.5 rounded-full text-[11px] font-medium bg-green-50 text-green-700 truncate"
+        title={r.message}
+      >
+        ✓ 通过 {r.latency_ms}ms{r.message ? ` · ${r.message}` : ''}
+      </span>
+    )
+  }
+  return (
+    <span
+      className="inline-block max-w-[240px] px-2 py-0.5 rounded-full text-[11px] font-medium bg-red-50 text-red-600 truncate"
+      title={r.message || '测试失败'}
+    >
+      ✗ {r.message || '失败'}
+    </span>
   )
 }
 

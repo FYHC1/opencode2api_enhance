@@ -57,9 +57,11 @@ pub fn build_router(core: Arc<AppCore>) -> Router {
         .route("/api/config", get(config_get_handler))
         .route("/api/config/{key}", post(config_set_handler))
         .route("/api/stats", get(stats_handler))
+        .route("/api/stats/reset", post(stats_reset_handler))
         .route("/api/call-log", get(call_log_handler))
         .route("/api/call-log/filtered", post(call_log_filtered_handler))
         .route("/api/call-log/aggregate", get(call_log_aggregate_handler))
+        .route("/api/call-log/clear", post(clear_call_log_handler))
         .route("/api/nodes", get(nodes_handler))
         .route("/api/nodes/delete", post(node_delete_handler))
         .route("/api/nodes/delete-batch", post(node_delete_batch_handler))
@@ -441,6 +443,28 @@ async fn call_log_aggregate_handler() -> Json<serde_json::Value> {
     Json(serde_json::to_value(value).unwrap_or(json!({})))
 }
 
+/// 清空统一网关调用日志（core 复用，桌面 command 与 HTTP 同源）。
+async fn clear_call_log_handler() -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    blocking(commands::clear_call_log_core).await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+struct StatsResetPayload {
+    clear_deleted: Option<bool>,
+}
+
+/// 重置 Token 统计（core 复用 reset_stats_core，桌面 command 与 HTTP 同源）。
+async fn stats_reset_handler(
+    State(core): State<Arc<AppCore>>,
+    Json(payload): Json<StatsResetPayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let manager = Arc::clone(&core.manager);
+    let clear_deleted = payload.clear_deleted.unwrap_or(true);
+    let result = blocking(move || commands::reset_stats_core(manager, clear_deleted)).await?;
+    Ok(to_json(result))
+}
+
 async fn nodes_handler() -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let nodes = blocking(commands::list_nodes_core).await?;
     Ok(to_json(nodes))
@@ -515,6 +539,7 @@ struct ScanStartPayload {
     api_port: Option<u16>,
     socks_port: Option<u16>,
     timeout: Option<u64>,
+    concurrency: Option<usize>,
 }
 
 async fn scan_start_handler(
@@ -529,6 +554,7 @@ async fn scan_start_handler(
                 api_port: payload.api_port,
                 socks_port: payload.socks_port,
                 timeout: payload.timeout,
+                concurrency: payload.concurrency,
             },
         )
     })

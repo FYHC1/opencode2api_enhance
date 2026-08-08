@@ -4838,6 +4838,26 @@ func adminStatsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// resetStatsHandler 清空本进程 token/节点统计并落盘（供管理端「重置统计」调用）。
+// 与 /api/stats 的 DELETE 语义一致，但改用 apiKeyAuth（Bearer 密钥）而非会话 cookie，
+// 便于本机管理进程直接以密钥调用，无需先走 /login 拿 session。
+func resetStatsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	tokenStatsMu.Lock()
+	tokenStats = &TokenStatsData{Models: map[string]*ModelStats{}}
+	tokenStatsMu.Unlock()
+	saveTokenStats()
+	nodeStatsMu.Lock()
+	nodeStats = &NodeStatsData{Nodes: map[string]*NodeStat{}}
+	nodeStatsMu.Unlock()
+	saveNodeStats()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
 // NodeStatus 节点健康状态（供 Rust 层轮询，发现坏节点后停实例）
 type NodeStatus struct {
 	Addr      string `json:"addr"`
@@ -5277,6 +5297,7 @@ func main() {
 	http.HandleFunc("/logout", loggingMiddleware(logoutHandler))
 	http.HandleFunc("/api/config", loggingMiddleware(requireAuth(adminConfigHandler)))
 	http.HandleFunc("/api/stats", loggingMiddleware(requireAuth(adminStatsHandler)))
+	http.HandleFunc("/api/reset-stats", loggingMiddleware(apiKeyAuthMiddleware(resetStatsHandler)))
 	http.HandleFunc("/api/node-status", loggingMiddleware(apiKeyAuthMiddleware(nodeStatusHandler)))
 	http.HandleFunc("/api/reload", loggingMiddleware(requireAuth(reloadHandler)))
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
