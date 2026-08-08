@@ -47,6 +47,20 @@ fn manager_port() -> u16 {
     CORE_MANAGER_PORT
 }
 
+/// 从 start 起扫描 budget 个端口，返回第一个当前空闲（无监听）的端口。
+/// 用于彻底避开正式环境的实例/sing-box 端口（如 28100 可能是正式实例的 sing-box）。
+fn pick_free_port(start: u16, budget: u16) -> u16 {
+    use std::time::Duration;
+    for p in start..start.saturating_add(budget) {
+        if let Ok(addr) = format!("127.0.0.1:{p}").parse() {
+            if std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_err() {
+                return p;
+            }
+        }
+    }
+    start
+}
+
 pub fn run() {
     // 调试构建默认隔离数据目录：与正式版（%APPDATA%\opencode2api-manager）
     // 分开，避免实例池/配置/runtime 互相干扰。可用 OPCODE2API_DATA_DIR 显式覆盖。
@@ -90,18 +104,19 @@ pub fn run() {
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_default();
-    // 便携测试包隔离：exe 旁存在 portable.txt → 用独立数据目录，避免与正式版共用实例/配置
-    if binary_dir
+    // 便携测试包隔离：exe 旁存在 portable.txt → 用独立数据目录，避免与正式版共用实例/配置。
+    // 端口遵循 FAQ 规则（sing-box = 实例 API + 10000）：正式版 API ≤ 39999 → sing-box ≤ 49999，
+    // 因此测试管理器/网关端口取 50000+ 段，天然避开整条 (api, api+10000) 覆盖带，再叠加动态扫描兜底。
+    let is_portable = binary_dir
         .parent()
         .map(|p| p.join("portable.txt").exists())
-        .unwrap_or(false)
-    {
+        .unwrap_or(false);
+    if is_portable {
         let base = dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
         data_dir = base.join("opencode2api-manager-test");
-        // 测试段端口：管理器 28100、网关 21080，彻底避开正式环境（18100/18080）。
+        let gw = pick_free_port(50100, 64).to_string();
         unsafe {
-            std::env::set_var("OPCODE2API_MANAGER_PORT", "28100");
-            std::env::set_var("OPCODE2API_GATEWAY_PORT", "21080");
+            std::env::set_var("OPCODE2API_GATEWAY_PORT", &gw);
         }
     }
     let mut manager = instance::InstanceManager::new(
@@ -124,7 +139,13 @@ pub fn run() {
     unsafe {
         std::env::set_var("OPCODE2API_DATA_DIR", &data_dir);
     }
-    let core_child = match spawn_core_manager(&data_dir) {
+    // 管理器端口：便携测试从 50000 段起步（避开正式实例/sing-box 覆盖带），其余按环境默认 + 动态扫描。
+    let mgr_port = if is_portable {
+        pick_free_port(50000, 64)
+    } else {
+        pick_free_port(manager_port(), 32)
+    };
+    let core_child = match spawn_core_manager(&data_dir, mgr_port) {
         Ok(child) => Some(child),
         Err(e) => {
             eprintln!("启动 core 管理器失败: {e}");
@@ -148,7 +169,7 @@ pub fn run() {
             commands::toggle_maximize,
             commands::quit_app
         ])
-.setup(|app| {
+.setup(move |app| {
             use tauri::Manager;
 
             // 托盘菜单：右键显示「显示主窗口 / 退出」
@@ -211,9 +232,9 @@ button: tauri::tray::MouseButton::Left,
             })
             .build(app)?;
 
-            // 窗口承载 core 管理器 SPA（core 已就绪；端口见 manager_port()）
+            // 窗口承载 core 管理器 SPA（core 已就绪；端口 = 启动时选定的 mgr_port）
             if let Some(w) = app.get_webview_window("main") {
-                let url = format!("http://127.0.0.1:{}/", manager_port());
+                let url = format!("http://127.0.0.1:{mgr_port}/");
                 let _ = w.navigate(tauri::Url::parse(&url).expect("core manager url"));
             }
             Ok(())
@@ -247,9 +268,9 @@ button: tauri::tray::MouseButton::Left,
         });
 }
 
-/// 拉起 Go core 管理器（bin/opencode2api.exe -port 18100 ...），等待 /health 就绪。
+/// 拉起 Go core 管理器（bin/opencode2api.exe -port <port> ...），等待 /health 就绪。
 /// 数据目录经 OPCODE2API_DATA_DIR 注入（setup 已设置）。
-fn spawn_core_manager(data_dir: &std::path::Path) -> std::io::Result<std::process::Child> {
+fn spawn_core_manager(data_dir: &std::path::Path, port: u16) -> std::io::Result<std::process::Child> {
     use std::io::{Read, Write};
     use std::process::Command;
     use std::time::Duration;
@@ -269,11 +290,11 @@ fn spawn_core_manager(data_dir: &std::path::Path) -> std::io::Result<std::proces
             std::env::set_var("OPCODE2API_GATEWAY_PORT", CORE_GATEWAY_PORT);
         }
     }
-    let port = manager_port().to_string();
+    let port_str = port.to_string();
     let mut cmd = Command::new(&exe);
     cmd.args([
         "-port",
-        &port,
+        &port_str,
         "-password",
         "sk-unified-local",
         "-config",
@@ -290,7 +311,7 @@ fn spawn_core_manager(data_dir: &std::path::Path) -> std::io::Result<std::proces
     let child = cmd.spawn()?;
 
     // 等待 /health 就绪（最多 ~15s）
-    let addr = format!("127.0.0.1:{}", manager_port());
+    let addr = format!("127.0.0.1:{port}");
     let mut ready = false;
     for _ in 0..30 {
         std::thread::sleep(Duration::from_millis(500));
