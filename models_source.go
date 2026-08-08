@@ -10,6 +10,7 @@ import (
 	"github.com/6Kmfi6HP/opencode2api/core/contract"
 	chatRouter "github.com/6Kmfi6HP/opencode2api/core/router"
 	"github.com/6Kmfi6HP/opencode2api/vendors/opencode"
+	windVendor "github.com/6Kmfi6HP/opencode2api/vendors/windsurf"
 )
 
 // surfaceGoKey 对应 contract.Model.Meta["surface"] 的 go 目录取值（见 vendors/opencode）。
@@ -71,6 +72,17 @@ func newAggregator() *aggregator.Aggregator {
 				Name:          name,
 				Transport:     rootTransport{},
 				AdminPassword: adminPassword,
+			}))
+		case "windsurf":
+			// 池型厂商：接缝（Mailbox/Registrar/Chatter）由 P3-B 注入；
+			// 当前仍可经契约/路由联通，未接线时 Chat 明确报错。
+			agg.Register(windVendor.New(windVendor.Config{
+				ID:             pc.ID,
+				Name:           name,
+				HTTPClient:     http.DefaultClient,
+				MinAvailable:   1,
+				QuotaThreshold: 20,
+				Cooldown:       24 * time.Hour,
 			}))
 		default:
 			slog.Warn("unknown provider type, skipped", "id", pc.ID, "type", pc.Type)
