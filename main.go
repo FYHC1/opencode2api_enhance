@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"time"
+
+	"github.com/6Kmfi6HP/opencode2api/core/manager"
 )
 
 var httpClient = &http.Client{
@@ -81,6 +83,8 @@ func main() {
 	} else {
 		slog.Info("admin panel disabled (no password)")
 	}
+	// P4: 管理域（实例/统计/日志/配置）并入 core，Web/桌面共用一份实现。
+	managerInst := manager.New("")
 	http.HandleFunc("/v1/chat/completions", loggingMiddleware(apiKeyAuthMiddleware(chatCompletionsHandler)))
 	http.HandleFunc("/v1/responses", loggingMiddleware(apiKeyAuthMiddleware(responsesHandler)))
 	http.HandleFunc("/v1/messages", loggingMiddleware(apiKeyAuthMiddleware(claudeMessagesHandler)))
@@ -92,6 +96,15 @@ func main() {
 	http.HandleFunc("/api/reset-stats", loggingMiddleware(apiKeyAuthMiddleware(resetStatsHandler)))
 	http.HandleFunc("/api/node-status", loggingMiddleware(apiKeyAuthMiddleware(nodeStatusHandler)))
 	http.HandleFunc("/api/reload", loggingMiddleware(requireAuth(reloadHandler)))
+	// P4: 管理域并入 core（/api/admin/*，鉴权与既有 /api/* 一致；由 core/manager 实现）
+	http.HandleFunc("/api/admin/config", loggingMiddleware(requireAuth(managerInst.ConfigGetHandler())))
+	http.HandleFunc("/api/admin/config/set", loggingMiddleware(requireAuth(managerInst.ConfigSetHandler())))
+	http.HandleFunc("/api/admin/stats", loggingMiddleware(requireAuth(managerInst.StatsHandler())))
+	http.HandleFunc("/api/admin/stats/reset", loggingMiddleware(apiKeyAuthMiddleware(managerInst.ResetStatsHandler())))
+	http.HandleFunc("/api/admin/call-log", loggingMiddleware(requireAuth(managerInst.CallLogHandler())))
+	http.HandleFunc("/api/admin/call-log/clear", loggingMiddleware(requireAuth(managerInst.ClearCallLogHandler())))
+	http.HandleFunc("/api/admin/binaries", loggingMiddleware(apiKeyAuthMiddleware(managerInst.BinariesHandler())))
+	http.HandleFunc("/api/admin/instances", loggingMiddleware(requireAuth(managerInst.InstancesHandler())))
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
