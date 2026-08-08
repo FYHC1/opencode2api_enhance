@@ -266,7 +266,20 @@ type PoolVendor interface {
 
 ### P4 统一 UI + Web 版（★需先制定详细子计划再动工）
 - **目标**：管理功能并入 core（HTTP API），一份实现服务所有端。
-- **子计划（拟定，开工前细化）**：P4-1 管理 API 层（35 command → HTTP）→ P4-2 实例生命周期移植 → P4-3 节点扫描探针移植 → P4-4 sing-box 配置生成移植 → P4-5 前端改走 HTTP + Tauri 薄壳化 → P4-6 联动联调。
+- **子计划（细化版 2026-08-08，已开工；行为规格来自 `src-tauri/src/*.rs` 全量工读）**：
+
+> **核心决策**：新增 Go 包 `core/manager` 承载管理域（实例生命周期/端口/clash 解析/sing-box 配置/probe 扫描/网关/统计/日志/应用配置），HTTP 层为 `/api/admin/*`（鉴权复用现有 `requireAuth` 会话 + `apiKeyAuth`）。实例模型保持"子进程"（与现状一致，最小侵入）：同一 core 二进制既可单独运行（单实例网关，现状），也可作为管理器 spawn 自身子进程当实例。壳专属命令（hide_to_tray/quit/toggle_maximize·窗口操作）不并入 core，保留 Tauri invoke；autostart/binaries 双轨（core 提供 HTTP 供 Web 用）。Windows 专属系统调用先行真实现，非 Windows 空桩（P5 替换）。
+
+| 子步骤 | 内容 | 验收（全绿 `go test -count=1 ./...`） |
+|---|---|---|
+| P4-1 | `core/manager` 骨架：数据目录解析（`OPCODE2API_DATA_DIR` → `%APPDATA%/opencode2api-manager`）、应用配置（config.json / ConfigView / effective_default_password，字段与 config.rs 一致）、调用日志读取（`runtime/_unified-gateway/call_log.jsonl` → CallLogRecord）、统计聚合（runtime/*/stats.json → StatsSummary，`_unified-gateway` 名"统一网关"+node_stats）、`/api/admin/*` HTTP 路由骨架（鉴权复用） | manager 单测：配置 get/set、日志环形截断、stats 聚合（构造目录树）；route 注册 |
+| P4-2 | 实例生命周期移植：Instance 契约（含外部标签状态 `Stopped|Starting|Running|Stopping|{Error:[msg]}`）；实例注册表 instances.json 持久化；add/remove/start/stop/test；spawn（`sing-box run -c` + `opencode2api.exe -port -config -password`，`-gateway` 子进程同）；pid 追踪、状态机、reconcile；端口工具（suggest LCG/check/is_free/wait）；Windows `netstat -ano` 端口清理 + `taskkill`（封装 executor 接口，测试注入 fake exec） | 单测：增删/启动停止（fake Runner）/端口冲突/状态机/reconcile/port 解析（windows 样例行）；`go build` 通过 |
+| P4-3 | 节点/探针移植：clash.go（%APPDATA%/io.github.clash-verge-rev…/profiles `*.yaml` + profiles.yaml 名映射 + 外部 API `/configs` + junk 过滤 + name→group 前缀）→ ClashNode 契约；singbox.go 按类型（trojan/vless/vmess/ss/hysteria2/anytls + ws/http transport + reality/utls）生成 sing-box 配置；probe.go 扫描控制器（并发 8、进度状态、每节点 起 sing-box+opencode 探针 → `/v1/models` 免费模型挑选 → POST chat → ok/category/latency） | clash 样例 YAML golden、singbox 每类型字段断言、probe 控制器并发/取消/进度单测 |
+| P4-4 | 网关移植：route_mode（smart/failover/round_robin）语义、join_gateway 成员、free_models 抓取节流、spawn `-gateway` 子进程（cwd=runtime/_unified-gateway）；batch 批量（add/start/stop/delete，重名端口+1 语义）；restart_pool；data_clean 三级；stats/reset（HTTP DELETE 语义）；call-log clear | 路由映射/端口分配/batch 去重/restart 顺序单测（fake） |
+| P4-5 | 前端改走 HTTP + Tauri 薄壳化：`src/lib/api.ts` invoke→fetch('/api/admin/…')，类型不动；6 页逐页验证；React 构建产物由 core `/` 托管（Web 浏览器全功能）；Tauri invoke_handler 缩减为壳命令（窗口/托盘/自启/二进制路径），commands.rs 管理域删除 | `npm run build` 通过；`cargo check` 通过；浏览器 localhost:<port> 全功能走查记录 |
+| P4-6 | 联动联调：同二进制三态（单实例网关 / 管理器+子实例 / Web 直连）；实例→扫描→批量→启停→网关→统计→日志全链路走查；桌面与 Web 等价 | 走查记录 + 验收 15/16 打勾 |
+
+- **决策备注（自主授权，记录在案）**：① 管理包放 `core/manager`，依赖 contract 与既有网关设施，禁止反向；② `Error` 状态用外部标签数组形式 `{"Error":["msg"]}` 与 Rust serde 对齐；③ 探针每次换节点重启 sing-box（防模型目录缓存污染）；④ probe 使用裸 TCP HTTP 客户端（与 Rust http_get_json 语义一致，供 /api/reset-stats 复用）；⑤ Web 态默认开管理 API（受 requireAuth 保护），桌面态由 Tauri 壳设 `OPCODE2API_DATA_DIR` 隔离。
 - **验收**：浏览器打开 `localhost:<port>/` 可用全部管理功能；桌面版功能与现状等价（实例启停/扫描/统计/日志全链路）。
 
 ### P5 多平台（Linux/macOS）
@@ -308,7 +321,7 @@ type PoolVendor interface {
 | 11 | P3 | ★24h 冷却 / ★额度≤20% 预注册 / ★中途无感换号 三能力完成 | ✅ | 2026-08-08 | 冷却+预注册 ✅（池层 `edde8b8`）；流中无感换号 ✅（`00ae506`，回卷续写与网关断点续写同文衔接） |
 280→| 12 | P3 | `/v1/models` 双厂商聚合（前缀区分），分发与厂商级 failover 通过 | ✅ | 2026-08-08 | 聚合/前缀/分发/failover 已由 P2-C 落地（待 windsurf 真接） |
 | 13 | P3 | 池型全链路冒烟：无号自动注册→对话→额度低预注册→换号续写 | ⬜ | | |
-| 14 | P4 | P4 详细子计划制定（P4-1~P4-6） | ⬜ | | 动工前必须先行 |
+| 14 | P4 | P4 详细子计划制定（P4-1~P4-6） | ✅ | 2026-08-08 | 「四、P4」细化版：核心决策+验收点+决策备注；行为来源 `src-tauri/*.rs` 工读 |
 | 15 | P4 | 管理功能并入 core（HTTP API），浏览器全功能可用 | ⬜ | | |
 | 16 | P4 | 桌面版功能与现状等价；Tauri 薄壳化 | ⬜ | | |
 | 17 | P5 | core/vendors 在 Linux/macOS 编译通过 | ⬜ | | |
