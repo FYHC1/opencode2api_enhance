@@ -40,28 +40,28 @@ func (f *fakeRegistrar) Register(_ context.Context, mb MailboxProvider) (string,
 }
 
 type fakeChatter struct {
-	// perEmail 记录每个账号的行为序列（每项一次调用）。
-	perEmail map[string][]func(acct string) (*contract.Reply, error)
+	// perToken 记录每个会话令牌的行为序列（每项一次调用）。
+	perToken map[string][]func(token string) (*contract.Reply, error)
 	mu       sync.Mutex
 }
 
-func (c *fakeChatter) reply(acct string) (*contract.Reply, error) {
+func (c *fakeChatter) reply(token string) (*contract.Reply, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	list := c.perEmail[acct]
+	list := c.perToken[token]
 	if len(list) == 0 {
 		return &contract.Reply{Status: http.StatusTooManyRequests}, nil
 	}
 	fn := list[0]
-	c.perEmail[acct] = list[1:]
-	return fn(acct)
+	c.perToken[token] = list[1:]
+	return fn(token)
 }
 
-func (c *fakeChatter) DoChat(_ context.Context, acct string, _ *contract.Message) (*contract.Reply, error) {
-	return c.reply(acct)
+func (c *fakeChatter) DoChat(_ context.Context, token string, _ *contract.Message) (*contract.Reply, error) {
+	return c.reply(token)
 }
 
-func (c *fakeChatter) DoChatStream(_ context.Context, acct string, _ *contract.Message) (*contract.Stream, error) {
+func (c *fakeChatter) DoChatStream(_ context.Context, _ string, _ *contract.Message) (*contract.Stream, error) {
 	return nil, ErrNotWiredChat
 }
 
@@ -109,14 +109,14 @@ func TestEnsureReadyWithoutRegistrar(t *testing.T) {
 
 func TestChatSwitchesAccountOnQuotaError(t *testing.T) {
 	v := New(Config{MinAvailable: 2, Cooldown: time.Hour, HTTPClient: http.DefaultClient})
-	// 先放两个账号进池（跳过注册链）
-	v.pool.add(&Account{Email: "acc1@t", QuotaDaily: 100, QuotaWeekly: 100})
-	v.pool.add(&Account{Email: "acc2@t", QuotaDaily: 100, QuotaWeekly: 100})
+	// 先放两个带会话令牌的账号进池（跳过注册链）
+	v.pool.add(&Account{Email: "acc1@t", WindsurfSessionToken: "tok-1", QuotaDaily: 100, QuotaWeekly: 100})
+	v.pool.add(&Account{Email: "acc2@t", WindsurfSessionToken: "tok-2", QuotaDaily: 100, QuotaWeekly: 100})
 
-	chat := &fakeChatter{perEmail: map[string][]func(string) (*contract.Reply, error){
-		// acc1 首次即触发额度/限流 → 适配层换 acc2 成功
-		"acc1@t": {func(string) (*contract.Reply, error) { return &contract.Reply{Status: 429}, nil }},
-		"acc2@t": {func(string) (*contract.Reply, error) { return &contract.Reply{Body: []byte("ok"), Status: 200}, nil }},
+	chat := &fakeChatter{perToken: map[string][]func(string) (*contract.Reply, error){
+		// tok-1 首次即触发额度/限流 → 适配层换 tok-2 成功
+		"tok-1": {func(string) (*contract.Reply, error) { return &contract.Reply{Status: 429}, nil }},
+		"tok-2": {func(string) (*contract.Reply, error) { return &contract.Reply{Body: []byte("ok"), Status: 200}, nil }},
 	}}
 	v.cfg.Chatter = chat
 
@@ -127,18 +127,27 @@ func TestChatSwitchesAccountOnQuotaError(t *testing.T) {
 	if reply.Status != 200 || string(reply.Body) != "ok" {
 		t.Fatalf("reply = %+v, want ok/200", reply)
 	}
-	// acc1 被标记 (Dry+cooling)，acc2 成功保留
+	// tok-1 被标记 (Dry+cooling)，tok-2 成功保留
 	st := v.PoolStatus()
 	if st.Available != 1 || st.Cooling != 1 {
 		t.Fatalf("pool status = %+v, want 1 available / 1 cooling", st)
 	}
 }
 
+func TestChatWithoutTokenFails(t *testing.T) {
+	v := New(Config{MinAvailable: 1, Cooldown: time.Hour, HTTPClient: http.DefaultClient})
+	v.pool.add(&Account{Email: "notok@t", QuotaDaily: 100, QuotaWeekly: 100}) // 无 token
+	v.cfg.Chatter = &fakeChatter{}
+	if _, err := v.Chat(context.Background(), &contract.Message{}); err == nil {
+		t.Fatal("want error for account without session token")
+	}
+}
+
 func TestChatReturnsUpstreamErrorWhenSwitchNotPossible(t *testing.T) {
 	v := New(Config{MinAvailable: 1, Cooldown: time.Hour, HTTPClient: http.DefaultClient})
-	v.pool.add(&Account{Email: "only@t", QuotaDaily: 100, QuotaWeekly: 100})
-	v.cfg.Chatter = &fakeChatter{perEmail: map[string][]func(string) (*contract.Reply, error){
-		"only@t": {func(string) (*contract.Reply, error) { return &contract.Reply{Status: 403}, nil }},
+	v.pool.add(&Account{Email: "only@t", WindsurfSessionToken: "tok-a", QuotaDaily: 100, QuotaWeekly: 100})
+	v.cfg.Chatter = &fakeChatter{perToken: map[string][]func(string) (*contract.Reply, error){
+		"tok-a": {func(string) (*contract.Reply, error) { return &contract.Reply{Status: 403}, nil }},
 	}}
 	reply, err := v.Chat(context.Background(), &contract.Message{})
 	if err == nil {

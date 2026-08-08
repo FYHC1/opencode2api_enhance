@@ -259,7 +259,12 @@ func (v *Vendor) Chat(ctx context.Context, msg *contract.Message) (*contract.Rep
 		return nil, err
 	}
 	for attempt := 0; attempt < 2; attempt++ {
-		reply, err := chatter.DoChat(ctx, string(acct), msg)
+		token := v.pool.tokenOf(string(acct))
+		if token == "" {
+			v.pool.release(string(acct), time.Now(), true)
+			return nil, errors.New("windsurf: account 无会话令牌")
+		}
+		reply, err := chatter.DoChat(ctx, token, msg)
 		if err == nil && reply != nil && reply.Status >= 200 && reply.Status < 300 {
 			v.pool.touch(string(acct), time.Now())
 			v.mu.Lock()
@@ -310,7 +315,12 @@ func (v *Vendor) ChatStream(ctx context.Context, msg *contract.Message) (*contra
 	if err != nil {
 		return nil, err
 	}
-	stream, err := chatter.DoChatStream(ctx, string(acct), msg)
+	token := v.pool.tokenOf(string(acct))
+	if token == "" {
+		v.pool.release(string(acct), time.Now(), true)
+		return nil, errors.New("windsurf: account 无会话令牌")
+	}
+	stream, err := chatter.DoChatStream(ctx, token, msg)
 	if err != nil || stream == nil {
 		v.pool.release(string(acct), time.Now(), true)
 		if stream != nil {

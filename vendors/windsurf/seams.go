@@ -2,12 +2,15 @@ package windsurf
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/6Kmfi6HP/opencode2api/core/contract"
+	"github.com/6Kmfi6HP/opencode2api/vendors/windsurf/connect"
 )
 
 // ---------------------------------------------------------------------------
@@ -28,12 +31,84 @@ type Registrar interface {
 	Register(ctx context.Context, mb MailboxProvider) (email string, err error)
 }
 
-// Chatter 是上游聊天传输（Devin/Windsurf Connect-RPC）。P3-B 移植实现。
+// Chatter 是上游聊天传输（Devin/Windsurf Connect-RPC）。P3-B 由 connect 包实现。
 type Chatter interface {
-	// DoChat 非流式聊天。acct 是账号池中的账号标识（邮箱）。
-	DoChat(ctx context.Context, acct string, msg *contract.Message) (*contract.Reply, error)
-	// DoChatStream 流式聊天（SSE 转换后返回 Stream，NodeAddr 可空）。
-	DoChatStream(ctx context.Context, acct string, msg *contract.Message) (*contract.Stream, error)
+	// DoChat 非流式聊天。token 是账号的 windsurf session token。
+	DoChat(ctx context.Context, token string, msg *contract.Message) (*contract.Reply, error)
+	// DoChatStream 流式聊天（返回 OpenAI 兼容 SSE 流）。
+	DoChatStream(ctx context.Context, token string, msg *contract.Message) (*contract.Stream, error)
+}
+
+// ---------------------------------------------------------------------------
+// ConnectChatter：用 connect 包实现的默认 Chatter
+// ---------------------------------------------------------------------------
+
+// NewConnectChatter 构造 Connect-RPC 聊天传输。
+func NewConnectChatter(hc *http.Client) Chatter {
+	return &connectChatter{client: connect.NewClient(hc)}
+}
+
+type connectChatter struct {
+	client *connect.Client
+}
+
+func (c *connectChatter) DoChat(ctx context.Context, token string, msg *contract.Message) (*contract.Reply, error) {
+	res, err := c.client.DoChat(ctx, token, toChatMessages(msg), msg.Model, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	body := fmt.Sprintf(
+		`{"object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":%s},"finish_reason":%s}],"usage":{"prompt_tokens":%d,"completion_tokens":%d}}`,
+		jsonQuote(res.Content), jsonQuote(res.FinishReason), res.PromptTokens, res.CompletionTokens,
+	)
+	return &contract.Reply{Body: []byte(body), Status: http.StatusOK}, nil
+}
+
+func (c *connectChatter) DoChatStream(ctx context.Context, token string, msg *contract.Message) (*contract.Stream, error) {
+	rc, err := c.client.StreamSSE(ctx, token, toChatMessages(msg), msg.Model, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &contract.Stream{ReadCloser: rc, Status: http.StatusOK}, nil
+}
+
+// toChatMessages 把 contract.Message 归一化消息转成上游文本消息。
+func toChatMessages(msg *contract.Message) []connect.ChatMessage {
+	var out []connect.ChatMessage
+	for _, m := range msg.Messages {
+		out = append(out, connect.ChatMessage{Role: m.Role, Content: flattenContent(m.Content)})
+	}
+	if len(out) == 0 {
+		out = append(out, connect.ChatMessage{Role: "user", Content: "hello"})
+	}
+	return out
+}
+
+// flattenContent 把 string / []Part 内容展平为文本（图片降级为占位文本）。
+func flattenContent(c any) string {
+	switch v := c.(type) {
+	case string:
+		return v
+	case []any:
+		var sb strings.Builder
+		for _, part := range v {
+			if pm, ok := part.(map[string]any); ok {
+				if text, ok := pm["text"].(string); ok {
+					sb.WriteString(text)
+				} else if pm["type"] == "image_url" {
+					sb.WriteString("[image]")
+				}
+			}
+		}
+		return sb.String()
+	default:
+		return ""
+	}
+}
+
+func jsonQuote(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
 }
 
 // ---------------------------------------------------------------------------

@@ -12,14 +12,15 @@ import (
 
 // Account 是账号池中的一个账号。
 type Account struct {
-	Email       string    `json:"email"`
-	QuotaDaily  float64   `json:"quota_daily_pct"`  // 0..100；-1 未知
-	QuotaWeekly float64   `json:"quota_weekly_pct"` // 0..100；-1 未知
-	Dry         bool      `json:"dry"`              // 额度耗尽标记
-	Trouble     int       `json:"trouble"`          // 近期故障计数（滚动窗口）
-	CoolUntil   time.Time `json:"cool_until"`       // 冷却截止（防滥用/换号后）
-	CreatedAt   time.Time `json:"created_at"`
-	LastUsedAt  time.Time `json:"last_used_at"`
+	Email                string    `json:"email"`
+	WindsurfSessionToken string    `json:"windsurf_session_token,omitempty"` // Connect-RPC 会话令牌
+	QuotaDaily           float64   `json:"quota_daily_pct"`                  // 0..100；-1 未知
+	QuotaWeekly          float64   `json:"quota_weekly_pct"`                 // 0..100；-1 未知
+	Dry                  bool      `json:"dry"`                              // 额度耗尽标记
+	Trouble              int       `json:"trouble"`                          // 近期故障计数（滚动窗口）
+	CoolUntil            time.Time `json:"cool_until"`                       // 冷却截止（防滥用/换号后）
+	CreatedAt            time.Time `json:"created_at"`
+	LastUsedAt           time.Time `json:"last_used_at"`
 }
 
 // quotaPct 取该账号"实际剩余额度%"（daily/weekly 取小；未知视为 100 乐观值）。
@@ -127,6 +128,18 @@ func (p *Pool) release(email string, now time.Time, exhausted bool) {
 		p.persistLocked()
 		return
 	}
+}
+
+// tokenOf 返回账号的 windsurf session token（无则空）。
+func (p *Pool) tokenOf(email string) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, a := range p.accounts {
+		if a.Email == email {
+			return a.WindsurfSessionToken
+		}
+	}
+	return ""
 }
 
 // touch 标记账号最近使用时间（成功会话后）。
