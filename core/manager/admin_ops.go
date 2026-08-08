@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -455,7 +456,9 @@ func (m *Manager) httpBatchAdd(items []BatchAddHTTPItem, basePort uint16, useNod
 			continue
 		}
 		name := item.Node
-		if !useNodeName || name == "" {
+		if item.Name != nil && *item.Name != "" {
+			name = *item.Name
+		} else if !useNodeName || name == "" {
 			for {
 				name = prefix + "实例" + itoa16(next)
 				next++
@@ -463,12 +466,16 @@ func (m *Manager) httpBatchAdd(items []BatchAddHTTPItem, basePort uint16, useNod
 					break
 				}
 			}
+		} else {
+			// 节点名作实例名：sanitize（Windows 非法字符 → '-'，Rust 语义一致）
+			name = sanitizeInstanceName(item.Node)
 		}
-		if m.hasInstanceName(name) {
-			res.Errors = append(res.Errors, BatchAddErr{Node: item.Node, Error: "实例名已存在"})
-			res.ErrorCount++
-			continue
+		// 名称冲突时自动加后缀（-2、-3…，上限 100；对齐 Rust batch_add）
+		finalName := name
+		for suffix := uint16(2); m.hasInstanceName(finalName) && suffix <= 100; suffix++ {
+			finalName = name + "-" + itoa(suffix)
 		}
+		name = finalName
 		port := basePort
 		if item.Port != nil {
 			port = *item.Port
@@ -504,6 +511,35 @@ func (m *Manager) hasInstanceName(name string) bool {
 // itoa16 小工具（与 itoa 一致）。
 func itoa16(v int) string {
 	return itoa(uint16(v))
+}
+
+// sanitizeInstanceName 节点名 → 安全实例名（Rust sanitize_instance_name 移植）：
+// Windows 非法字符 / \ : * ? " < > | 与控制字符替换为 '-'，去首尾空格/点，
+// 超 40 字符截断，空 → "node"。实例名用于 runtime 目录名，必须文件系统安全。
+func sanitizeInstanceName(node string) string {
+	var b strings.Builder
+	for _, c := range node {
+		switch c {
+		case '/', '\\', ':', '*', '?', '"', '<', '>', '|':
+			b.WriteByte('-')
+		default:
+			if c < 0x20 {
+				b.WriteByte('-')
+			} else {
+				b.WriteRune(c)
+			}
+		}
+	}
+	s := strings.TrimSpace(b.String())
+	s = strings.Trim(s, ".")
+	if s == "" {
+		return "node"
+	}
+	runes := []rune(s)
+	if len(runes) > 40 {
+		return string(runes[:40])
+	}
+	return s
 }
 
 // parsePortQuery 从查询参数读取 port。

@@ -68,8 +68,10 @@ func ResolvePaths(dataDir string) Paths {
 }
 
 // RuntimeDirOf 返回某实例的运行目录（runtime/<name>）。
+// 目录名做文件系统安全化：实例名可能来自节点名（含 | : 等 Windows 非法字符），
+// 直接 join 会在 MkdirAll 时失败（The filename ... syntax is incorrect）。
 func (p Paths) RuntimeDirOf(name string) string {
-	return filepath.Join(p.RuntimeDir, name)
+	return filepath.Join(p.RuntimeDir, sanitizeInstanceName(name))
 }
 
 // prepareRuntimes 确保 runtime 目录存在。
