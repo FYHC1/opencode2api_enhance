@@ -14,6 +14,13 @@ bad request: max_tokens is too large: 393216. This model supports at most
 131072 completion tokens.
 ```
 
+在应用的「日志」菜单里，这类 400 错误显示为：
+
+```
+错误: upstream status 400: <nil>
+token: 输入 0 / 输出 0 · 耗时 -
+```
+
 **报错含义：**
 
 报错字面意思是请求的 `max_tokens`（393216）超过了模型上限（131072），但**这通常不是模型或参数配置的问题**，而是**实例构建/网络环境不对**导致的连锁反应。
