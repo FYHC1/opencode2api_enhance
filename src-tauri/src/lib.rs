@@ -226,12 +226,18 @@ fn spawn_core_manager(data_dir: &std::path::Path) -> std::io::Result<std::proces
         ));
     }
     let cfg_path = data_dir.join("config.json");
-    let child = Command::new(&exe)
-        .args(["-port", "18100", "-password", "sk-unified-local", "-config"])
+    let mut cmd = Command::new(&exe);
+    cmd.args(["-port", "18100", "-password", "sk-unified-local", "-config"])
         .arg(&cfg_path)
         .arg("-log-level")
-        .arg("warn")
-        .spawn()?;
+        .arg("warn");
+    // 隐藏 core 子进程的控制台窗口（与 instance.rs no_window 一致）
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let child = cmd.spawn()?;
 
     // 等待 /health 就绪（最多 ~15s）
     let mut ready = false;

@@ -187,7 +187,7 @@ func registerHTTPRoutes(mux *http.ServeMux, managerInst *manager.Manager) {
 	})
 	// P4-5: 前端静态托管。仓库构建产物 dist/「存在」时托管 SPA（Web 版），否则退回内嵌管理面板。
 	if distDir := frontendDistDir(); distDir != "" {
-		http.Handle("/assets/", http.StripPrefix("/assets/", http.FileServer(http.Dir(filepath.Join(distDir, "assets")))))
+		mux.Handle("/assets/", http.StripPrefix("/assets/", http.FileServer(http.Dir(filepath.Join(distDir, "assets")))))
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			switch r.URL.Path {
 			case "/", "/index.html":
