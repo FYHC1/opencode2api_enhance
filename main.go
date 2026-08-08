@@ -85,6 +85,22 @@ func main() {
 	}
 	// P4: 管理域（实例/统计/日志/配置）并入 core，Web/桌面共用一份实现。
 	managerInst := manager.New("")
+	// P4-3：装配实例/探针接缝（clash 节点解析 + sing-box 配置 + opencode2api 配置生成）。
+	managerInst.SetSeams(&manager.SeamFuncs{
+		ResolveNode: func(name string) (manager.ClashNode, bool) {
+			for _, n := range managerInst.ListNodesWithGroup() {
+				if n.Name == name {
+					return n, true
+				}
+			}
+			return manager.ClashNode{}, false
+		},
+		BuildSingbox: func(node manager.ClashNode, port uint16) ([]byte, error) {
+			return manager.BuildSingboxConfigFor(node, port)
+		},
+		BuildOpenCfg: managerInst.BuildOpenCodeCfgFor,
+		ListNodes:    managerInst.ListNodesWithGroup,
+	})
 	http.HandleFunc("/v1/chat/completions", loggingMiddleware(apiKeyAuthMiddleware(chatCompletionsHandler)))
 	http.HandleFunc("/v1/responses", loggingMiddleware(apiKeyAuthMiddleware(responsesHandler)))
 	http.HandleFunc("/v1/messages", loggingMiddleware(apiKeyAuthMiddleware(claudeMessagesHandler)))
