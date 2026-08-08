@@ -109,11 +109,21 @@ pub fn build_opencode_router_config(
 mod tests {
     use super::*;
 
+    // 与 config 模块共用串行锁：本模块测试会 set OPCODE2API_DATA_DIR，
+    // 而 Config::set()/load() 依赖该进程级 env 变量，需串行避免互相覆盖。
+    fn lock() -> std::sync::MutexGuard<'static, ()> {
+        crate::config::CONFIG_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
     fn test_build_opencode_config() {
+        let _guard = lock();
         // 隔离数据目录：build_opencode_config 会读 Config::load()，
         // 避免受开发者本机 config.json 的 show_node_prefix 设置影响
         let test_dir = std::env::temp_dir().join("opencode2api-cfg-test");
+        let _ = std::fs::remove_dir_all(&test_dir);
         unsafe { std::env::set_var("OPCODE2API_DATA_DIR", &test_dir) };
         let config = build_opencode_config(7890).unwrap();
         let v: serde_json::Value = serde_json::from_str(&config).unwrap();
@@ -128,6 +138,7 @@ mod tests {
 
     #[test]
     fn test_build_opencode_config_different_port() {
+        let _guard = lock();
         let config = build_opencode_config(7892).unwrap();
         let v: serde_json::Value = serde_json::from_str(&config).unwrap();
         assert_eq!(v["active_socks5"], "127.0.0.1:7892");
@@ -135,8 +146,10 @@ mod tests {
 
     #[test]
     fn test_build_opencode_router_config() {
+        let _guard = lock();
         // 隔离数据目录（同 test_build_opencode_config）
         let test_dir = std::env::temp_dir().join("opencode2api-cfg-test");
+        let _ = std::fs::remove_dir_all(&test_dir);
         unsafe { std::env::set_var("OPCODE2API_DATA_DIR", &test_dir) };
         let names = vec![
             (18001u16, "日本1".to_string()),
@@ -158,6 +171,7 @@ mod tests {
 
     #[test]
     fn test_build_opencode_router_config_round_robin() {
+        let _guard = lock();
         let names = vec![
             (18001u16, "a".to_string()),
             (18002u16, "b".to_string()),

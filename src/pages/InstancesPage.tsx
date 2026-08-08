@@ -111,7 +111,7 @@ export default function InstancesPage({
     else setSelected(new Set(filtered.map((i) => i.name)))
   }
 
-// 忙态：optimistic —— 变化触发重渲染；key=实例名，值为该实例正在进行的操作
+  // 忙态：optimistic —— 变化触发重渲染；key=实例名，值为该实例正在进行的操作
   const [pending, setPending] = useState<Record<string, 'start' | 'stop'>>({})
   const [batchBusy, setBatchBusy] = useState(false)
 
@@ -446,7 +446,6 @@ if (kind === 'delete' && !confirm(`确定释放选中的 ${names.length} 个实�
 <p className="text-[13px]">在「节点池」页勾选节点，以「独享」方式批量添加；池成员见「实例池」页</p>
         </div>
       )}
-
 
     </div>
   )

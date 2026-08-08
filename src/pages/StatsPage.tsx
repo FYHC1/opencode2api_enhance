@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useState } from 'react'
 import clsx from 'clsx'
-import { BarChart3, ChevronDown, ChevronRight, RefreshCw, RotateCcw, Inbox } from 'lucide-react'
-import { api, type StatsSummary } from '../lib/api'
+import { BarChart3, ChevronDown, ChevronRight, RefreshCw, RotateCcw, Inbox, HeartPulse, Download } from 'lucide-react'
+import { api, downloadText, type HealthSummary, type StatsSummary } from '../lib/api'
 
 /** 千分位格式化 */
 const fmt = (n: number) => n.toLocaleString('en-US')
@@ -39,6 +39,38 @@ export default function StatsPage({
   const [showResetConfirm, setShowResetConfirm] = useState(false)
   // 「清除已删除节点」默认勾选
   const [clearDeleted, setClearDeleted] = useState(true)
+
+  // 健康巡检状态
+  const [health, setHealth] = useState<HealthSummary | null>(null)
+  const [healthBusy, setHealthBusy] = useState(false)
+
+  const loadHealth = useCallback(async (silent = true) => {
+    try {
+      const h = await api.healthSummary()
+      setHealth(h)
+    } catch (e) {
+      if (!silent) toast(String(e), false)
+    }
+  }, [toast])
+
+  useEffect(() => {
+    void loadHealth()
+    const t = setInterval(() => void loadHealth(true), 15000)
+    return () => clearInterval(t)
+  }, [loadHealth])
+
+  const doHealthCheck = async () => {
+    setHealthBusy(true)
+    try {
+      const h = await api.healthCheck()
+      setHealth(h)
+      toast(`巡检完成：${h.healthy}/${h.total} 个实例健康`, h.unhealthy === 0)
+    } catch (e) {
+      toast(String(e), false)
+    } finally {
+      setHealthBusy(false)
+    }
+  }
 
   const load = useCallback(
     async (silent = true) => {
@@ -94,6 +126,26 @@ export default function StatsPage({
     })
   }
 
+  const doExportCsv = async () => {
+    try {
+      const text = await api.exportCallLogCsv()
+      downloadText(`call-log-${Date.now()}.csv`, text)
+      toast('日志 CSV 已导出', true)
+    } catch (e) {
+      toast(String(e), false)
+    }
+  }
+
+  const doExportJson = async () => {
+    try {
+      const text = await api.exportStatsJson()
+      downloadText(`stats-${Date.now()}.json`, text)
+      toast('统计 JSON 已导出', true)
+    } catch (e) {
+      toast(String(e), false)
+    }
+  }
+
   const instances = stats?.instances ?? []
   const isEmpty = !stats || instances.length === 0
 
@@ -106,6 +158,22 @@ export default function StatsPage({
           Token 统计
         </h1>
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void doExportCsv()}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-zinc-200 text-zinc-700 text-[12px] font-medium hover:bg-zinc-50 transition-colors"
+          >
+            <Download size={13} />
+            导出 CSV
+          </button>
+          <button
+            type="button"
+            onClick={() => void doExportJson()}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-zinc-200 text-zinc-700 text-[12px] font-medium hover:bg-zinc-50 transition-colors"
+          >
+            <Download size={13} />
+            导出 JSON
+          </button>
           <button
             type="button"
             onClick={() => setShowResetConfirm(true)}
@@ -132,6 +200,90 @@ export default function StatsPage({
         <Card label="总输入 Token" value={fmt(stats?.total_prompt_tokens ?? 0)} />
         <Card label="总输出 Token" value={fmt(stats?.total_completion_tokens ?? 0)} />
         <Card label="总 Token" value={fmt(stats?.total_tokens ?? 0)} accent />
+      </div>
+
+      {/* 健康巡检卡片 */}
+      <div className="bg-white rounded-[16px] border border-zinc-200 shadow-sm p-5">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-[14px] font-semibold text-zinc-900 flex items-center gap-2">
+            <HeartPulse size={16} className="text-teal-700" />
+            健康巡检
+          </h2>
+          <button
+            type="button"
+            onClick={() => void doHealthCheck()}
+            disabled={healthBusy}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-900 text-white text-[12px] font-medium hover:bg-zinc-700 transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <RefreshCw size={13} className={healthBusy ? 'animate-spin' : ''} />
+            立即巡检
+          </button>
+        </div>
+
+        {health && health.total > 0 ? (
+          <>
+            <div className="flex flex-wrap gap-4 mb-3">
+              <div className="flex items-center gap-2 text-[13px]">
+                <span className="text-zinc-500">实例总数</span>
+                <span className="font-semibold text-zinc-900">{health.total}</span>
+              </div>
+              <div className="flex items-center gap-2 text-[13px]">
+                <span className="inline-block w-2 h-2 rounded-full bg-green-500" />
+                <span className="text-zinc-500">健康</span>
+                <span className="font-semibold text-green-700">{health.healthy}</span>
+              </div>
+              <div className="flex items-center gap-2 text-[13px]">
+                <span className="inline-block w-2 h-2 rounded-full bg-red-500" />
+                <span className="text-zinc-500">异常</span>
+                <span className="font-semibold text-red-600">{health.unhealthy}</span>
+              </div>
+            </div>
+            <table className="w-full text-[13px]">
+              <thead>
+                <tr className="text-left text-[12px] text-zinc-500 border-b border-zinc-100">
+                  <th className="py-2 pr-3 font-medium">实例</th>
+                  <th className="py-2 pr-3 font-medium">状态</th>
+                  <th className="py-2 pr-3 font-medium text-right">连续失败</th>
+                  <th className="py-2 font-medium">最近检查 / 错误</th>
+                </tr>
+              </thead>
+              <tbody>
+                {health.records.map((r) => (
+                  <tr key={r.name} className="border-b border-zinc-50">
+                    <td className="py-2 pr-3 font-medium text-zinc-800">{r.name}</td>
+                    <td className="py-2 pr-3">
+                      <span
+                        className={clsx(
+                          'inline-flex px-2 py-0.5 rounded-md text-[11px] font-medium',
+                          r.healthy ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-600',
+                        )}
+                      >
+                        {r.healthy ? '健康' : '异常'}
+                      </span>
+                    </td>
+                    <td className="py-2 pr-3 text-right tabular-nums text-zinc-600">{r.consecutive_failures}</td>
+                    <td className="py-2 text-zinc-500">
+                      <span className="tabular-nums">
+                        {r.last_check_ts ? new Date(r.last_check_ts * 1000).toLocaleTimeString() : '—'}
+                      </span>
+                      {r.last_error && <span className="text-red-500"> · {r.last_error}</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="mt-3 text-[11px] text-zinc-400">
+              每 15 秒自动刷新 · 连续失败达到「设置-健康巡检」阈值时自动重启实例
+            </div>
+          </>
+        ) : (
+          <div className="py-6 flex flex-col items-center gap-2 text-zinc-400">
+            <HeartPulse size={24} strokeWidth={1.5} />
+            <span className="text-[13px]">
+              暂无运行中的实例。启动实例后点击「立即巡检」查看健康状态
+            </span>
+          </div>
+        )}
       </div>
 
       {error && !stats && (

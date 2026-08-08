@@ -337,6 +337,22 @@ pub fn list_nodes_with_group() -> Result<Vec<ClashNode>> {
                 }
             }
         }
+
+    // 订阅缓存节点（subscribe.rs 持久化的 Clash YAML / base64 订阅节点），
+    // group 统一标记为「订阅」；实例启动同样经本函数查找节点配置，因此
+    // 订阅导入的实例在启动时能正常找到节点生成 sing-box 配置。
+    for mut node in crate::subscribe::load_subscription_cache()
+        .into_iter()
+        .map(|n| crate::subscribe::to_clash_node(&n))
+    {
+        if is_junk_node(&node.name) {
+            continue;
+        }
+        node.group = "订阅".to_string();
+        if seen.insert(node.name.clone()) {
+            nodes.push(node);
+        }
+    }
     nodes.sort_by(|a, b| a.group.cmp(&b.group).then(a.name.cmp(&b.name)));
     Ok(nodes)
 }

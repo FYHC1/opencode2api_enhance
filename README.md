@@ -39,6 +39,12 @@ UI 参照 Windsurf Account Manager 的浅色官网风格：Tauri 2 无边框窗�
 3. **节点扫描**页 →「一键扫描全部」→ 勾选可用 →「添加选中为实例」
 4. **实例**页 →「启动」→ 用 `http://127.0.0.1:{实例端口}/v1` 作为 API 地址
 
+## Linux / Headless 部署
+
+- **Headless（无图形界面 / 服务器）**：`opencode2api serve --port 19090`，默认仅监听 `127.0.0.1` 并托管前端 `dist/`，纯浏览器完成全部管理；局域网/公网访问需显式 `--bind 0.0.0.0`（管理 API 无鉴权，务必配合 systemd + 反向代理限制来源），见 [部署文档](docs/DEPLOYMENT.md)。
+- **桌面（Linux）**：安装 .deb / AppImage 即可；桌面模式内置本地 HTTP 服务（`127.0.0.1:19090`），前端经它取数，行为与 Windows 版一致。
+- 数据目录与配置：`OPCODE2API_DATA_DIR` 隔离数据；`OPCODE2API_HTTP_PORT` 覆盖管理端口；`config.json` 支持网关端口/密钥、订阅、健康巡检、日志过滤等配置项。
+
 ## 轻量化原则
 
 本项目保持轻量、克制的设计取向：
@@ -57,9 +63,11 @@ UI 参照 Windsurf Account Manager 的浅色官网风格：Tauri 2 无边框窗�
 
 ```bash
 npm install
-npm run tauri:build -- --no-bundle   # 产出 src-tauri/target/release/opencode2api.exe（含内嵌子程序）
+bash scripts/build-windows.sh        # WSL 构建 dist，Windows 直接构建 MSVC exe
 bash scripts/make-portable.sh        # 组装 dist/opencode2api-manager-<ver>-portable.zip
 ```
+
+`scripts/build-windows.sh` 是跨 WSL/Windows 的推荐构建入口：前端在 WSL 侧构建，避免 Windows 侧 Vite 配置解析问题；Rust/Tauri 二进制在 Windows 侧直接运行 `build-win.bat` 构建。Windows 产物位于 `src-tauri/target-win-direct/x86_64-pc-windows-msvc/release/opencode2api.exe`。`build-win.bat` 可以单独从 Windows CMD 直接运行；`schtasks` 仅适用于需要后台运行长构建的场景，不是必需步骤。
 
 ### 内嵌二进制（bin/）
 

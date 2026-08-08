@@ -1,5 +1,39 @@
 # Changelog
 
+## v1.3.0（2026-08-09）
+
+### 🎉 特别致谢
+
+- **感谢 [FYHC1](https://github.com/FYHC1)**：v1.3.0 的核心贡献者——完整实现了 **Linux / Headless 支持**（`serve` 子命令、systemd 服务、跨 WSL/Windows 构建）、**浏览器 WebUI**（桌面与 headless 共用 axum HTTP 层）、**前端嵌入 exe**（单文件自包含，无需 dist 伴行）、**订阅拉取与批量导入**、**健康巡检自动重启**、**报表导出**、**配置化**（网关端口/密钥、HTTP 端口）等一系列能力，是本版本 Linux/WebUI 架构的基石。
+- **感谢 [Sujinxin123](https://github.com/Sujinxin123)**：v1.0.0「统一网关、免费额度实测健康检查、代理池健康检查、配置热更新、模型必填、同模型重试、批量并行启停」等核心能力均移植自该项目。
+- **感谢 [6Kmfi6HP](https://github.com/6Kmfi6HP)**：Go 代理核心（OpenAI/Anthropic/Responses 协议转换）的开源贡献。
+- 感谢所有贡献者与使用者的反馈与支持。
+
+### 🚀 新功能（Linux / Headless）
+
+- **Linux 桌面**：支持 .deb / AppImage 安装包
+- **Headless 模式**：`opencode2api serve --port 19090` 纯浏览器管理，systemd 一键部署
+- **WebUI**：桌面与 headless 共用本地 HTTP 服务（`127.0.0.1:19090`），浏览器可完整管理
+- **前端嵌入 exe**：单文件自包含，无需磁盘 `dist/` 伴行
+- **订阅拉取与批量导入**（Clash YAML / base64 / v2ray），支持后台自动拉取
+- **健康巡检**：周期 TCP 探测 + 失败自动重启 + `health.json` 持久化
+
+### 🚀 新功能（通用）
+
+- **节点池重设计**：扫描结果弹窗一键「入实例池 / 设为独享」，自动去重
+- **并行扫描提速**（默认 8 并发，可调）
+- **日志分析**：时段分析、节点分析视图（纯 CSS 条形图）、按天筛选、一键清空
+- **重置 Token 统计**（二次确认，可清除已删除节点历史）
+- **报表导出**：日志 CSV / 实例 JSON / 统计 JSON
+- **配置化**：`config.json` 支持网关端口/密钥（热生效）、HTTP 端口、订阅、巡检、日志过滤
+- **自定义统一网关密钥**（校验 + 热生效 + 前端更换交互）
+
+### 优化
+
+- 架构重构：`AppCore` 纯逻辑核心，桌面 command 与 headless HTTP 完全同源
+- 修复 release 版误加载 devUrl 导致 localhost 拒绝连接的问题
+- 非 Windows 平台 autostart 修复
+
 ## v1.2.0（2026-08-08）
 
 ### 新增

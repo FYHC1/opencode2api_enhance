@@ -27,7 +27,6 @@ pub const DEFAULT_PROBE_SOCKS_PORT: u16 = 29090;
 /// 并发扫描最大 worker 数（默认上限；实际并发 = min(节点数, 请求并发, 可用端口对数)）
 const MAX_SCAN_CONCURRENCY: usize = 8;
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScanStatus {
@@ -151,7 +150,7 @@ impl ScanController {
         }
 
         {
-            let mut g = self.progress.lock().unwrap();
+            let mut g = self.progress.lock().map_err(|_| anyhow::anyhow!("扫描状态锁失败"))?;
             *g = ScanProgress {
                 status: ScanStatus::Running,
                 total: nodes.len(),
@@ -246,7 +245,9 @@ fn load_nodes_for_scan(filter: Option<Vec<String>>) -> Result<Vec<ClashNode>> {
 
 struct ProbeProcs {
     singbox: Option<Child>,
+    singbox_port: Option<u16>,
     opencode: Option<Child>,
+    opencode_port: Option<u16>,
 }
 
 impl Drop for ProbeProcs {
@@ -269,6 +270,18 @@ impl ProbeProcs {
             let _ = c.wait();
             let _ = kill_process(pid);
         }
+        // 两个 worker 专用端口在下一个节点会复用：kill 后须等端口真正释放，
+        // 否则下一节点 probe 的 ensure_port_available 失败 → "探测 API 进程启动失败"。
+        // 本方法在每节点计时（ Instant::now()，见 probe_one_node_parallel）之外执行，
+        // 等待不消耗 HTTP 探测预算，与 POST 探测自然解耦。
+        if let Some(p) = self.singbox_port {
+            wait_port_released(p, Duration::from_secs(3));
+        }
+        if let Some(p) = self.opencode_port {
+            wait_port_released(p, Duration::from_secs(3));
+        }
+        self.singbox_port = None;
+        self.opencode_port = None;
     }
 
     fn kill_singbox_only(&mut self) {
@@ -278,8 +291,14 @@ impl ProbeProcs {
             let _ = c.wait();
             let _ = kill_process(pid);
         }
-        // 给端口释放一点时间
-        thread::sleep(Duration::from_millis(300));
+        let port = self.singbox_port.take();
+        // 轮询等待旧进程释放所占端口，避免下一个节点立即复用被占用端口而误报启动失败。
+        // 窗口要给足：过短会因端口未释放导致 ensure_port_available 失败（"探测 API 进程启动失败"）。
+        // 此等待与 HTTP 探测预算解耦——预算由 probe 函数内独立的下限（见 http_timeout）兜底，
+        // 二者不再互相压缩。
+        if let Some(p) = port {
+            wait_port_released(p, Duration::from_secs(3));
+        }
     }
 
     fn kill_opencode_only(&mut self) {
@@ -289,10 +308,29 @@ impl ProbeProcs {
             let _ = c.wait();
             let _ = kill_process(pid);
         }
-        thread::sleep(Duration::from_millis(200));
+        let port = self.opencode_port.take();
+        // API 端口复用时同样给足释放窗口，避免下次探测 ensure_port_available 失败
+        if let Some(p) = port {
+            wait_port_released(p, Duration::from_secs(3));
+        }
     }
 }
 
+/// 轮询等待本地端口真正释放（用于进程被杀后复用同一端口）。
+/// 相比固定 sleep，能消除短时占用误报，且不影响真实占用时的最大等待。
+fn wait_port_released(port: u16, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    // 首检查一次即可快速返回（进程可能根本没在监听）
+    loop {
+        if instance::is_port_free(port) {
+            return;
+        }
+        if Instant::now() >= deadline {
+            return;
+        }
+        thread::sleep(Duration::from_millis(80));
+    }
+}
 
 fn resolve_bin(dir: &Path, name: &str) -> Result<PathBuf> {
     let exe = dir.join(format!("{}.exe", name));
@@ -368,6 +406,7 @@ fn start_probe_opencode(
         .stderr(Stdio::from(oc_err))
         .spawn()
         .context("启动探测 opencode2api 失败")?;
+    procs.opencode_port = Some(api_port);
     procs.opencode = Some(child);
     if !instance::wait_for_port(api_port, Duration::from_secs(15)) {
         procs.kill_opencode_only();
@@ -429,7 +468,9 @@ fn run_scan_loop_parallel(
 
                     let mut procs = ProbeProcs {
                         singbox: None,
+                        singbox_port: None,
                         opencode: None,
+                        opencode_port: None,
                     };
                     let result = probe_one_node_parallel(
                         &mut procs,
@@ -496,7 +537,9 @@ fn run_scan_loop(
 
     let mut procs = ProbeProcs {
         singbox: None,
+        singbox_port: None,
         opencode: None,
+        opencode_port: None,
     };
 
     for (i, node) in nodes.iter().enumerate() {
@@ -546,20 +589,21 @@ fn probe_one_node(
     per_node_timeout: Duration,
 ) -> ProbeResult {
     let start = Instant::now();
-    let base = |ok: bool, category: &str, message: String, status: Option<u16>, models: Option<usize>| {
-        ProbeResult {
-            node: node.name.clone(),
-            node_type: node.node_type.clone(),
-            server: node.server.clone(),
-            port: node.port,
-            ok,
-            category: category.to_string(),
-            status_code: status,
-            model_count: models,
-            message,
-            latency_ms: start.elapsed().as_millis() as u64,
-        }
-    };
+    let base =
+        |ok: bool, category: &str, message: String, status: Option<u16>, models: Option<usize>| {
+            ProbeResult {
+                node: node.name.clone(),
+                node_type: node.node_type.clone(),
+                server: node.server.clone(),
+                port: node.port,
+                ok,
+                category: category.to_string(),
+                status_code: status,
+                model_count: models,
+                message,
+                latency_ms: start.elapsed().as_millis() as u64,
+            }
+        };
 
     // 生成 sing-box 配置
     let cfg = match singbox::build_singbox_config(node, socks_port) {
@@ -585,7 +629,7 @@ fn probe_one_node(
         Err(e) => return base(false, "other", format!("日志文件失败: {}", e), None, None),
     };
 
-let child = match no_window(&mut Command::new(singbox_bin))
+    let child = match no_window(&mut Command::new(singbox_bin))
         .args(["run", "-c"])
         .arg(&cfg_path)
         .stdout(Stdio::from(sb_out))
@@ -594,9 +638,16 @@ let child = match no_window(&mut Command::new(singbox_bin))
     {
         Ok(c) => c,
         Err(e) => {
-            return base(false, "other", format!("启动 sing-box 失败: {}", e), None, None);
+            return base(
+                false,
+                "other",
+                format!("启动 sing-box 失败: {}", e),
+                None,
+                None,
+            );
         }
     };
+    procs.singbox_port = Some(socks_port);
     procs.singbox = Some(child);
 
     let socks_wait = Duration::from_secs(8).min(per_node_timeout);
@@ -695,7 +746,9 @@ let child = match no_window(&mut Command::new(singbox_bin))
     }
 
     let remain = per_node_timeout.saturating_sub(start.elapsed());
-    let http_timeout = remain.max(Duration::from_secs(2)).min(Duration::from_secs(12));
+    let http_timeout = remain
+        .max(Duration::from_secs(4))
+        .min(Duration::from_secs(12));
 
     match instance::probe_free_completion_response(api_port, Some(password), http_timeout) {
         Ok((status, body)) => {
@@ -755,20 +808,21 @@ fn probe_one_node_parallel(
     password: &str,
 ) -> ProbeResult {
     let start = Instant::now();
-    let base = |ok: bool, category: &str, message: String, status: Option<u16>, models: Option<usize>| {
-        ProbeResult {
-            node: node.name.clone(),
-            node_type: node.node_type.clone(),
-            server: node.server.clone(),
-            port: node.port,
-            ok,
-            category: category.to_string(),
-            status_code: status,
-            model_count: models,
-            message,
-            latency_ms: start.elapsed().as_millis() as u64,
-        }
-    };
+    let base =
+        |ok: bool, category: &str, message: String, status: Option<u16>, models: Option<usize>| {
+            ProbeResult {
+                node: node.name.clone(),
+                node_type: node.node_type.clone(),
+                server: node.server.clone(),
+                port: node.port,
+                ok,
+                category: category.to_string(),
+                status_code: status,
+                model_count: models,
+                message,
+                latency_ms: start.elapsed().as_millis() as u64,
+            }
+        };
 
     // 生成 sing-box 配置
     let cfg = match singbox::build_singbox_config(node, socks_port) {
@@ -812,17 +866,30 @@ fn probe_one_node_parallel(
     {
         Ok(c) => c,
         Err(e) => {
-            return base(false, "other", format!("启动 sing-box 失败: {}", e), None, None);
+            return base(
+                false,
+                "other",
+                format!("启动 sing-box 失败: {}", e),
+                None,
+                None,
+            );
         }
     };
+    procs.singbox_port = Some(socks_port);
     procs.singbox = Some(child);
 
     let socks_wait = Duration::from_secs(8).min(per_node_timeout);
     if !instance::wait_for_port(socks_port, socks_wait) {
         // 读一下 err 日志给提示
-        let hint = fs::read_to_string(log_dir.join("singbox.err.log"))
-            .unwrap_or_default();
-        let hint = hint.chars().rev().take(300).collect::<String>().chars().rev().collect::<String>();
+        let hint = fs::read_to_string(log_dir.join("singbox.err.log")).unwrap_or_default();
+        let hint = hint
+            .chars()
+            .rev()
+            .take(300)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect::<String>();
         let cat = if hint.to_lowercase().contains("tls")
             || hint.contains("certificate")
             || hint.contains("handshake")
@@ -852,8 +919,7 @@ fn probe_one_node_parallel(
     thread::sleep(Duration::from_millis(400));
 
     // 并行 worker 各自启动独立 opencode（绑定本 worker 专属端口）
-    if let Err(e) = start_probe_opencode(procs, oc_bin, oc_cfg_path, log_dir, api_port, password)
-    {
+    if let Err(e) = start_probe_opencode(procs, oc_bin, oc_cfg_path, log_dir, api_port, password) {
         return base(
             false,
             "local",
@@ -864,7 +930,9 @@ fn probe_one_node_parallel(
     }
 
     let remain = per_node_timeout.saturating_sub(start.elapsed());
-    let http_timeout = remain.max(Duration::from_secs(2)).min(Duration::from_secs(12));
+    let http_timeout = remain
+        .max(Duration::from_secs(4))
+        .min(Duration::from_secs(12));
 
     // F2: 免费额度实测——先取模型目录，再发 1 token 最小请求，能出 choices 才算可用
     match instance::probe_free_completion_response(api_port, Some(password), http_timeout) {
@@ -909,8 +977,6 @@ fn probe_one_node_parallel(
         }
     }
 }
-
-
 
 fn count_models(body: &str) -> Option<usize> {
     let v: serde_json::Value = serde_json::from_str(body).ok()?;
@@ -985,7 +1051,9 @@ pub fn scan_nodes_sync(
 
     let mut procs = ProbeProcs {
         singbox: None,
+        singbox_port: None,
         opencode: None,
+        opencode_port: None,
     };
 
     let timeout = Duration::from_secs(per_node_timeout_secs.max(3));
@@ -994,7 +1062,7 @@ pub fn scan_nodes_sync(
             break;
         }
         {
-            let mut g = progress_cb.lock().unwrap();
+            let mut g = progress_cb.lock().map_err(|_| anyhow::anyhow!("扫描状态锁失败"))?;
             g.current = i + 1;
             g.current_node = Some(node.name.clone());
             on_progress(&g.snapshot());
@@ -1015,7 +1083,7 @@ pub fn scan_nodes_sync(
         );
 
         {
-            let mut g = progress_cb.lock().unwrap();
+            let mut g = progress_cb.lock().map_err(|_| anyhow::anyhow!("扫描状态锁失败"))?;
             g.results.push(result);
             on_progress(&g.snapshot());
         }
@@ -1023,7 +1091,7 @@ pub fn scan_nodes_sync(
 
     procs.kill_all();
 
-    let mut g = progress.lock().unwrap();
+    let mut g = progress.lock().map_err(|_| anyhow::anyhow!("扫描状态锁失败"))?;
     g.status = ScanStatus::Done;
     g.finished_ms = Some(now_ms());
     g.current_node = None;
@@ -1054,7 +1122,9 @@ mod tests {
     fn test_kill_opencode_only_preserves_singbox() {
         let mut procs = ProbeProcs {
             singbox: Some(spawn_sleeper()),
+            singbox_port: None,
             opencode: Some(spawn_sleeper()),
+            opencode_port: None,
         };
         procs.kill_opencode_only();
         assert!(procs.opencode.is_none());
@@ -1072,5 +1142,36 @@ mod tests {
             .stderr(Stdio::null())
             .spawn()
             .expect("spawn sleeper")
+    }
+
+    #[test]
+    fn wait_port_released_returns_when_free() {
+        // 绑定一个端口，另起线程在 300ms 后释放，验证轮询在超时前返回
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handle = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            drop(listener);
+        });
+        let started = Instant::now();
+        wait_port_released(port, Duration::from_secs(3));
+        let elapsed = started.elapsed();
+        handle.join().unwrap();
+        assert!(
+            elapsed < Duration::from_secs(3),
+            "应在端口释放后立即返回，实际等了 {:?}",
+            elapsed
+        );
+    }
+
+    #[test]
+    fn wait_port_released_returns_fast_when_free() {
+        // 端口本就空闲时首次检查即返回，不应有任何轮询延迟
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let started = Instant::now();
+        wait_port_released(port, Duration::from_secs(3));
+        assert!(started.elapsed() < Duration::from_millis(200));
     }
 }

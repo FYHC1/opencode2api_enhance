@@ -1,3 +1,4 @@
+use crate::config::Config;
 use crate::instance::{Instance, InstanceStatus, no_window};
 use crate::opencode_cfg;
 use anyhow::{Context, Result};
@@ -11,13 +12,12 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-/// 统一网关端口：debug 构建（tauri dev）用 21080 段（与 main 18080、web 22080 隔离），release 构建用生产 18080
+/// 统一网关端口回退默认：debug 构建（tauri dev）用 21080 段（与 main 18080、web 22080 隔离），
+/// release 构建用生产 18080。实际生效端口优先取 config.gateway_port（Config::effective_gateway_port）。
 #[cfg(debug_assertions)]
 pub const UNIFIED_GATEWAY_PORT: u16 = 21080;
 #[cfg(not(debug_assertions))]
 pub const UNIFIED_GATEWAY_PORT: u16 = 18080;
-pub(crate) const UNIFIED_GATEWAY_KEY: &str = "sk-unified-local";
-
 #[derive(Debug, Clone, Serialize)]
 pub struct GatewayStatus {
     pub running: bool,
@@ -48,6 +48,7 @@ pub struct GatewayManager {
     runtime_dir: PathBuf,
     config_path: PathBuf,
     password: String,
+    port: u16,
     child: Option<Child>,
     ports: Vec<u16>,
     route_mode: String,
@@ -62,7 +63,8 @@ impl GatewayManager {
             binary_dir,
             runtime_dir,
             config_path: gateway_dir.join("opencode2api.json"),
-            password: UNIFIED_GATEWAY_KEY.to_string(),
+            password: Config::effective_gateway_key(),
+            port: Config::effective_gateway_port(),
             child: None,
             ports: Vec::new(),
             route_mode: "smart".to_string(),
@@ -137,7 +139,7 @@ impl GatewayManager {
             // 不设置则落到应用 exe 目录，统计界面（只扫 runtime/）读不到。
             .current_dir(self.gateway_dir())
             .arg("-port")
-            .arg(UNIFIED_GATEWAY_PORT.to_string())
+            .arg(self.port.to_string())
             .arg("-config")
             .arg(&self.config_path)
             .arg("-password")
@@ -174,8 +176,9 @@ impl GatewayManager {
         catalog.error = None;
         let target = Arc::clone(&self.model_catalog);
         let password = self.password.clone();
+        let port = self.port;
         thread::spawn(move || {
-            let result = fetch_gateway_models(UNIFIED_GATEWAY_PORT, &password);
+            let result = fetch_gateway_models(port, &password);
             if let Ok(mut catalog) = target.lock() {
                 catalog.loading = false;
                 match result {
@@ -195,11 +198,13 @@ impl GatewayManager {
     /// 同步网关：只把「运行中且已入池（join_gateway=true）」的实例加入池。
     /// 未入池实例保持独享访问，不受网关影响。
     pub fn sync(&mut self, instances: &[Instance]) -> Result<()> {
+        // 每次同步都重读生效密钥/端口：config_set 改 gateway_key/gateway_port 后
+        // 走 stop()+sync() 重建网关，此处刷新才能让新值真正传给 Go 进程并反映到 status()。
+        self.password = Config::effective_gateway_key();
+        self.port = Config::effective_gateway_port();
         let members: Vec<&Instance> = instances
             .iter()
-            .filter(|instance| {
-                instance.status == InstanceStatus::Running && instance.join_gateway
-            })
+            .filter(|instance| instance.status == InstanceStatus::Running && instance.join_gateway)
             .collect();
         let ports: Vec<u16> = members.iter().map(|i| i.singbox_port).collect();
         // 端口 → 实例名映射（供流式前缀显示「🤖 实例名 · 模型」）
@@ -289,8 +294,8 @@ impl GatewayManager {
         };
         GatewayStatus {
             running,
-            address: format!("http://127.0.0.1:{}/v1", UNIFIED_GATEWAY_PORT),
-            port: UNIFIED_GATEWAY_PORT,
+            address: format!("http://127.0.0.1:{}/v1", self.port),
+            port: self.port,
             api_key: self.password.clone(),
             running_instances: self.ports.len(),
             total_instances,

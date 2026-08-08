@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import clsx from 'clsx'
 import { api } from '../lib/api'
 import type { ConfigView, BinariesInfo } from '../lib/api'
 
@@ -24,6 +25,25 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
   // 节点前缀展示开关（默认关闭）
   const [showNodePrefix, setShowNodePrefix] = useState(false)
 
+  // 网关与端口表单
+  const [gatewayPort, setGatewayPort] = useState('')
+  const [gatewayKey, setGatewayKey] = useState('')
+  const [httpPort, setHttpPort] = useState('')
+
+  // 订阅表单
+  const [subscribeUrl, setSubscribeUrl] = useState('')
+  const [subscribeIntervalMin, setSubscribeIntervalMin] = useState(0)
+  // 一键拉取目标：独享 / 进池
+  const [subscribeTarget, setSubscribeTarget] = useState<'solo' | 'pool'>('solo')
+  const [subscribeBusy, setSubscribeBusy] = useState(false)
+
+  // 健康巡检表单
+  const [healthCheckIntervalSec, setHealthCheckIntervalSec] = useState(0)
+  const [healthRestartThreshold, setHealthRestartThreshold] = useState(3)
+
+  // 日志过滤关键词
+  const [logFilterKeywords, setLogFilterKeywords] = useState('')
+
 
   useEffect(() => {
     const loadData = async () => {
@@ -47,6 +67,13 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
           call_log_max: cfg.call_log_max,
         })
         setShowNodePrefix(cfg.show_node_prefix)
+        setGatewayPort(String(cfg.gateway_port))
+        setHttpPort(String(cfg.http_port))
+        setSubscribeUrl(cfg.subscribe_url)
+        setSubscribeIntervalMin(cfg.subscribe_interval_min)
+        setHealthCheckIntervalSec(cfg.health_check_interval_sec)
+        setHealthRestartThreshold(cfg.health_restart_threshold)
+        setLogFilterKeywords(cfg.log_filter_keywords)
       } catch (e) {
         console.error('加载设置失败', e)
         toast('加载设置失败', false)
@@ -123,6 +150,103 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
     } catch (e) {
       console.error('设置节点前缀失败', e)
       toast('设置失败', false)
+    }
+  }
+
+  const handleSaveGateway = async () => {
+    try {
+      if (gatewayPort.trim() && (Number(gatewayPort) < 1 || Number(gatewayPort) > 65535)) {
+        toast('网关端口需在 1-65535 之间', false)
+        return
+      }
+      await api.configSet('gateway_port', gatewayPort.trim())
+      if (gatewayKey.trim()) {
+        await api.configSet('gateway_key', gatewayKey.trim())
+      }
+      if (httpPort.trim() && (Number(httpPort) < 1 || Number(httpPort) > 65535)) {
+        toast('HTTP 端口需在 1-65535 之间', false)
+        return
+      }
+      await api.configSet('http_port', httpPort.trim())
+      const cfg = await api.configGet()
+      setConfig(cfg)
+      setGatewayPort(String(cfg.gateway_port))
+      setHttpPort(String(cfg.http_port))
+      setGatewayKey('')
+      toast('网关配置已保存并生效', true)
+    } catch (e) {
+      console.error('保存网关配置失败', e)
+      toast('保存失败', false)
+    }
+  }
+
+  const handleResetGatewayKey = async () => {
+    if (!window.confirm('确定要重置网关密钥为默认值吗？已配置此密钥的上游客户端需同步更新。')) return
+    try {
+      await api.configSet('gateway_key', '')
+      const cfg = await api.configGet()
+      setConfig(cfg)
+      toast('网关密钥已重置为默认', true)
+    } catch (e) {
+      console.error('重置网关密钥失败', e)
+      toast('重置失败', false)
+    }
+  }
+
+  const handleSaveSubscribe = async () => {
+    if (subscribeIntervalMin < 0) {
+      toast('拉取间隔不能为负数', false)
+      return
+    }
+    try {
+      await api.configSet('subscribe_url', subscribeUrl.trim())
+      await api.configSet('subscribe_interval_min', String(Math.floor(subscribeIntervalMin)))
+      toast('订阅配置已保存', true)
+    } catch (e) {
+      console.error('保存订阅配置失败', e)
+      toast('保存失败', false)
+    }
+  }
+
+  const handleSubscribeImport = async () => {
+    if (!subscribeUrl.trim()) {
+      toast('请先填写订阅 URL', false)
+      return
+    }
+    setSubscribeBusy(true)
+    try {
+      const n = await api.subscribeImport(subscribeUrl.trim(), subscribeTarget === 'pool')
+      toast(`订阅拉取成功：批量导入 ${n} 个实例（${subscribeTarget === 'pool' ? '已入池' : '独享'}）`, true)
+    } catch (e) {
+      console.error('订阅导入失败', e)
+      toast(String(e), false)
+    } finally {
+      setSubscribeBusy(false)
+    }
+  }
+
+  const handleSaveHealth = async () => {
+    if (healthCheckIntervalSec < 0 || healthRestartThreshold < 1) {
+      toast('巡检间隔不能为负，重启阈值至少为 1', false)
+      return
+    }
+    try {
+      await api.configSet('health_check_interval_sec', String(Math.floor(healthCheckIntervalSec)))
+      await api.configSet('health_restart_threshold', String(Math.floor(healthRestartThreshold)))
+      toast('健康巡检配置已保存', true)
+    } catch (e) {
+      console.error('保存巡检配置失败', e)
+      toast('保存失败', false)
+    }
+  }
+
+  const handleSaveLogFilter = async () => {
+    try {
+      await api.configSet('log_filter_keywords', logFilterKeywords.trim())
+      toast('日志过滤已保存', true)
+    } catch (e) {
+      console.error('保存日志过滤失败', e)
+      toast('保存失败', false)
     }
   }
 
@@ -307,6 +431,205 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
           className="bg-zinc-900 text-white rounded-lg px-4 py-2 hover:bg-zinc-700"
         >
           保存超时配置
+        </button>
+      </div>
+
+      {/* 网关与端口 */}
+      <div className="bg-white rounded-2xl border p-5 space-y-4">
+        <h2 className="text-lg font-medium text-zinc-900">网关与端口</h2>
+        <p className="text-zinc-500 text-xs">
+          修改网关端口/密钥会立即重建网关进程；HTTP 端口为 headless 模式监听端口，修改后重启管理器生效
+        </p>
+
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-zinc-700">统一网关端口</label>
+          <input
+            type="number"
+            min={1}
+            max={65535}
+            value={gatewayPort}
+            onChange={(e) => setGatewayPort(e.target.value)}
+            className="w-28 px-3 py-2 border rounded-lg"
+          />
+          <p className="text-zinc-500 text-xs">留空恢复默认。当前生效值：{gatewayPort || '默认'}</p>
+        </div>
+
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-zinc-700">网关 API 密钥</label>
+          <input
+            type="password"
+            placeholder={config.has_gateway_key ? '留空则不修改' : '至少 8 个字符'}
+            value={gatewayKey}
+            onChange={(e) => setGatewayKey(e.target.value)}
+            className="w-full px-3 py-2 border rounded-lg"
+          />
+          {config.has_gateway_key && (
+            <div className="flex items-center space-x-3">
+              <p className="text-zinc-500 text-xs">已配置自定义密钥</p>
+              <button
+                onClick={handleResetGatewayKey}
+                className="text-xs text-red-600 hover:underline"
+              >
+                重置为默认
+              </button>
+            </div>
+          )}
+          <p className="text-zinc-500 text-xs">留空则不修改；自定义后上游需带 X-API-Key 访问网关</p>
+        </div>
+
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-zinc-700">管理器 HTTP 端口</label>
+          <input
+            type="number"
+            min={1}
+            max={65535}
+            value={httpPort}
+            onChange={(e) => setHttpPort(e.target.value)}
+            className="w-28 px-3 py-2 border rounded-lg"
+          />
+          <p className="text-zinc-500 text-xs">headless（serve）模式监听端口；留空恢复默认。桌面模式固定 127.0.0.1:19090</p>
+        </div>
+
+        <button
+          onClick={handleSaveGateway}
+          className="bg-zinc-900 text-white rounded-lg px-4 py-2 hover:bg-zinc-700"
+        >
+          保存网关配置
+        </button>
+      </div>
+
+      {/* 订阅拉取 */}
+      <div className="bg-white rounded-2xl border p-5 space-y-4">
+        <h2 className="text-lg font-medium text-zinc-900">订阅拉取</h2>
+        <p className="text-zinc-500 text-xs">从 Clash 订阅链接拉取节点并批量导入为实例</p>
+
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-zinc-700">订阅 URL</label>
+          <input
+            type="text"
+            placeholder="https://example.com/subscribe"
+            value={subscribeUrl}
+            onChange={(e) => setSubscribeUrl(e.target.value)}
+            className="w-full px-3 py-2 border rounded-lg"
+          />
+          <p className="text-zinc-500 text-xs">留空则不自动拉取</p>
+        </div>
+
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-zinc-700">自动拉取间隔（分钟）</label>
+          <input
+            type="number"
+            min={0}
+            value={subscribeIntervalMin}
+            onChange={(e) => setSubscribeIntervalMin(Number(e.target.value))}
+            className="w-28 px-3 py-2 border rounded-lg"
+          />
+          <p className="text-zinc-500 text-xs">0 = 关闭自动拉取</p>
+        </div>
+
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-zinc-700">立即拉取批量导入为实例</label>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center rounded-lg border border-zinc-200 bg-white p-0.5">
+              <button
+                onClick={() => setSubscribeTarget('solo')}
+                className={clsx(
+                  'px-3 py-1 rounded-md text-[13px] transition-colors',
+                  subscribeTarget === 'solo' ? 'bg-zinc-900 text-white' : 'text-zinc-500 hover:bg-zinc-100',
+                )}
+                title="导入为独享实例（一人一实例，默认）"
+              >
+                独享
+              </button>
+              <button
+                onClick={() => setSubscribeTarget('pool')}
+                className={clsx(
+                  'px-3 py-1 rounded-md text-[13px] transition-colors',
+                  subscribeTarget === 'pool' ? 'bg-zinc-900 text-white' : 'text-zinc-500 hover:bg-zinc-100',
+                )}
+                title="导入并标记进实例池（聚合到统一网关）"
+              >
+                进池
+              </button>
+            </div>
+            <button
+              onClick={() => void handleSubscribeImport()}
+              disabled={subscribeBusy}
+              className="flex items-center gap-1.5 bg-green-600 text-white rounded-lg px-4 py-2 hover:bg-green-700 disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {subscribeBusy ? '拉取中…' : '一键拉取并导入'}
+            </button>
+          </div>
+          <p className="text-zinc-500 text-xs">立即从上方订阅 URL 拉取并批量导入为实例，目标可选「独享/进池」；仅拉取节点请到「节点池」页</p>
+        </div>
+
+        <button
+          onClick={handleSaveSubscribe}
+          className="bg-zinc-900 text-white rounded-lg px-4 py-2 hover:bg-zinc-700"
+        >
+          保存订阅配置
+        </button>
+      </div>
+
+      {/* 健康巡检 */}
+      <div className="bg-white rounded-2xl border p-5 space-y-4">
+        <h2 className="text-lg font-medium text-zinc-900">健康巡检</h2>
+        <p className="text-zinc-500 text-xs">定期探测运行中实例，连续失败达到阈值自动重启</p>
+
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-zinc-700">巡检间隔（秒）</label>
+          <input
+            type="number"
+            min={0}
+            value={healthCheckIntervalSec}
+            onChange={(e) => setHealthCheckIntervalSec(Number(e.target.value))}
+            className="w-28 px-3 py-2 border rounded-lg"
+          />
+          <p className="text-zinc-500 text-xs">0 = 关闭巡检</p>
+        </div>
+
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-zinc-700">连续失败重启阈值</label>
+          <input
+            type="number"
+            min={1}
+            value={healthRestartThreshold}
+            onChange={(e) => setHealthRestartThreshold(Number(e.target.value))}
+            className="w-28 px-3 py-2 border rounded-lg"
+          />
+          <p className="text-zinc-500 text-xs">连续探测失败达到该次数则自动重启实例</p>
+        </div>
+
+        <button
+          onClick={handleSaveHealth}
+          className="bg-zinc-900 text-white rounded-lg px-4 py-2 hover:bg-zinc-700"
+        >
+          保存巡检配置
+        </button>
+      </div>
+
+      {/* 日志过滤 */}
+      <div className="bg-white rounded-2xl border p-5 space-y-4">
+        <h2 className="text-lg font-medium text-zinc-900">日志过滤</h2>
+        <p className="text-zinc-500 text-xs">按关键词过滤调用日志页显示内容，屏蔽干扰噪音</p>
+
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-zinc-700">过滤关键词</label>
+          <input
+            type="text"
+            placeholder="error,timeout,429（逗号分隔）"
+            value={logFilterKeywords}
+            onChange={(e) => setLogFilterKeywords(e.target.value)}
+            className="w-full px-3 py-2 border rounded-lg"
+          />
+          <p className="text-zinc-500 text-xs">命中任一关键词的记录将被隐藏；留空显示全部</p>
+        </div>
+
+        <button
+          onClick={handleSaveLogFilter}
+          className="bg-zinc-900 text-white rounded-lg px-4 py-2 hover:bg-zinc-700"
+        >
+          保存日志过滤
         </button>
       </div>
 

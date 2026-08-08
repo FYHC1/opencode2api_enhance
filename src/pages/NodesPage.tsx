@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import clsx from 'clsx'
-import { Radar, RefreshCw, Square } from 'lucide-react'
-import { api, type NodeView, type ProbeResult, type ScanProgress } from '../lib/api'
+import { Radar, RefreshCw, Square, Plus, Link2, Loader2, X, Trash2 } from 'lucide-react'
+import { api, type NodeView, type ProbeResult, type ScanProgress, type SubscribeNode } from '../lib/api'
 import ResultModal from '../components/ResultModal'
 
 export default function NodesPage({
@@ -23,6 +23,14 @@ export default function NodesPage({
   const [acting, setActing] = useState(false)
   // 追踪上一次扫描状态：仅在「本次扫描 running → done」时弹出结果弹窗
   const prevScanStatusRef = useRef<string | null>(null)
+
+  // 订阅导入：仅拉取节点进缓存（不批量建实例），导入后在「订阅」分组手动勾选/扫描
+  const [subOpen, setSubOpen] = useState(false)
+  const [subUrl, setSubUrl] = useState('')
+  const [subPreview, setSubPreview] = useState<SubscribeNode[] | null>(null)
+  const [subBusy, setSubBusy] = useState(false)
+  const [subImporting, setSubImporting] = useState(false)
+  const [subError, setSubError] = useState<string | null>(null)
 
   const loadNodes = useCallback(async () => {
     try {
@@ -82,6 +90,139 @@ export default function NodesPage({
     setRefreshing(true)
     await loadNodes()
     setRefreshing(false)
+  }
+
+  const doSubPreview = async () => {
+    if (!subUrl.trim()) {
+      setSubError('请输入订阅 URL')
+      return
+    }
+    setSubBusy(true)
+    setSubError(null)
+    setSubPreview(null)
+    try {
+      const nodes = await api.subscribePreview(subUrl.trim())
+      if (nodes.length === 0) setSubError('订阅中未解析到任何节点')
+      setSubPreview(nodes)
+    } catch (e) {
+      setSubError(String(e))
+    } finally {
+      setSubBusy(false)
+    }
+  }
+
+  const doSubImport = async () => {
+    setSubImporting(true)
+    setSubError(null)
+    try {
+      const n = await api.subscribePoolImport(subUrl.trim())
+      toast(`订阅导入成功：新增 ${n} 个节点（在「订阅」分组，勾选后可扫描/添加实例）`, true)
+      setSubOpen(false)
+      setSubPreview(null)
+      setSubUrl('')
+      await loadNodes()
+    } catch (e) {
+      setSubError(String(e))
+    } finally {
+      setSubImporting(false)
+    }
+  }
+
+  const closeSub = () => {
+    setSubOpen(false)
+    setSubPreview(null)
+    setSubError(null)
+  }
+
+  // 删除节点：仅订阅缓存节点可删（外部 Clash 节点只读）；删后从选中集移除并刷新
+  const [deletingNode, setDeletingNode] = useState<string | null>(null)
+  const doDeleteNode = async (name: string) => {
+    if (!window.confirm(`确定删除节点「${name}」？该操作仅移除订阅缓存中的此节点。`)) return
+    setDeletingNode(name)
+    try {
+      const removed = await api.deleteNode(name)
+      if (removed === 0) {
+        toast('该节点不在订阅缓存中，无法删除（外部节点只读）', false)
+      } else {
+        toast(`已删除订阅节点 ${name}`, true)
+        setSelected((prev) => {
+          const next = new Set(prev)
+          next.delete(name)
+          return next
+        })
+      }
+      await loadNodes()
+    } catch (e) {
+      toast(String(e), false)
+    } finally {
+      setDeletingNode(null)
+    }
+  }
+
+  // 批量删除选中的订阅缓存节点（外部 Clash 节点只读，静默跳过）
+  const [deletingSelected, setDeletingSelected] = useState(false)
+  const doDeleteSelected = async () => {
+    const names = [...selected]
+    if (names.length === 0) {
+      toast('请先勾选要删除的节点', false)
+      return
+    }
+    if (!window.confirm(`确定删除选中的 ${names.length} 个节点？仅移除订阅缓存中的节点，外部 Clash 节点只读不可删。`)) return
+    setDeletingSelected(true)
+    try {
+      const removed = await api.deleteNodes(names)
+      if (removed === 0) {
+        toast('选中的都是外部 Clash 节点（只读），无可删除的订阅节点', false)
+      } else {
+        toast(`已删除 ${removed} 个订阅节点${removed < names.length ? `（${names.length - removed} 个外部节点跳过）` : ''}`, true)
+      }
+      setSelected(new Set())
+      await loadNodes()
+    } catch (e) {
+      toast(String(e), false)
+    } finally {
+      setDeletingSelected(false)
+    }
+  }
+
+  // 一键添加选中为实例：端口后端自动分配、密钥随机生成（sk- 开头），无需用户填写
+  const [addTarget, setAddTarget] = useState<'solo' | 'pool'>('solo')
+  const [adding, setAdding] = useState(false)
+
+  const doAddSelected = async () => {
+    // 过滤掉已在实例中的节点（防止 disabled 快照过期后仍能勾选）
+    const skip = [...selected].filter((n) => instanceNodes.has(n))
+    const items = [...selected].filter((n) => !instanceNodes.has(n)).map((node) => ({ node }))
+    if (items.length === 0) {
+      toast(skip.length > 0 ? '所选节点均已添加为实例' : '请先勾选要添加的节点', false)
+      return
+    }
+    setAdding(true)
+    try {
+      const r = await api.batchAdd(items, undefined, true)
+      if (addTarget === 'pool' && r.added.length > 0) {
+        // 进池：只打 join_gateway 标记（不自动启动，启停由实例池页控制）
+        for (const a of r.added) {
+          try {
+            await api.setJoinGateway(a.name, true)
+          } catch {
+            /* 单条失败不阻断整体 */
+          }
+        }
+      }
+      toast(
+        `成功添加 ${r.added_count} 个实例` +
+          (addTarget === 'pool' ? '（已标记入池）' : '') +
+          (r.error_count ? `，失败 ${r.error_count}` : ''),
+        r.error_count === 0,
+      )
+      setSelected(new Set())
+      await loadNodes()
+    } catch (e) {
+      toast(String(e), false)
+    } finally {
+      setAdding(false)
+    }
   }
 
   // 只扫描选中的节点
@@ -219,6 +360,13 @@ export default function NodesPage({
             <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
             {refreshing ? '刷新中…' : '刷新'}
           </button>
+          <button
+            onClick={() => { setSubUrl(''); setSubPreview(null); setSubError(null); setSubOpen(true) }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-teal-700 bg-teal-50 border border-teal-100 hover:bg-teal-100"
+            title="从订阅链接拉取节点进节点池（不批量创建实例）"
+          >
+            <Link2 size={14} /> 从订阅导入
+          </button>
           {scanning ? (
             <button
               onClick={() => void stopScan()}
@@ -241,6 +389,45 @@ export default function NodesPage({
               <Radar size={14} /> 扫描选中节点（{selected.size}）
             </button>
           )}
+          <div className="flex items-center rounded-lg border border-zinc-200 bg-white p-0.5">
+            <button
+              onClick={() => setAddTarget('solo')}
+              className={clsx(
+                'px-2.5 py-1 rounded-md text-[12px] transition-colors',
+                addTarget === 'solo' ? 'bg-zinc-900 text-white' : 'text-zinc-500 hover:bg-zinc-100',
+              )}
+              title="添加为独享实例（一人一实例，默认）"
+            >
+              独享
+            </button>
+            <button
+              onClick={() => setAddTarget('pool')}
+              className={clsx(
+                'px-2.5 py-1 rounded-md text-[12px] transition-colors',
+                addTarget === 'pool' ? 'bg-zinc-900 text-white' : 'text-zinc-500 hover:bg-zinc-100',
+              )}
+              title="添加进实例池（聚合到统一网关）"
+            >
+              进池
+            </button>
+          </div>
+          <button
+            onClick={() => void doAddSelected()}
+            disabled={selected.size === 0 || scanning || adding}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-white bg-green-600 hover:bg-green-700 disabled:opacity-40"
+          >
+            <Plus size={14} className={adding ? 'animate-spin' : ''} />
+            {adding ? '添加中…' : `添加选中为实例（${selected.size}）`}
+          </button>
+          <button
+            onClick={() => void doDeleteSelected()}
+            disabled={selected.size === 0 || deletingSelected}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-red-600 bg-red-50 border border-red-100 hover:bg-red-100 disabled:opacity-40 disabled:cursor-not-allowed"
+            title="仅删除订阅缓存中的节点（外部 Clash 节点只读）"
+          >
+            <Trash2 size={14} className={deletingSelected ? 'animate-spin' : ''} />
+            {deletingSelected ? '删除中…' : `删除选中（${selected.size}）`}
+          </button>
         </div>
       </div>
 
@@ -342,6 +529,17 @@ export default function NodesPage({
                             </span>
                           )}
                           {badgeNode(r)}
+                          {n.group === '订阅' && (
+                            <button
+                              onClick={() => void doDeleteNode(n.name)}
+                              disabled={deletingNode === n.name}
+                              className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-red-500 bg-red-50 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+                              title="删除订阅缓存中的此节点"
+                            >
+                              {deletingNode === n.name ? <Loader2 size={11} className="animate-spin" /> : <Trash2 size={11} />}
+                              删除
+                            </button>
+                          )}
                         </div>
                       )
                     })}
@@ -350,6 +548,74 @@ export default function NodesPage({
               </div>
             )
           })}
+        </div>
+      )}
+
+      {subOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={closeSub}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-5 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-zinc-900">从订阅导入</h3>
+              <button onClick={closeSub} className="text-zinc-400 hover:text-zinc-600">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-zinc-700">订阅 URL</label>
+              <input
+                type="text"
+                placeholder="https://example.com/subscribe"
+                value={subUrl}
+                onChange={(e) => { setSubUrl(e.target.value); setSubPreview(null); setSubError(null) }}
+                className="w-full px-3 py-2 border rounded-lg"
+              />
+              <p className="text-zinc-500 text-xs">仅拉取节点进「订阅」分组，不批量创建实例；勾选后用上方「进池/进独享」批量添加</p>
+            </div>
+
+            {subError && <p className="text-sm text-red-600">{subError}</p>}
+
+            {subPreview === null ? (
+              <button
+                onClick={() => void doSubPreview()}
+                disabled={subBusy}
+                className="flex items-center justify-center gap-1.5 w-full px-4 py-2 rounded-lg text-sm text-white bg-zinc-900 hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {subBusy ? <Loader2 size={14} className="animate-spin" /> : <Link2 size={14} />}
+                预览节点
+              </button>
+            ) : (
+              <div className="space-y-3">
+                <div className="max-h-56 overflow-y-auto border rounded-lg divide-y divide-zinc-100">
+                  {subPreview.map((n) => (
+                    <div key={n.name} className="flex items-center justify-between px-3 py-2 text-[13px]">
+                      <span className="font-medium text-zinc-800 truncate">{n.name}</span>
+                      <span className="text-zinc-400 text-xs shrink-0 ml-3">
+                        {n.node_type} · {n.server}:{n.port}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => void doSubImport()}
+                    disabled={subImporting}
+                    className="flex items-center justify-center gap-1.5 flex-1 px-4 py-2 rounded-lg text-sm text-white bg-green-600 hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {subImporting ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+                    导入 {subPreview.length} 个节点到节点池
+                  </button>
+                  <button
+                    onClick={doSubPreview}
+                    disabled={subBusy}
+                    className="px-4 py-2 rounded-lg text-sm text-zinc-700 bg-white border border-zinc-200 hover:bg-zinc-50"
+                  >
+                    重新预览
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
