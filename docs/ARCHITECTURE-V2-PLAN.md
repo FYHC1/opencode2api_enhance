@@ -207,6 +207,21 @@ type PoolVendor interface {
   - 顺带清理：过时文档（DEPLOYMENT.md/RELEASE.md）、config.example.json 补全可选字段、版本号双轨说明。
 - **验收**：每拆一个包 `go test ./...` 全绿；行为与基线一致（路由表、配置项、/v1/models 输出不变）。
 
+### P1.2 子计划（包化 core/*）
+
+> 目标：把 package main 中的领域文件提升为独立包，强制单向依赖，为 P2 厂商接入铺路。每子步骤结束必须 `go test -count=1 ./...` 全绿才提交。
+
+| 子步骤 | 内容 | 依赖方向 | 备注 |
+|---|---|---|---|
+| P1.2a | `core/contract`：Vendor / PoolVendor / Model / Caps / ErrRules / Health / PoolStatus（纯新增，零行为影响） | 无依赖 | 是 P2 的契约雏形 |
+| P1.2b | `core/protocol`：协议类型 + 转换（types_*、convert.go、chat/anthropic/responses_protocol.go）迁入 | 无 core 内依赖 | 符号全部导出，引用方加包前缀 |
+| P1.2c | `core/gateway`：socks5 池、http client、鉴权、统计、配置热更新、超时续写迁入 | → contract | 全局状态收敛为该包内状态 |
+| P1.2d | `core/aggregator`：模型目录/别名/免费判定迁入 | → gateway（http client） | |
+| P1.2e | `core/router`：上游调用/分发迁入 | → protocol、aggregator、gateway | P2 在此改为走契约 |
+| P1.2f | `core/server`：handler + 路由 + main 装配 | → 以上全部 | main.go 收口为薄入口 |
+
+> 依赖方向：`contract ← protocol/gateway/aggregator ← router ← server`；禁止反向。厂商实现 contract，被 router/aggregator 调用。
+
 ### P2 收厂商（第一个厂商：opencode）
 - **目标**：定义契约并验证"契约可被实现"。
 - **改动**：
