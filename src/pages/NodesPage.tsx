@@ -14,7 +14,8 @@ export default function NodesPage({
   const [scanning, setScanning] = useState(false)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [selected, setSelected] = useState<Set<string>>(new Set())
-  const [instanceNodes, setInstanceNodes] = useState<Set<string>>(new Set())
+  // 已添加实例的节点：node → 是否入池（join_gateway），用于徽章区分「实例池/独享」
+  const [instanceNodes, setInstanceNodes] = useState<Map<string, boolean>>(new Map())
   const [refreshing, setRefreshing] = useState(false)
   // 结果弹窗：扫描完成（running→done）时打开
   const [showResult, setShowResult] = useState(false)
@@ -27,7 +28,7 @@ export default function NodesPage({
     try {
       const [ns, insts] = await Promise.all([api.listNodes(), api.listInstances()])
       setNodes(ns)
-      setInstanceNodes(new Set(insts.map((i) => i.node)))
+      setInstanceNodes(new Map(insts.map((i) => [i.node, i.join_gateway])))
     } catch (e) {
       toast(String(e), false)
     }
@@ -122,13 +123,21 @@ export default function NodesPage({
     })
   }
 
-  const groupSelected = (list: NodeView[]) => list.length > 0 && list.every((n) => selected.has(n.name))
+  // 组内「可选」节点 = 未实例化（已实例化节点的复选框禁用，不参与组全选）
+  const selectable = (list: NodeView[]) => list.filter((n) => !instanceNodes.has(n.name))
+
+  // 组头勾选态：按可选节点计算（组内全是已实例化时视为未全选）
+  const groupSelected = (list: NodeView[]) => {
+    const sel = selectable(list)
+    return sel.length > 0 && sel.every((n) => selected.has(n.name))
+  }
 
   const toggleGroupSel = (list: NodeView[]) => {
     setSelected((prev) => {
       const next = new Set(prev)
-      const all = groupSelected(list)
-      for (const n of list) {
+      const sel = selectable(list)
+      const all = sel.length > 0 && sel.every((n) => selected.has(n.name))
+      for (const n of sel) {
         if (all) next.delete(n.name)
         else next.add(n.name)
       }
@@ -150,9 +159,8 @@ export default function NodesPage({
   // 扫描结果中的可用节点（去重：剔除已添加为实例的节点）
   const okNodes = useMemo(() => {
     if (!scan || scan.status !== 'done') return []
-    const seen = new Set(instanceNodes)
     return (scan.results ?? [])
-      .filter((r) => r.ok && !seen.has(r.node))
+      .filter((r) => r.ok && !instanceNodes.has(r.node))
       .map((r) => r.node)
   }, [scan, instanceNodes])
 
@@ -179,6 +187,9 @@ export default function NodesPage({
           (r.error_count ? `，跳过/失败 ${r.error_count}` : ''),
         r.error_count === 0,
       )
+      // 入池/独享完成后清空勾选态：已添加的节点复选框会变 disabled，
+      // 不清空会导致选中态残留且无法手动取消（disabled 不响应点击）
+      setSelected(new Set())
       await loadNodes()
       setShowResult(false)
     } catch (e) {
@@ -270,7 +281,14 @@ export default function NodesPage({
             return (
               <div key={g}>
                 <div className="flex items-center gap-3 px-4 py-2.5 bg-zinc-50/50">
-                  <input type="checkbox" checked={all} onChange={() => toggleGroupSel(list)} className="accent-teal-600" />
+                  <input
+                    type="checkbox"
+                    checked={all}
+                    onChange={() => toggleGroupSel(list)}
+                    disabled={selectable(list).length === 0}
+                    className="accent-teal-600 disabled:opacity-30"
+                    title={selectable(list).length === 0 ? '该组节点均已添加实例' : ''}
+                  />
                   <button onClick={() => toggleGroup(g)} className="flex-1 text-left text-[13px] font-semibold text-zinc-700">
                     {g} <span className="text-zinc-400 font-normal">（{list.length}，已选 {checkedCount}）</span>
                   </button>
@@ -297,16 +315,27 @@ export default function NodesPage({
                             <div className="flex items-center gap-2">
                               <span className={clsx('text-[13px] truncate', selected.has(n.name) ? 'font-semibold text-teal-800' : 'text-zinc-800')}>{n.name}</span>
                               {instanceNodes.has(n.name) && (
-                                <span className="inline-block px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-green-50 text-green-600 border border-green-100">✓ 已添加实例</span>
+                                <span
+                                  className={clsx(
+                                    'inline-block px-1.5 py-0.5 rounded-full text-[10px] font-medium border',
+                                    instanceNodes.get(n.name)
+                                      ? 'bg-teal-50 text-teal-700 border-teal-100'
+                                      : 'bg-blue-50 text-blue-700 border-blue-100',
+                                  )}
+                                >
+                                  {instanceNodes.get(n.name) ? '✓ 已添加到实例池' : '✓ 已添加为独享'}
+                                </span>
                               )}
                               <span className="text-[11px] text-zinc-400">{n.node_type}</span>
                               <span className="text-[11px] text-zinc-300 font-mono">{n.server}:{n.port}</span>
                             </div>
                             <div className="text-[11px] text-zinc-400">{n.group}</div>
                           </div>
-                          <span className={clsx('text-xs', n.has_cred ? 'text-green-600' : 'text-gray-300')}>
-                            {n.has_cred ? '✓凭据' : '✗无凭据'}
-                          </span>
+                          {!n.has_cred && (
+                            <span className="text-[11px] text-gray-400" title="该节点缺少连接凭据，扫描时会被跳过">
+                              ✗无凭据
+                            </span>
+                          )}
                           {r && !r.ok && (
                             <span className="text-[11px] text-zinc-400 max-w-[160px] truncate" title={r.message}>
                               {r.message}
