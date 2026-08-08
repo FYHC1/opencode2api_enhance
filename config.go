@@ -1,0 +1,124 @@
+// Part of the P1 (core split) refactor: code moved out of main.go.
+// Same package (main) - do not change package clause manually.
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"log/slog"
+	"os"
+	"sync/atomic"
+	"time"
+)
+
+func loadConfig(path string) AppConfig {
+	var cfg AppConfig
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return cfg
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		slog.Warn("config parse failed", "error", err)
+	}
+	return cfg
+}
+
+func saveConfig(path string, cfg AppConfig) error {
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
+func applyConfig(cfg AppConfig) {
+	configMu.Lock()
+	defer configMu.Unlock()
+	if cfg.ModelAlias != nil {
+		modelAlias = cfg.ModelAlias
+	}
+	if cfg.ReasoningEffortMap != nil {
+		reasoningEffortMap = cfg.ReasoningEffortMap
+	}
+	forceDisableThinking = cfg.ForceDisableThinking
+	if cfg.ShowNodePrefix != nil {
+		showNodePrefix = *cfg.ShowNodePrefix
+	}
+
+	if cfg.RouteMode == "round_robin" || cfg.RouteMode == "failover" || cfg.RouteMode == "smart" {
+		routeMode = cfg.RouteMode
+	}
+	setTimeoutConfigFromApp(cfg)
+	applyBadStatusConfig(cfg)
+
+	socks5Mu.Lock()
+	proxiesChanged := false
+	if cfg.Socks5Proxies != nil {
+		proxiesChanged = !sameSocks5Proxies(socks5Proxies, cfg.Socks5Proxies)
+		socks5Proxies = append([]Socks5Proxy(nil), cfg.Socks5Proxies...)
+	}
+	if activeSocks5 != cfg.ActiveSocks5 || proxiesChanged {
+		activeSocks5 = cfg.ActiveSocks5
+		socks5Client = nil
+		socks5ClientAddr = ""
+		atomic.StoreUint32(&socks5RRIndex, 0)
+	}
+	socks5Mu.Unlock()
+	if proxiesChanged {
+		socks5HealthMu.Lock()
+		socks5Health = map[string]socks5HealthState{}
+		socks5HealthMu.Unlock()
+	}
+
+}
+
+func sameSocks5Proxies(a, b []Socks5Proxy) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func getSocks5ProxyCount() int {
+	socks5Mu.RLock()
+	defer socks5Mu.RUnlock()
+	return len(socks5Proxies)
+}
+
+// maxRouteRetries 返回同模型路由重试上限：多代理时按代理数扩展，否则沿用上游重试上限。
+func maxRouteRetries() int {
+	proxyCount := getSocks5ProxyCount()
+	if proxyCount > maxUpstreamRetries {
+		return proxyCount
+	}
+	return maxUpstreamRetries
+}
+
+// startConfigWatcher applies config file changes without restarting the
+// process, because restarting a live HTTP server drops active SSE streams.
+func startConfigWatcher(path string) {
+	go func() {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+		lastData, _ := os.ReadFile(path)
+		for range ticker.C {
+			data, err := os.ReadFile(path)
+			if err != nil || bytes.Equal(data, lastData) {
+				continue
+			}
+			var cfg AppConfig
+			if err := json.Unmarshal(data, &cfg); err != nil {
+				slog.Warn("config reload skipped", "path", path, "error", err)
+				continue
+			}
+			applyConfig(cfg)
+			lastData = append(lastData[:0], data...)
+			slog.Info("config hot-reloaded", "path", path)
+		}
+	}()
+}

@@ -1,0 +1,78 @@
+// Part of the P1 (core split) refactor: code moved out of main.go.
+// Same package (main) - do not change package clause manually.
+package main
+
+import "strings"
+
+func resolveModel(model string) string {
+	m := strings.TrimSpace(model)
+	configMu.RLock()
+	alias, ok := modelAlias[m]
+	configMu.RUnlock()
+	if ok {
+		return alias
+	}
+	// 自动兜底：新 -free 模型无需手动加别名。
+	// 若请求名本身已在缓存（含 -free）则原样使用；否则若「请求名+-free」存在，
+	// 说明客户发的是去 -free 的展示名，映射回真实免费模型名。
+	if modelInCaches(m) {
+		return m
+	}
+	if strings.HasSuffix(m, "-free") {
+		return m
+	}
+	if modelInCaches(m + "-free") {
+		return m + "-free"
+	}
+	return m
+}
+
+// modelInCaches 判断模型名是否存在于免费模型或 Go 目录缓存中（含 -free 原名）。
+func modelInCaches(id string) bool {
+	modelMu.RLock()
+	defer modelMu.RUnlock()
+	return containsModelWithID(modelsCache, id) || containsModelWithID(goModelsCache, id)
+}
+
+// displayModelName 返回模型名的展示形式（用于前缀/UI 展示，不含 -free 标记）：
+//  1. 若 model 是某别名的真实上游名（含 -free），返回该别名（显式配置优先）；
+//  2. 否则若以 -free 结尾，去掉后缀；
+//  3. 否则原样返回。
+func displayModelName(model string) string {
+	m := strings.TrimSpace(model)
+	configMu.RLock()
+	defer configMu.RUnlock()
+	for alias, upstream := range modelAlias {
+		if upstream == m {
+			return alias
+		}
+	}
+	if strings.HasSuffix(m, "-free") {
+		return strings.TrimSuffix(m, "-free")
+	}
+	return m
+}
+
+func getForceDisableThinking() bool {
+	configMu.RLock()
+	defer configMu.RUnlock()
+	return forceDisableThinking
+}
+
+func getShowNodePrefix() bool {
+	configMu.RLock()
+	defer configMu.RUnlock()
+	return showNodePrefix
+}
+
+func getReasoningEffortMap() map[string]string {
+	configMu.RLock()
+	defer configMu.RUnlock()
+	cp := make(map[string]string, len(reasoningEffortMap))
+	for k, v := range reasoningEffortMap {
+		cp[k] = v
+	}
+	return cp
+}
+
+// ======================== Token 统计 ========================

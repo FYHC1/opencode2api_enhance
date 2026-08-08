@@ -1,0 +1,32 @@
+// Part of the P1 (core split) refactor: code moved out of main.go.
+// Same package (main) - do not change package clause manually.
+package main
+
+type AppConfig struct {
+	ModelAlias           map[string]string `json:"model_alias"`
+	ReasoningEffortMap   map[string]string `json:"reasoning_effort_map"`
+	ForceDisableThinking bool              `json:"force_disable_thinking"`
+	Socks5Proxies        []Socks5Proxy     `json:"socks5_proxies,omitempty"`
+	ActiveSocks5         string            `json:"active_socks5,omitempty"`
+	// RouteMode 网关/代理池路由模式：failover（默认，成功不动游标，失败才切换）| round_robin
+	RouteMode string `json:"route_mode,omitempty"`
+
+	// 流内超时切换配置（毫秒；区间随机，防上游识别为定时扫描）
+	TTFTMinMS    int `json:"timeout_ttft_min_ms,omitempty"`
+	TTFTMaxMS    int `json:"timeout_ttft_max_ms,omitempty"`
+	SilenceMinMS int `json:"timeout_silence_min_ms,omitempty"`
+	SilenceMaxMS int `json:"timeout_silence_max_ms,omitempty"`
+	ProbeMin     int `json:"failover_probe_min,omitempty"`
+	ProbeMax     int `json:"failover_probe_max,omitempty"`
+	// 调用日志保留上限（条）
+	CallLogMax int `json:"call_log_max,omitempty"`
+
+	// 坏状态码组：状态码 → 原因文案，遇到即切节点并计数（可配置，默认见 badStatusCodes）
+	BadStatusCodes map[string]string `json:"bad_status_codes,omitempty"`
+	// 坏池阈值：连续坏状态码次数达到后节点进坏池（默认 3）
+	BadThreshold int `json:"bad_threshold,omitempty"`
+	// ShowNodePrefix 是否在对话流首段展示「🤖 节点 · 模型」前缀（默认关闭）
+	ShowNodePrefix *bool `json:"show_node_prefix,omitempty"`
+}
+
+// ======================== Claude Messages API 类型 ========================
