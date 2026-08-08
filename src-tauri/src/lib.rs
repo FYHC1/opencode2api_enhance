@@ -5,6 +5,7 @@ pub mod config;
 pub mod embed;
 pub mod gateway;
 pub mod instance;
+pub mod job;
 pub mod opencode_cfg;
 pub mod probe;
 pub mod singbox;
@@ -19,6 +20,9 @@ pub struct AppState {
     pub gateway: Arc<Mutex<gateway::GatewayManager>>,
     /// Go core 管理器子进程（大步3：管理职责已移交 HTTP，壳负责拉起/随退出终止）
     pub core_child: Mutex<Option<std::process::Child>>,
+    /// core 所在 Job Object：壳退出（含强杀）时自动终止 core 及其全部子进程，
+    /// 杜绝孤儿进程 / 端口残留。Drop 时关闭句柄触发 KILL_ON_JOB_CLOSE。
+    pub core_job: Mutex<Option<job::JobObject>>,
 }
 
 
@@ -173,11 +177,11 @@ pub fn run() {
     } else {
         pick_free_port(manager_port(), 32)
     };
-    let core_child = match spawn_core_manager(&data_dir, mgr_port) {
-        Ok(child) => Some(child),
+    let (core_child, core_job) = match spawn_core_manager(&data_dir, mgr_port) {
+        Ok((child, job)) => (Some(child), job),
         Err(e) => {
             eprintln!("启动 core 管理器失败: {e}");
-            None
+            (None, None)
         }
     };
 
@@ -187,6 +191,7 @@ pub fn run() {
             scan: Arc::new(probe::ScanController::new()),
             gateway: gateway_manager,
             core_child: Mutex::new(core_child),
+            core_job: Mutex::new(core_job),
         })
         .invoke_handler(tauri::generate_handler![
             // 大步3：仅保留壳命令（窗口/托盘/自启/二进制）；管理命令已被 HTTP 取代
@@ -298,7 +303,7 @@ button: tauri::tray::MouseButton::Left,
 
 /// 拉起 Go core 管理器（bin/opencode2api.exe -port <port> ...），等待 /health 就绪。
 /// 数据目录经 OPCODE2API_DATA_DIR 注入（setup 已设置）。
-fn spawn_core_manager(data_dir: &std::path::Path, port: u16) -> std::io::Result<std::process::Child> {
+fn spawn_core_manager(data_dir: &std::path::Path, port: u16) -> std::io::Result<(std::process::Child, Option<job::JobObject>)> {
     use std::io::{Read, Write};
     use std::process::Command;
     use std::time::Duration;
@@ -371,5 +376,10 @@ fn spawn_core_manager(data_dir: &std::path::Path, port: u16) -> std::io::Result<
     if !ready {
         eprintln!("警告: core 管理器 /health 未在预期时间内就绪（窗口可能先于服务加载）");
     }
-    Ok(child)
+    // 防孤儿进程：core 挂到 Job Object，壳退出（含强杀）时自动终止 core 及其子进程。
+    let job = job::JobObject::new();
+    if let Some(j) = &job {
+        j.assign(&child);
+    }
+    Ok((child, job))
 }
