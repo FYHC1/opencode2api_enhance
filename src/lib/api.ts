@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core'
+// API 对接层：桌面(壳)与 Web 共用，统一调用 core 的 /api/admin/* HTTP 接口。
 
 // ─── 类型定义（与 Rust 端 serde 结构一一对应） ───────────────────────
 
@@ -216,36 +216,68 @@ export type ResetStatsResult = {
   failed: string[]
 }
 
-// ─── Tauri command 封装 ─────────────────────────────────────────────
+// ─── HTTP 对接层（core /api/admin/*） ─────────────────────────────
+
+/** 后端基础地址：Web 同源为空；桌面壳可经构建注入 VITE_API_BASE。 */
+const API_BASE: string = (import.meta.env?.VITE_API_BASE as string | undefined) ?? ''
+
+async function req<T>(method: string, path: string, body?: unknown, qs?: Record<string, unknown>): Promise<T> {
+  let url = API_BASE + '/api/admin' + path
+  if (qs) {
+    const p = new URLSearchParams()
+    for (const [k, v] of Object.entries(qs)) {
+      if (v !== undefined && v !== null) p.set(k, String(v))
+    }
+    const s = p.toString()
+    if (s) url += '?' + s
+  }
+  const opts: RequestInit = { method, headers: {} }
+  if (body !== undefined) {
+    opts.headers = { 'Content-Type': 'application/json' }
+    opts.body = JSON.stringify(body)
+  }
+  const res = await fetch(url, opts)
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`
+    try {
+      const j = await res.json()
+      if (j && j.error) msg = j.error
+    } catch { /* ignore */ }
+    throw new Error(msg)
+  }
+  const ct = res.headers.get('content-type') ?? ''
+  if (ct.includes('json')) return (await res.json()) as T
+  return (await res.text()) as unknown as T
+}
 
 export const api = {
   // 节点
-  listNodes: () => invoke<NodeView[]>('list_nodes'),
+  listNodes: () => req<NodeView[]>('GET', '/nodes'),
 
   // 实例
-  listInstances: () => invoke<Instance[]>('list_instances'),
+  listInstances: () => req<Instance[]>('GET', '/instances'),
   /** 手动刷新指定实例的状态（返回这些实例的最新状态） */
-  refreshStates: (names: string[]) => invoke<Instance[]>('refresh_states', { names }),
+  refreshStates: (names: string[]) => req<Instance[]>('POST', '/instances/refresh', { names }),
   addInstance: (name: string, port: number, node: string, password: string) =>
-    invoke<Instance>('add_instance', { name, port, node, password }),
-  removeInstance: (name: string) => invoke<void>('remove_instance', { name }),
-  startInstance: (name: string) => invoke<void>('start_instance', { name }),
-  stopInstance: (name: string) => invoke<void>('stop_instance', { name }),
-  testInstance: (name: string) => invoke<TestResult>('test_instance', { name }),
+    req<Instance>('POST', '/instances/add', { name, port, node, password }),
+  removeInstance: (name: string) => req<void>('POST', '/instances/remove', { name }),
+  startInstance: (name: string) => req<void>('POST', '/instances/start', { name }),
+  stopInstance: (name: string) => req<void>('POST', '/instances/stop', { name }),
+  testInstance: (name: string) => req<TestResult>('POST', '/instances/test', { name }),
   batchAdd: (nodes: BatchAddItem[], basePort?: number, useNodeName?: boolean, namePrefix?: string) =>
-    invoke<BatchAddResult>('batch_add', {
+    req<BatchAddResult>('POST', '/instances/batch/add', {
       nodes,
-      basePort: basePort ?? null,
-      useNodeName: useNodeName ?? null,
-      namePrefix: namePrefix ?? null,
+      basePort: basePort ?? undefined,
+      useNodeName: useNodeName ?? undefined,
+      namePrefix: namePrefix ?? undefined,
     }),
-  batchStart: (names: string[]) => invoke<BatchOpResult>('batch_start', { names }),
-  batchStop: (names: string[]) => invoke<BatchOpResult>('batch_stop', { names }),
-  batchDelete: (names: string[]) => invoke<BatchOpResult>('batch_delete', { names }),
+  batchStart: (names: string[]) => req<BatchOpResult>('POST', '/instances/batch/start', { names }),
+  batchStop: (names: string[]) => req<BatchOpResult>('POST', '/instances/batch/stop', { names }),
+  batchDelete: (names: string[]) => req<BatchOpResult>('POST', '/instances/batch/delete', { names }),
 
   // 端口
-  portSuggest: () => invoke<number>('port_suggest'),
-  portCheck: (port: number) => invoke<PortCheckResult>('port_check', { port }),
+  portSuggest: () => req<number>('GET', '/port/suggest'),
+  portCheck: (port: number) => req<PortCheckResult>('GET', '/port/check', undefined, { port }),
 
   // 扫描
   scanStart: (opts?: {
@@ -256,48 +288,50 @@ export const api = {
     /** 并发 worker 数（可选，默认后端 8） */
     concurrency?: number
   }) =>
-    invoke<ScanProgress>('scan_start', {
-      nodes: opts?.nodes ?? null,
-      apiPort: opts?.apiPort ?? null,
-      socksPort: opts?.socksPort ?? null,
-      timeout: opts?.timeout ?? null,
-      concurrency: opts?.concurrency ?? null,
+    req<ScanProgress>('POST', '/scan/start', {
+      nodes: opts?.nodes ?? undefined,
+      apiPort: opts?.apiPort ?? undefined,
+      socksPort: opts?.socksPort ?? undefined,
+      timeout: opts?.timeout ?? undefined,
+      concurrency: opts?.concurrency ?? undefined,
     }),
-  scanStatus: () => invoke<ScanProgress>('scan_status'),
-  scanStop: () => invoke<ScanProgress>('scan_stop'),
+  scanStatus: () => req<ScanProgress>('GET', '/scan/status'),
+  scanStop: () => req<ScanProgress>('POST', '/scan/stop'),
 
   // 配置
-  configGet: () => invoke<ConfigView>('config_get'),
-  configSet: (key: string, value: string) => invoke<void>('config_set', { key, value }),
+  configGet: () => req<ConfigView>('GET', '/config'),
+  configSet: (key: string, value: string) => req<void>('POST', '/config/set', { key, value }),
 
   // 开机自启
-  autostartGet: () => invoke<boolean>('autostart_get'),
-  autostartSet: (enabled: boolean) => invoke<void>('autostart_set', { enabled }),
+  autostartGet: async () => (await req<{ enabled: boolean }>('GET', '/autostart')).enabled,
+  autostartSet: (enabled: boolean) => req<void>('POST', '/autostart/set', { enabled }),
 
   // 二进制信息
-  getBinariesInfo: () => invoke<BinariesInfo>('get_binaries_info'),
+  getBinariesInfo: () => req<BinariesInfo>('GET', '/binaries'),
 
   // Token 统计（按实例）
-  getStats: () => invoke<StatsSummary>('get_stats'),
+  getStats: () => req<StatsSummary>('GET', '/stats'),
   /** 重置全部 Token 统计（clearDeleted=同时清除已删除节点历史统计） */
   resetStats: (clearDeleted?: boolean) =>
-    invoke<ResetStatsResult>('reset_stats', { clearDeleted: clearDeleted ?? null }),
+    req<ResetStatsResult>('POST', '/stats/reset', undefined, { clearDeleted: clearDeleted ?? undefined }),
 
   // 全流程调用日志
   getCallLog: (limit?: number) =>
-    invoke<CallLogRecord[]>('get_call_log', { limit: limit ?? null }),
+    req<CallLogRecord[]>('GET', '/call-log', undefined, { limit: limit ?? undefined }),
   /** 清空全部调用日志 */
-  clearCallLog: () => invoke<void>('clear_call_log'),
+  clearCallLog: () => req<void>('POST', '/call-log/clear'),
 
   // 统一网关（实例池）
-  gatewayStatus: () => invoke<GatewayStatus>('gateway_status'),
-  gatewaySetRouteMode: (mode: 'smart' | 'failover' | 'round_robin') => invoke<void>('gateway_set_route_mode', { mode }),
-  gatewayStop: () => invoke<void>('gateway_stop'),
-  setJoinGateway: (name: string, join: boolean) => invoke<void>('set_join_gateway', { name, join }),
+  gatewayStatus: () => req<GatewayStatus>('GET', '/gateway/status'),
+  gatewaySetRouteMode: (mode: 'smart' | 'failover' | 'round_robin') =>
+    req<void>('POST', '/gateway/route-mode', { mode }),
+  gatewayStop: () => req<void>('POST', '/gateway/stop'),
+  setJoinGateway: (name: string, join: boolean) =>
+    req<void>('POST', '/instances/join-gateway', { name, join }),
 
   // 一键重启实例池（全停→强制清端口→全启→网关同步）
-  restartPool: () => invoke<RestartPoolResult>('restart_pool'),
+  restartPool: () => req<RestartPoolResult>('POST', '/pool/restart'),
 
   // 清除数据（1=运行数据, 2=+实例记录, 3=全部重置）
-  dataClean: (level: 1 | 2 | 3) => invoke<void>('data_clean', { level }),
+  dataClean: (level: 1 | 2 | 3) => req<void>('POST', '/data/clean', { level }),
 }
