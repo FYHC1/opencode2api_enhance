@@ -231,6 +231,8 @@ func listModelsHandler(w http.ResponseWriter, r *http.Request) {
 		combinedModels = models
 	}
 	allModels := replaceModelIDsWithAliases(combinedModels, aliases)
+	// 多厂商聚合：把其它厂商（非 opencode）的免费模型并入列表（同名加厂商前缀）。
+	allModels = appendOtherFreeModels(allModels, globalAgg)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{

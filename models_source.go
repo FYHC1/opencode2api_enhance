@@ -91,6 +91,47 @@ func newChatRouter(agg *aggregator.Aggregator) *chatRouter.Router {
 	return chatRouter.New(agg, mm, defaultID)
 }
 
+// appendOtherFreeModels 把 opencode 之外其它厂商的免费模型并入展示列表。
+// 同名冲突时给后出现的厂商加前缀（如 "windsurf/swe-1-6-slow"），
+// 保证上层 /v1/models 可区分同名模型来自哪个厂商。
+func appendOtherFreeModels(base []ModelInfo, agg *aggregator.Aggregator) []ModelInfo {
+	if agg == nil {
+		return base
+	}
+	openOnly := true
+	for _, v := range agg.Vendors() {
+		if v.ID() != "opencode" {
+			openOnly = false
+			break
+		}
+	}
+	if openOnly {
+		return base
+	}
+
+	have := make(map[string]bool, len(base))
+	for _, m := range base {
+		have[m.ID] = true
+	}
+	now := time.Now().Unix()
+	out := append([]ModelInfo(nil), base...)
+	for _, m := range agg.FreeModels() {
+		if m.Provider == "opencode" {
+			continue // zen 免费模型已由主路径输出
+		}
+		id := m.ID
+		if have[id] {
+			id = m.Provider + "/" + m.ID
+		}
+		if have[id] {
+			continue // 前缀后仍冲突（两个非 opencode 厂商同名）→ 跳过重复
+		}
+		have[id] = true
+		out = append(out, ModelInfo{ID: id, Object: "model", Created: now, OwnedBy: m.Provider})
+	}
+	return out
+}
+
 // refreshModelCatalog 拉取各厂商目录并写入既有缓存（同步，启动与定时共用）。
 func refreshModelCatalog() {
 	if globalAgg == nil {
