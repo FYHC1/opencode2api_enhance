@@ -54,10 +54,21 @@ type Gateway struct {
 	loadingMu sync.Mutex
 }
 
+// managerGatewayPort 网关端口：优先环境变量 OPCODE2API_GATEWAY_PORT（debug/release 隔离），
+// 否则默认 unifiedGatewayPort（release 18080）。
+func managerGatewayPort() uint16 {
+	if s := os.Getenv("OPCODE2API_GATEWAY_PORT"); s != "" {
+		if n := parsePositiveInt(s); n > 0 && n < 65536 {
+			return uint16(n)
+		}
+	}
+	return unifiedGatewayPort
+}
+
 // NewGateway 构造网关管理器。
 func NewGateway(m *Manager, port uint16) *Gateway {
 	if port == 0 {
-		port = UnifiedGatewayPort
+		port = managerGatewayPort()
 	}
 	return &Gateway{m: m, port: port, password: unifiedGatewayKey, routeMode: "smart"}
 }

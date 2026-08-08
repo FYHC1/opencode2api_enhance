@@ -23,6 +23,30 @@ pub struct AppState {
 
 
 /// 桌面入口：释放内嵌二进制 → 构建 AppState → 启动 Tauri（托盘常驻）
+///
+/// 端口隔离约定（与 gateway.rs 一致）：
+/// - release（正式 exe）：管理器 18100，网关 18080
+/// - debug（tauri dev）：管理器 28100，网关 21080 —— 避免与正式环境同时运行时冲突。
+#[cfg(debug_assertions)]
+const CORE_MANAGER_PORT: u16 = 28100;
+#[cfg(not(debug_assertions))]
+const CORE_MANAGER_PORT: u16 = 18100;
+
+#[cfg(debug_assertions)]
+const CORE_GATEWAY_PORT: &str = "21080";
+#[cfg(not(debug_assertions))]
+const CORE_GATEWAY_PORT: &str = "18080";
+
+/// core 管理器实际端口：优先环境变量 OPCODE2API_MANAGER_PORT（便携测试包覆盖），否则按构建环境。
+fn manager_port() -> u16 {
+    if let Ok(s) = std::env::var("OPCODE2API_MANAGER_PORT") {
+        if let Ok(n) = s.trim().parse::<u16>() {
+            return n;
+        }
+    }
+    CORE_MANAGER_PORT
+}
+
 pub fn run() {
     // 调试构建默认隔离数据目录：与正式版（%APPDATA%\opencode2api-manager）
     // 分开，避免实例池/配置/runtime 互相干扰。可用 OPCODE2API_DATA_DIR 显式覆盖。
@@ -62,10 +86,24 @@ pub fn run() {
     }
 
     let (instances_path, binary_dir, runtime_dir) = commands::manager_paths();
-    let data_dir = instances_path
+    let mut data_dir = instances_path
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_default();
+    // 便携测试包隔离：exe 旁存在 portable.txt → 用独立数据目录，避免与正式版共用实例/配置
+    if binary_dir
+        .parent()
+        .map(|p| p.join("portable.txt").exists())
+        .unwrap_or(false)
+    {
+        let base = dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+        data_dir = base.join("opencode2api-manager-test");
+        // 测试段端口：管理器 28100、网关 21080，彻底避开正式环境（18100/18080）。
+        unsafe {
+            std::env::set_var("OPCODE2API_MANAGER_PORT", "28100");
+            std::env::set_var("OPCODE2API_GATEWAY_PORT", "21080");
+        }
+    }
     let mut manager = instance::InstanceManager::new(
         instances_path,
         binary_dir.clone(),
@@ -173,11 +211,10 @@ button: tauri::tray::MouseButton::Left,
             })
             .build(app)?;
 
-            // 窗口承载 core 管理器 SPA（core 已在本机 18100 端口就绪）
+            // 窗口承载 core 管理器 SPA（core 已就绪；端口见 manager_port()）
             if let Some(w) = app.get_webview_window("main") {
-                let _ = w.navigate(
-                    tauri::Url::parse("http://127.0.0.1:18100/").expect("core manager url"),
-                );
+                let url = format!("http://127.0.0.1:{}/", manager_port());
+                let _ = w.navigate(tauri::Url::parse(&url).expect("core manager url"));
             }
             Ok(())
         })
@@ -226,11 +263,24 @@ fn spawn_core_manager(data_dir: &std::path::Path) -> std::io::Result<std::proces
         ));
     }
     let cfg_path = data_dir.join("config.json");
+    // 网关端口随构建环境（debug 21080 / release 18080）；便携测试包已在 run() 里覆盖。
+    if std::env::var_os("OPCODE2API_GATEWAY_PORT").is_none() {
+        unsafe {
+            std::env::set_var("OPCODE2API_GATEWAY_PORT", CORE_GATEWAY_PORT);
+        }
+    }
+    let port = manager_port().to_string();
     let mut cmd = Command::new(&exe);
-    cmd.args(["-port", "18100", "-password", "sk-unified-local", "-config"])
-        .arg(&cfg_path)
-        .arg("-log-level")
-        .arg("warn");
+    cmd.args([
+        "-port",
+        &port,
+        "-password",
+        "sk-unified-local",
+        "-config",
+    ])
+    .arg(&cfg_path)
+    .arg("-log-level")
+    .arg("warn");
     // 隐藏 core 子进程的控制台窗口（与 instance.rs no_window 一致）
     #[cfg(windows)]
     {
@@ -240,10 +290,11 @@ fn spawn_core_manager(data_dir: &std::path::Path) -> std::io::Result<std::proces
     let child = cmd.spawn()?;
 
     // 等待 /health 就绪（最多 ~15s）
+    let addr = format!("127.0.0.1:{}", manager_port());
     let mut ready = false;
     for _ in 0..30 {
         std::thread::sleep(Duration::from_millis(500));
-        if let Ok(mut stream) = std::net::TcpStream::connect("127.0.0.1:18100") {
+        if let Ok(mut stream) = std::net::TcpStream::connect(&addr) {
             let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
             let _ = stream.write_all(b"GET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
             let mut buf = [0u8; 64];
