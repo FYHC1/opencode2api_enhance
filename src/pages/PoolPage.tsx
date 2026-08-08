@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import clsx from 'clsx'
 import { Copy, Loader2, Power, RefreshCw, ShieldCheck, Network, Search, Play, Square, TestTube2, Trash2 } from 'lucide-react'
-import { api, type GatewayStatus, type Instance } from '../lib/api'
+import { api, type GatewayStatus, type Instance, type TestResult } from '../lib/api'
 
 function statusBadge(st: Instance['status']): [string, string] {
   if (st === 'Running') return ['bg-green-50 text-green-700', '健康']
@@ -18,6 +18,8 @@ export default function PoolPage({
 }) {
   const [gw, setGw] = useState<GatewayStatus | null>(null)
   const [instances, setInstances] = useState<Instance[]>([])
+  // 测试结果（行内徽章正反馈）：name → TestResult
+  const [testResults, setTestResults] = useState<Record<string, TestResult>>({})
   const [stopping, setStopping] = useState(false)
   const [routeBusy, setRouteBusy] = useState(false)
   const [kickBusy, setKickBusy] = useState<string | null>(null)
@@ -141,6 +143,7 @@ export default function PoolPage({
         toast(`已停止实例 ${name}`)
       } else {
         const r = await api.testInstance(name)
+        setTestResults((prev) => ({ ...prev, [name]: r }))
         if (r.ok) toast(`「${name}」测试通过：${r.message}（${r.latency_ms}ms）`)
         else toast(`「${name}」测试失败：${r.message}`, false)
       }
@@ -173,16 +176,28 @@ export default function PoolPage({
         ok = r.success_count
         fail = r.error_count
       } else {
-        // 测试无批量命令，逐个探测
-        for (const n of names) {
-          try {
-            const r = await api.testInstance(n)
-            if (!r.ok) throw new Error(r.message)
+        // 测试：前端并行探测，结果逐行回填徽章
+        const results = await Promise.allSettled(names.map((n) => api.testInstance(n)))
+        const updated: Record<string, TestResult> = {}
+        names.forEach((n, i) => {
+          const r = results[i]!
+          if (r.status === 'fulfilled' && r.value.ok) {
             ok++
-          } catch {
+            updated[n] = r.value
+          } else {
             fail++
+            updated[n] = {
+              name: n,
+              port: 0,
+              ok: false,
+              status_code: null,
+              model_count: null,
+              message: r.status === 'fulfilled' ? r.value.message : String(r.reason),
+              latency_ms: 0,
+            }
           }
-        }
+        })
+        setTestResults((prev) => ({ ...prev, ...updated }))
       }
       const label = kind === 'start' ? '启动' : kind === 'stop' ? '停止' : '测试'
       toast(`池成员${label}完成：成功 ${ok} 个${fail ? `，失败 ${fail}` : ''}`, fail === 0)
@@ -418,7 +433,10 @@ export default function PoolPage({
                     </td>
                     <td className="py-2.5 pl-2 text-zinc-500">{i.port}</td>
                     <td className="py-2.5 pl-2">
-                      <span className={clsx('inline-block px-2 py-0.5 rounded-full text-xs font-medium', cls)}>{label}</span>
+                      <div className="flex flex-col items-start gap-1">
+                        <span className={clsx('inline-block px-2 py-0.5 rounded-full text-xs font-medium', cls)}>{label}</span>
+                        {testBadge(testResults[i.name])}
+                      </div>
                     </td>
 <td className="py-2.5 pl-2 pr-4">
                       <div className="flex items-center justify-end gap-1.5">
@@ -471,5 +489,28 @@ export default function PoolPage({
         )}
       </div>
     </div>
+  )
+}
+
+/** 测试结果徽章：✓ 通过+延迟+详情 / ✗ 失败+原因（无结果返回 null 不占位） */
+function testBadge(r?: TestResult) {
+  if (!r) return null
+  if (r.ok) {
+    return (
+      <span
+        className="inline-block max-w-[240px] px-2 py-0.5 rounded-full text-[11px] font-medium bg-green-50 text-green-700 truncate"
+        title={r.message}
+      >
+        ✓ 通过 {r.latency_ms}ms{r.message ? ` · ${r.message}` : ''}
+      </span>
+    )
+  }
+  return (
+    <span
+      className="inline-block max-w-[240px] px-2 py-0.5 rounded-full text-[11px] font-medium bg-red-50 text-red-600 truncate"
+      title={r.message || '测试失败'}
+    >
+      ✗ {r.message || '失败'}
+    </span>
   )
 }
