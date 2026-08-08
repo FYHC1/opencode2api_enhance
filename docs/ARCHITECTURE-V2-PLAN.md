@@ -268,8 +268,13 @@ type PoolVendor interface {
 | 6 | P1 | 过时文档清理 + config.example.json 补全 + 版本号口径说明 | ⬜ | | 随 P1.2 收尾处理 |
 | 7 | P2 | `core/contract` 定稿（基础 + PoolVendor + Tier/Transport/Stream/Meta） | ✅ | 2026-08-08 | 见 `core/contract/contract.go`；commit `de91054` |
 | 7b | P2 | `core/aggregator` 聚合层（合并/刷新/隔离） + 单测 | ✅ | 2026-08-08 | commit `de91054` |
-| 8 | P2 | `vendors/opencode/` 实现（会话/目录/免费/错误语义） | 🔄 | | 目录层 ✅；Chat/ChatStream 切流接线=P2B |
-| 9 | P2 | 硬编码 URL 断言测试改写为对厂商 mock | ⬜ | | 随 P2B 切流同步做 |
+| 8 | P2 | `vendors/opencode/` 实现（会话/目录/免费/错误语义） | ✅ | 2026-08-08 | commit `95bbc82`（包）`36be5df`（目录装配）`63344ec`（Chat/ChatStream+测试） |
+| 8b | P2 | P2-B1：目录经聚合器装配（main 启动 + startModelRefresh 换源） | ✅ | 2026-08-08 | 单厂商行为与基线一致，全部测试绿 |
+| 8c | P2 | P2-B2：vendor Chat/ChatStream 完整实现 + 4 项单测（zen/go 端点、429 重试、Anthropic 转换） | ✅ | 2026-08-08 | commit `63344ec` |
+| 8d | P2 | P2-B3：main handler 切流（chatCompletions/claude/responses/gateway_timeout 经 vendor），移除旧 upstream.go 实现，测试迁移 | ⬜ | | 见下方 P2-B3 注记 |
+| 9 | P2 | 硬编码 URL 断言测试改写为对厂商 mock | ⬜ | | 随 P2-B3 同步做 |
+
+> **P2-B3 续接注记（给下次执行）**：main 侧保留薄适配层（`callOpenCodeAPI/Stream` 签名不变，内部桥接 `contract.Message` + 全局 vendor；`rootTransport` 已就绪，测试的 fake httpClient 自动生效）。关键点：(1) vendor 的 go 端点判定依赖它自己的 catalog，需在 `refreshModelCatalog` 内同步 `SetCatalog`；(2) 旧 `extractUpstreamAuth` → mode 字符串映射（public/auto/zen/go）写入 Options；(3) `KeyMaxRetries` 传 `maxRouteRetries()`；(4) 移除后清理 main 侧 Anthropic 转换重复代码与旧测试引用。
 | 10 | P3 | `vendors/windsurf/` Go 移植完成（注册/聊天/健康/存储/用量） | ⬜ | | |
 | 11 | P3 | ★24h 冷却 / ★额度≤20% 预注册 / ★中途无感换号 三能力完成 | ⬜ | | 三能力为新建 |
 | 12 | P3 | `/v1/models` 双厂商聚合（前缀区分），分发与厂商级 failover 通过 | ⬜ | | |
