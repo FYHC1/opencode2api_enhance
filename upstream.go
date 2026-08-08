@@ -1,202 +1,117 @@
-// Part of the P1 (core split) refactor: code moved out of main.go.
-// Same package (main) - do not change package clause manually.
+// 上游调用适配层（P2-B3 切流后）。
+//
+// callOpenCodeAPI / callOpenCodeAPIStream 签名保持不变（handler / 测试 / 网关续写
+// 均不感知），内部桥接到全局 OpenCode 厂商（vendors/opencode，实现 contract.Vendor）。
+// 传输层经 rootTransport 复用既有 SOCKS5 池/健康/冷却逻辑。
 package main
 
 import (
-	"bytes"
-	"encoding/json"
-	"fmt"
+	"context"
 	"io"
-	"log/slog"
 	"net/http"
+	"sync"
+
+	"github.com/6Kmfi6HP/opencode2api/core/contract"
+	"github.com/6Kmfi6HP/opencode2api/vendors/opencode"
 )
-
-func buildOCRequest(modelID string, bodyMap map[string]any, auth UpstreamAuth) (*http.Request, error) {
-	return buildOCRequestWithEndpoint(modelID, bodyMap, auth, auth.shouldUseGoEndpoint(modelID))
-}
-
-func buildOCRequestWithEndpoint(modelID string, bodyMap map[string]any, auth UpstreamAuth, useGoEndpoint bool) (*http.Request, error) {
-	bodyMap["model"] = modelID
-	delete(bodyMap, "reasoning_effort")
-	tryBody, err := json.Marshal(bodyMap)
-	if err != nil {
-		return nil, err
-	}
-	var upstreamURL string
-	if useGoEndpoint {
-		upstreamURL = "https://opencode.ai/zen/go/v1/chat/completions"
-	} else {
-		upstreamURL = "https://opencode.ai/zen/v1/chat/completions"
-	}
-	req, err := http.NewRequest("POST", upstreamURL, bytes.NewReader(tryBody))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", auth.authorizationHeader())
-	req.Header.Set("User-Agent", fmt.Sprintf("opencode/%s", ocClientVer))
-	req.Header.Set("x-opencode-client", "cli")
-	req.Header.Set("x-opencode-project", ocProjectID)
-	req.Header.Set("x-opencode-session", ocSessionID)
-	req.Header.Set("x-opencode-request", "req_"+randomString(24))
-	req.Header.Set("Accept", "application/json")
-	return req, nil
-}
-
-func shouldRetryUpstreamStatus(status int) bool {
-	// 仅重试可恢复的临时性错误
-	switch status {
-	case http.StatusUnauthorized, // 401 认证过期或 token 未同步
-		http.StatusTooManyRequests,    // 429 限流
-		http.StatusBadGateway,         // 502
-		http.StatusServiceUnavailable, // 503
-		http.StatusGatewayTimeout:     // 504
-		return true
-	}
-	// 其他 5xx 也重试，但 4xx 中只有 401 和 429 重试
-	return status >= 500 && status < 600
-}
 
 const (
 	maxUpstreamRetries = 3
 	max401Retries      = 3
 )
 
-func callOpenCodeAPI(upstreamBody []byte, modelID string, auth UpstreamAuth) ([]byte, int, http.Header, string, error) {
-	initOCSession()
+var (
+	ocAdapterOnce   sync.Once
+	ocAdapterTarget *opencode.Vendor
+)
 
-	var bodyMap map[string]any
-	if err := json.Unmarshal(upstreamBody, &bodyMap); err != nil {
-		return nil, 500, nil, "", fmt.Errorf("invalid request body")
-	}
-	useGoEndpoint := auth.shouldUseGoEndpoint(modelID)
-
-	var lastErr error
-	var retryCount int
-	var retry401Count int
-	var lastBody []byte
-	var lastStatus int
-	var lastHeader http.Header
-	var lastProxyAddr string
-	maxRetries := maxRouteRetries()
-	for retryCount <= maxRetries {
-		up, err := buildOCRequestWithEndpoint(modelID, bodyMap, auth, useGoEndpoint)
-		if err != nil {
-			lastErr = err
-			break
-		}
-		client, proxyAddr := getHTTPClientForTierWithProxy(auth.tier())
-		resp, err := client.Do(up)
-		if err != nil {
-			markSocks5Result(proxyAddr, 0, err)
-			lastErr = err
-			retryCount++
-			continue
-		}
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			markSocks5Result(proxyAddr, resp.StatusCode, nil)
-			b, readErr := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			if readErr != nil {
-				return nil, 0, nil, "", readErr
-			}
-			if isAnthropicFormat(b) {
-				b = convertAnthropicToOpenAI(b, modelID)
-			}
-			return b, resp.StatusCode, resp.Header, proxyAddr, nil
-		}
-		errBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		markSocks5Result(proxyAddr, resp.StatusCode, nil)
-		slog.Error("upstream error", "model", modelID, "status", resp.StatusCode, "body", string(errBody))
-		lastBody = errBody
-		lastStatus = resp.StatusCode
-		lastHeader = resp.Header
-		lastProxyAddr = proxyAddr
-		lastErr = fmt.Errorf("upstream error")
-		if shouldRetryUpstreamStatus(resp.StatusCode) {
-			client.CloseIdleConnections()
-			if resp.StatusCode == http.StatusUnauthorized {
-				retry401Count++
-				if retry401Count >= max401Retries {
-					break
-				}
-			} else {
-				retryCount++
-				if retryCount >= maxRetries {
-					break
-				}
-			}
-			continue
-		}
-		break
-	}
-	return lastBody, lastStatus, lastHeader, lastProxyAddr, lastErr
+// mainCodeVendor 返回全局 OpenCode 厂商（惰性装配，测试与生产共用）。
+func mainCodeVendor() *opencode.Vendor {
+	ocAdapterOnce.Do(func() {
+		ocAdapterTarget = opencode.New(opencode.Config{
+			ID:            "opencode",
+			Name:          "OpenCode",
+			Transport:     rootTransport{},
+			AdminPassword: adminPassword,
+		})
+	})
+	return ocAdapterTarget
 }
 
-func callOpenCodeAPIStream(upstreamBody []byte, modelID string, auth UpstreamAuth) (io.ReadCloser, int, http.Header, string, error) {
+// modeName 把本包认证路由模式映射为 vendor 侧字符串（public/auto/zen/go）。
+func modeName(mode AuthRouteMode) string {
+	switch mode {
+	case AuthRoutePublic:
+		return "public"
+	case AuthRouteAuto:
+		return "auto"
+	case AuthRouteZen:
+		return "zen"
+	case AuthRouteGo:
+		return "go"
+	default:
+		return "auto"
+	}
+}
+
+// syncVendorState 把 main 侧的会话与会话缓存推给 vendor，保证：
+//   - 测试注入的 ocSession* 与 modelsCache/goModelsCache 直接生效（fake httpClient 桥接不变）；
+//   - 生产经 refreshModelCatalog 刷新的目录同样在 vendor 内可查（go 端点路由判定）。
+func syncVendorState(v *opencode.Vendor) {
 	initOCSession()
+	v.SetSession(ocClientVer, ocSessionID, ocProjectID)
 
-	var bodyMap map[string]any
-	if err := json.Unmarshal(upstreamBody, &bodyMap); err != nil {
-		return nil, 500, nil, "", fmt.Errorf("invalid request body")
+	modelMu.RLock()
+	zen, goM := modelsCache, goModelsCache
+	modelMu.RUnlock()
+	all := make([]contract.Model, 0, len(zen)+len(goM))
+	for _, m := range zen {
+		all = append(all, contract.Model{ID: m.ID, Provider: "opencode", Free: isFreeModel(m.ID), Meta: map[string]string{"surface": "zen"}})
 	}
-	useGoEndpoint := auth.shouldUseGoEndpoint(modelID)
+	for _, m := range goM {
+		all = append(all, contract.Model{ID: m.ID, Provider: "opencode", Free: isFreeModel(m.ID), Meta: map[string]string{"surface": "go"}})
+	}
+	v.SetCatalog(all)
+}
 
-	var lastBody []byte
-	var lastStatus int
-	var lastHeader http.Header
-	var lastProxyAddr string
-	var retryCount int
-	var retry401Count int
-	maxRetries := maxRouteRetries()
-	for retryCount <= maxRetries {
-		up, err := buildOCRequestWithEndpoint(modelID, bodyMap, auth, useGoEndpoint)
-		if err != nil {
-			break
-		}
-		// SSE 流式请求用去总超时客户端，避免健康长推理流被 5 分钟人为切断
-		client, proxyAddr := getStreamingHTTPClientForTierWithProxy(auth.tier())
-		resp, err := client.Do(up)
-		if err != nil {
-			markSocks5Result(proxyAddr, 0, err)
-			retryCount++
-			continue
-		}
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			markSocks5Result(proxyAddr, resp.StatusCode, nil)
-			return resp.Body, resp.StatusCode, resp.Header, proxyAddr, nil
-		}
-		errBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		markSocks5Result(proxyAddr, resp.StatusCode, nil)
-		slog.Error("upstream error", "model", modelID, "status", resp.StatusCode, "body", string(errBody))
-		lastBody = errBody
-		lastStatus = resp.StatusCode
-		lastHeader = resp.Header
-		lastProxyAddr = proxyAddr
-		if shouldRetryUpstreamStatus(resp.StatusCode) {
-			client.CloseIdleConnections()
-			if resp.StatusCode == http.StatusUnauthorized {
-				retry401Count++
-				if retry401Count >= max401Retries {
-					break
-				}
-			} else {
-				retryCount++
-				if retryCount >= maxRetries {
-					break
-				}
-			}
-			continue
-		}
-		// 不可重试的错误体供下游透传
-		return io.NopCloser(bytes.NewReader(lastBody)), lastStatus, lastHeader, lastProxyAddr, nil
+// callOpenCodeAPI 非流式上游调用（适配层，签名与历史一致）。
+func callOpenCodeAPI(upstreamBody []byte, modelID string, auth UpstreamAuth) ([]byte, int, http.Header, string, error) {
+	v := mainCodeVendor()
+	syncVendorState(v)
+	msg := &contract.Message{
+		Model: modelID,
+		Options: map[string]any{
+			opencode.KeyRawBody:    upstreamBody,
+			opencode.KeyAuthMode:   modeName(auth.Mode),
+			opencode.KeyAuthToken:  auth.Token,
+			opencode.KeyMaxRetries: maxRouteRetries(),
+		},
 	}
-	if lastStatus != 0 {
-		return io.NopCloser(bytes.NewReader(lastBody)), lastStatus, lastHeader, lastProxyAddr, nil
+	reply, err := v.Chat(context.Background(), msg)
+	if reply == nil {
+		return nil, 0, nil, "", err
 	}
-	return nil, 500, nil, "", fmt.Errorf("all models failed")
+	return reply.Body, reply.Status, reply.Headers, reply.NodeAddr, err
+}
+
+// callOpenCodeAPIStream 流式上游调用（适配层，签名与历史一致）。
+func callOpenCodeAPIStream(upstreamBody []byte, modelID string, auth UpstreamAuth) (io.ReadCloser, int, http.Header, string, error) {
+	v := mainCodeVendor()
+	syncVendorState(v)
+	msg := &contract.Message{
+		Model: modelID,
+		Options: map[string]any{
+			opencode.KeyRawBody:    upstreamBody,
+			opencode.KeyAuthMode:   modeName(auth.Mode),
+			opencode.KeyAuthToken:  auth.Token,
+			opencode.KeyMaxRetries: maxRouteRetries(),
+		},
+	}
+	stream, err := v.ChatStream(context.Background(), msg)
+	if stream == nil {
+		return nil, 0, nil, "", err
+	}
+	return stream.ReadCloser, stream.Status, nil, stream.NodeAddr, err
 }
 
 // ======================== 安全响应头过滤 ========================
@@ -217,5 +132,3 @@ func filterResponseHeaders(h http.Header) http.Header {
 	}
 	return filtered
 }
-
-// ======================== Chat Completions Handler ========================

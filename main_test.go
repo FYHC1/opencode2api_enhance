@@ -42,7 +42,6 @@ func TestIsFreeModelIncludesBigPickleOnly(t *testing.T) {
 	}
 }
 
-
 type fakeUpstreamResponse struct {
 	status int
 	body   string
@@ -161,33 +160,33 @@ func TestCallOpenCodeAPIRetries4xxAndClosesConnectionBeforeRetry(t *testing.T) {
 		wantCloses  int
 		requestBody string
 	}{
-	// F6: 同模型路由重试，不换候选模型
-	{
-		name:   "non-stream retries 401",
-		stream: false,
-		responses: []fakeUpstreamResponse{
-			{status: http.StatusUnauthorized, body: `{"error":"unauthorized"}`},
-			{status: http.StatusOK, body: `{"id":"chatcmpl_test","choices":[]}`},
+		// F6: 同模型路由重试，不换候选模型
+		{
+			name:   "non-stream retries 401",
+			stream: false,
+			responses: []fakeUpstreamResponse{
+				{status: http.StatusUnauthorized, body: `{"error":"unauthorized"}`},
+				{status: http.StatusOK, body: `{"id":"chatcmpl_test","choices":[]}`},
+			},
+			wantStatus:  http.StatusOK,
+			wantBody:    `{"id":"chatcmpl_test","choices":[]}`,
+			wantModels:  []string{"primary-model", "primary-model"},
+			wantCloses:  1,
+			requestBody: `{"model":"primary-model","messages":[]}`,
 		},
-		wantStatus:  http.StatusOK,
-		wantBody:    `{"id":"chatcmpl_test","choices":[]}`,
-		wantModels:  []string{"primary-model", "primary-model"},
-		wantCloses:  1,
-		requestBody: `{"model":"primary-model","messages":[]}`,
-	},
-	{
-		name:   "stream retries 429",
-		stream: true,
-		responses: []fakeUpstreamResponse{
-			{status: http.StatusTooManyRequests, body: `{"error":"rate_limited"}`},
-			{status: http.StatusOK, body: "data: ok\n\n"},
+		{
+			name:   "stream retries 429",
+			stream: true,
+			responses: []fakeUpstreamResponse{
+				{status: http.StatusTooManyRequests, body: `{"error":"rate_limited"}`},
+				{status: http.StatusOK, body: "data: ok\n\n"},
+			},
+			wantStatus:  http.StatusOK,
+			wantBody:    "data: ok\n\n",
+			wantModels:  []string{"primary-model", "primary-model"},
+			wantCloses:  1,
+			requestBody: `{"model":"primary-model","messages":[],"stream":true}`,
 		},
-		wantStatus:  http.StatusOK,
-		wantBody:    "data: ok\n\n",
-		wantModels:  []string{"primary-model", "primary-model"},
-		wantCloses:  1,
-		requestBody: `{"model":"primary-model","messages":[],"stream":true}`,
-	},
 	}
 
 	for _, tt := range tests {
@@ -316,84 +315,6 @@ func TestCallOpenCodeAPIExhausted4xxReturnsLastUpstreamResponse(t *testing.T) {
 	}
 	if transport.closeIdleCalls != 1 {
 		t.Fatalf("CloseIdleConnections calls = %d, want 1", transport.closeIdleCalls)
-	}
-}
-
-func TestBuildOCRequestRoutesSharedAndGoOnlyModelsByAuthMode(t *testing.T) {
-	oldModelsCache := modelsCache
-	oldGoModelsCache := goModelsCache
-	modelMu.Lock()
-	modelsCache = []ModelInfo{
-		{ID: "glm-5.2"},
-		{ID: "gpt-5.5"},
-	}
-	goModelsCache = []ModelInfo{
-		{ID: "glm-5.2"},
-		{ID: "kimi-k2.7-code"},
-	}
-	modelMu.Unlock()
-	t.Cleanup(func() {
-		modelMu.Lock()
-		modelsCache = oldModelsCache
-		goModelsCache = oldGoModelsCache
-		modelMu.Unlock()
-	})
-
-	tests := []struct {
-		name    string
-		auth    UpstreamAuth
-		modelID string
-		wantURL string
-	}{
-		{
-			name:    "public stays on zen free surface",
-			auth:    UpstreamAuth{Mode: AuthRoutePublic},
-			modelID: "deepseek-v4-flash-free",
-			wantURL: "https://opencode.ai/zen/v1/chat/completions",
-		},
-		{
-			name:    "bare key keeps shared model on zen",
-			auth:    UpstreamAuth{Mode: AuthRouteAuto, Token: "sk-auto"},
-			modelID: "glm-5.2",
-			wantURL: "https://opencode.ai/zen/v1/chat/completions",
-		},
-		{
-			name:    "go prefix sends shared model to go surface",
-			auth:    UpstreamAuth{Mode: AuthRouteGo, Token: "sk-go"},
-			modelID: "glm-5.2",
-			wantURL: "https://opencode.ai/zen/go/v1/chat/completions",
-		},
-		{
-			name:    "bare key still reaches go only models",
-			auth:    UpstreamAuth{Mode: AuthRouteAuto, Token: "sk-auto"},
-			modelID: "kimi-k2.7-code",
-			wantURL: "https://opencode.ai/zen/go/v1/chat/completions",
-		},
-		{
-			name:    "zen prefix forces zen surface",
-			auth:    UpstreamAuth{Mode: AuthRouteZen, Token: "sk-zen"},
-			modelID: "glm-5.2",
-			wantURL: "https://opencode.ai/zen/v1/chat/completions",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req, err := buildOCRequest(tt.modelID, map[string]any{"messages": []any{}}, tt.auth)
-			if err != nil {
-				t.Fatalf("buildOCRequest() error = %v", err)
-			}
-			if got := req.URL.String(); got != tt.wantURL {
-				t.Fatalf("buildOCRequest() URL = %q, want %q", got, tt.wantURL)
-			}
-			wantAuth := "Bearer public"
-			if tt.auth.Mode != AuthRoutePublic {
-				wantAuth = "Bearer " + tt.auth.Token
-			}
-			if got := req.Header.Get("Authorization"); got != wantAuth {
-				t.Fatalf("buildOCRequest() Authorization = %q, want %q", got, wantAuth)
-			}
-		})
 	}
 }
 
@@ -917,7 +838,6 @@ func TestGetStreamingHTTPClientRemovesTotalTimeout(t *testing.T) {
 	}
 }
 
-
 // ======================== F5 模型必填校验 ========================
 
 func TestChatCompletionsHandlerRequiresModel(t *testing.T) {
@@ -972,4 +892,3 @@ func TestResponsesHandlerRequiresModel(t *testing.T) {
 		t.Fatalf("body = %q, want 'model is required'", rec.Body.String())
 	}
 }
-

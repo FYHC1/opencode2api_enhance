@@ -251,8 +251,8 @@ func (v *Vendor) Auth(r *http.Request) string {
 // 会话初始化钩子（测试/管理端用）
 // ---------------------------------------------------------------------------
 
-// SetSessionForTest 预置会话并消费 once，跳过版本探测（测试用）。
-func (v *Vendor) SetSessionForTest(ver, sid, pid string) {
+// SetSession 预置会话并消费 once（跳过版本探测）。core 装配/测试时使用。
+func (v *Vendor) SetSession(ver, sid, pid string) {
 	v.ocClientVer = ver
 	v.ocSessionID = sid
 	v.ocProjectID = pid

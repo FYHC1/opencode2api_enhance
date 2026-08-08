@@ -254,7 +254,7 @@ func (v *Vendor) ChatStream(ctx context.Context, msg *contract.Message) (*contra
 	}
 	var bodyMap map[string]any
 	if err := json.Unmarshal(raw, &bodyMap); err != nil {
-		return &contract.Stream{ReadCloser: io.NopCloser(bytes.NewReader(nil)), NodeAddr: ""}, nil
+		return &contract.Stream{ReadCloser: io.NopCloser(bytes.NewReader(nil))}, nil
 	}
 	a := parseAuth(msg)
 	modelID := msg.Model
@@ -281,7 +281,7 @@ func (v *Vendor) ChatStream(ctx context.Context, msg *contract.Message) (*contra
 		}
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			tr.Mark(proxyAddr, resp.StatusCode, nil)
-			return &contract.Stream{ReadCloser: resp.Body, NodeAddr: proxyAddr}, nil
+			return &contract.Stream{ReadCloser: resp.Body, Status: resp.StatusCode, NodeAddr: proxyAddr}, nil
 		}
 		errBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
@@ -305,10 +305,10 @@ func (v *Vendor) ChatStream(ctx context.Context, msg *contract.Message) (*contra
 			}
 			continue
 		}
-		return &contract.Stream{ReadCloser: io.NopCloser(bytes.NewReader(lastBody)), NodeAddr: lastProxyAddr}, nil
+		return &contract.Stream{ReadCloser: io.NopCloser(bytes.NewReader(lastBody)), Status: lastStatus, NodeAddr: lastProxyAddr}, nil
 	}
 	if lastStatus != 0 {
-		return &contract.Stream{ReadCloser: io.NopCloser(bytes.NewReader(lastBody)), NodeAddr: lastProxyAddr}, nil
+		return &contract.Stream{ReadCloser: io.NopCloser(bytes.NewReader(lastBody)), Status: lastStatus, NodeAddr: lastProxyAddr}, nil
 	}
 	return nil, fmt.Errorf("all models failed")
 }

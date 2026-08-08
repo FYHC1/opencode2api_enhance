@@ -86,9 +86,10 @@ type Reply struct {
 	NodeAddr string      // 实际使用的出口节点地址（供统计/节点前缀；直连为空）
 }
 
-// Stream 是流式响应的封装：ReadCloser + 实际出口节点地址。
+// Stream 是流式响应的封装：ReadCloser + 状态码 + 实际出口节点地址。
 type Stream struct {
 	io.ReadCloser
+	Status   int
 	NodeAddr string
 }
 

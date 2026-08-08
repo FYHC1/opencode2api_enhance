@@ -80,7 +80,7 @@ func (t *fakeContractTransport) Mark(proxyAddr string, status int, _ error) {
 // newTestVendor 构造带假传输的厂商，并预置会话（跳过版本探测）。
 func newTestVendor(rt *fakeRT, addr string) *Vendor {
 	v := New(Config{Transport: &fakeContractTransport{rt: rt, proxyAddr: addr}})
-	v.SetSessionForTest("1.15.3", "ses_test", "proj_test")
+	v.SetSession("1.15.3", "ses_test", "proj_test")
 	return v
 }
 
@@ -138,6 +138,52 @@ func TestChatGoModeUsesGoEndpoint(t *testing.T) {
 	}
 	if len(rt.auths) != 1 || rt.auths[0] != "Bearer sk-gokey" {
 		t.Fatalf("auth = %v, want Bearer sk-gokey", rt.auths)
+	}
+}
+
+func TestChatAuthModesRouteEndpoints(t *testing.T) {
+	rt := &fakeRT{responses: []fakeResp{{status: 200, body: `{"id":"r","object":"chat.completion","choices":[]}`}}}
+	v := newTestVendor(rt, "n5")
+	v.SetCatalog([]contract.Model{
+		{ID: "m-shared", Provider: "opencode", Meta: map[string]string{"surface": "zen"}},
+		{ID: "m-shared", Provider: "opencode", Meta: map[string]string{"surface": "go"}},
+		{ID: "m-goonly", Provider: "opencode", Meta: map[string]string{"surface": "go"}},
+	})
+
+	tests := []struct {
+		name    string
+		model   string
+		mode    string
+		wantURL string
+	}{
+		{"auto shared => zen", "m-shared", "auto", "/zen/v1/chat/completions"},
+		{"auto go-only => go", "m-goonly", "auto", "/zen/go/v1/chat/completions"},
+		{"go prefix shared => go", "m-shared", "go", "/zen/go/v1/chat/completions"},
+		{"zen prefix forced => zen", "m-shared", "zen", "/zen/v1/chat/completions"},
+		{"public => zen", "m-shared", "public", "/zen/v1/chat/completions"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rt.mu.Lock()
+			rt.responses = []fakeResp{{status: 200, body: `{"id":"r","object":"chat.completion","choices":[]}`}}
+			rt.mu.Unlock()
+
+			raw := `{"model":"` + tt.model + `","messages":[]}`
+			reply, err := v.Chat(context.Background(), msgWith(raw, tt.model, tt.mode, "sk-key"))
+			if err != nil {
+				t.Fatalf("Chat: %v", err)
+			}
+			if reply.Status != 200 {
+				t.Fatalf("status = %d", reply.Status)
+			}
+			rt.mu.Lock()
+			url := rt.urls[len(rt.urls)-1]
+			rt.mu.Unlock()
+			if !strings.HasSuffix(url, tt.wantURL) {
+				t.Fatalf("url = %s, want suffix %s", url, tt.wantURL)
+			}
+		})
 	}
 }
 
