@@ -196,7 +196,11 @@ type PoolVendor interface {
 |---|---|---|---|
 | P3-B1 | Connect-RPC 基础：最小 protobuf 编解码（varint / wire type 0/1/2/5）+ GetUserStatus 用量解析 | ✅ | 2026-08-08 | `vendors/windsurf/connect/proto.go` + golden 单测；commit `4a85882` |
 | P3-B2 | Connect-RPC 客户端：request builders（clientMetadata/completionConfig/modelConfig/指纹）/ 帧解析（gzip/end）/ DoChat + OpenAI-SSE 流 | ✅ | 2026-08-08 | commit `4a85882`；端到端 fake-HTTP 单测（帧解析 / SSE / DONE） |
-| P3-B3 | 工具仿真：客户端 tools → XML `<tool_call>` 注入 system prompt（其实是可选项） | ⬜ | | 无工具需求先跳过，标注 YAGNI |
+| P3-B3 | 工具仿真：客户端 tools → XML `<tool_call>` 注入 system prompt | ⬜ | | YAGNI 可跳过（免费档上游不支持原生 tools） |
+| P3-B4 | Mailbox：TMaily（domains / generate / emails 轮询） | ✅ | 2026-08-08 | `vendors/windsurf/tmaily.go` + httptest 单测；commit `55ff34b` |
+| P3-B5 | Registrar：注册链 connections → email_start → WaitCode → complete → post-auth/bootstrap → windsurf/continue → ExchangeDevinCode 换 session | ✅ | 2026-08-08 | `devin_auth.go` + 全链 httptest；commit `55ff34b` |
+| P3-B6 | 用量回写：GetUserStatus → SetPoolUsage；Chat 成功后异步刷新 + 周期刷新 | ✅ | 2026-08-08 | `usage.go` + 单测；commit `55ff34b` |
+| P3-B7 | 流中无感换号：Chatter 流内错误 → 换号重发（与 core/gateway 断点续写衔接） | ⬜ | | 收尾项 |
 | P3-B3 | 工具仿真（可选，跟进）：客户端 tools → XML `<tool_call>` 注入 system prompt，输出刮取转回 OpenAI tool_calls | `tool_emulation.rs` | 无则先不接 |
 | P3-B4 | Mailbox：TMaily（domains / generate / emails 轮询） | `tmaily.rs` | 真实 HTTP，可用 `contract.Transport` 注入 |
 | P3-B5 | Registrar：注册链 email_start → email_complete → bootstrap_session（post-auth+set-cookie）→ api-key → `windsurf_continue` → `ExchangeDevinCode` 换 session | `devin_auth.rs` | 入库到 pool（先登邮箱，成功后由上层注册 Start 触发） |
