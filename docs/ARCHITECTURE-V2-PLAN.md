@@ -188,6 +188,24 @@ type PoolVendor interface {
 
 ---
 
+### P3-B 子计划（上游协议移植，抄作业源：`D:\AI_Projects\windsurf-account-manager\source\src-tauri\src\*.rs`）
+
+> 目标：把 `vendors/windsurf/` 的三个接缝（Chatter / Mailbox / Registrar）+ 用量回写落到实处，打通"池型厂商全链路"。每个子步骤结束 `go test -count=1 ./...` 全绿。
+
+| 子步骤 | 内容 | 对照组（Rust） | 备注 |
+|---|---|---|---|
+| P3-B1 | Connect-RPC 基础：最小 protobuf 编解码（varint / wire type 0/1/2/5 / packed fields） | `proto_min.rs` | 独立包 `vendors/windsurf/connect/`，纯函数 + 单测解码 golden 用例 |
+| P3-B2 | Chatter 实现：`POST server.codeium.com /exa.api_server_pb.ApiServerService/GetChatMessage`（Connect 帧：1 字节 flags + 4 字节 BE length）+ 元数据/模型选择器/会话指纹头；流式 SSE 帧解析 | `devin_connect.rs` | 用 fakeTransport 单测；先非流式 → 后流式 |
+| P3-B3 | 工具仿真（可选，跟进）：客户端 tools → XML `<tool_call>` 注入 system prompt，输出刮取转回 OpenAI tool_calls | `tool_emulation.rs` | 无则先不接 |
+| P3-B4 | Mailbox：TMaily（domains / generate / emails 轮询） | `tmaily.rs` | 真实 HTTP，可用 `contract.Transport` 注入 |
+| P3-B5 | Registrar：注册链 email_start → email_complete → bootstrap_session（post-auth+set-cookie）→ api-key → `windsurf_continue` → `ExchangeDevinCode` 换 session | `devin_auth.rs` | 入库到 pool（先登邮箱，成功后由上层注册 Start 触发） |
+| P3-B6 | 用量回写：`GetUserStatus`（seat_management）→ 填 `SetPoolUsage`；Chat 成功/周期异步刷新 | `usage.rs` / `windsurf_api.rs` | 挂钩 `preUsageRefresh` |
+| P3-B7 | 流中无感换号：Chatter 流内 capacity/错误事件 → 回卷广播 → 换号重发（与 core/gateway 断点续写衔接） | 原项目 MAX_HOPS 为流前重试，流中断换号需新写 | 验收项 13 的收尾 |
+
+> 完成后顺序验证：单号正常 / 429 自动换号 / 额度≤20% 预注册 / 第二天旧号解冻复用 / 中途断流换号续写。真实环境冒烟由用户提供（需 Devin 站点可达 + 临时邮箱服务可用）。
+
+---
+
 ## 四、实施阶段（每阶段：目标 / 改动 / 验收；P0 已完成项打勾）
 
 ### P0 基线（当前）
@@ -248,6 +266,7 @@ type PoolVendor interface {
 
 ### P5 多平台（Linux/macOS）
 - **目标**：壳层跨平台 + 打包矩阵。
+- **子计划（开工前细化）**：P5-1 端壳系统调用替换（端口清理→lsof /proc；开机自启→.desktop/LaunchAgent，可考虑 auto-launch crate；clash 目录按平台给配置）→ P5-2 embed.rs 按 `cfg!(target_os)` 选平台二进制 + CI 矩阵下载 sing-box → P5-3 tauri.conf 加 deb/rpm/AppImage（Linux）、dmg（macOS）→ P5-4 CI 三平台产物联验。
 - **改动**：内嵌二进制按平台（cfg!(target_os) + CI 矩阵）；替换 Windows 系统调用（端口清理/开机自启/进程终止/Clash 目录）；tauri.conf.json 加 deb/rpm/AppImage、dmg；CI 平台矩阵。
 - **验收**：Linux/macOS 上跑通 实例启停 + 节点扫描 + 网关 + 托盘；CI 每平台产出完整包。
 
