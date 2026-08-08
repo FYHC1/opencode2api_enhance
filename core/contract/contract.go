@@ -24,10 +24,11 @@ type Capabilities struct {
 
 // Model 是厂商模型目录中的一条记录。
 type Model struct {
-	ID       string       // 厂商内部模型名（如 opencode 的 deepseek-v4-flash-free）
-	Provider string       // 厂商 ID（如 "opencode" / "windsurf"）
-	Free     bool         // 是否免费额度模型
-	Caps     Capabilities // 能力元数据（可选，未知则零值）
+	ID       string            // 厂商内部模型名（如 opencode 的 deepseek-v4-flash-free）
+	Provider string            // 厂商 ID（如 "opencode" / "windsurf"）
+	Free     bool              // 是否免费额度模型
+	Caps     Capabilities      // 能力元数据（可选，未知则零值）
+	Meta     map[string]string // 平台附加信息（如 opencode 的目录面 "surface":"zen"|"go"）
 }
 
 // Msg 是归一化请求中的一条消息。
@@ -79,10 +80,50 @@ type Message struct {
 // Reply 是厂商返回给 core 的统一结果。
 // Body 为 OpenAI Chat 形态（流式为逐 chunk），core 负责再转回各入站协议。
 type Reply struct {
-	Body    []byte      // 响应体
-	Status  int         // HTTP 状态码
-	Headers http.Header // 响应头（透传安全头）
+	Body     []byte      // 响应体
+	Status   int         // HTTP 状态码
+	Headers  http.Header // 响应头（透传安全头）
+	NodeAddr string      // 实际使用的出口节点地址（供统计/节点前缀；直连为空）
 }
+
+// Stream 是流式响应的封装：ReadCloser + 实际出口节点地址。
+type Stream struct {
+	io.ReadCloser
+	NodeAddr string
+}
+
+// Tier 描述一个请求所属层：免费层（通常走代理池）或付费层（直连）。
+// 由 core 的 Transport 解释（如 opencode 免费层走 SOCKS5 池、付费层直连）。
+type Tier int
+
+const (
+	TierFree Tier = iota
+	TierPaid
+)
+
+// Transport 由 core（网关）注入厂商：厂商负责构造请求与上游语义，
+// 实际发出 HTTP 请求（含代理池选择/健康维护）交给 Transport。
+// 这是"节点路由/代理池"下沉到 core、厂商实现不复用池的位置。
+type Transport interface {
+	// Client 返回用于 tier 层的 HTTP 客户端与所用出口节点地址（直连则空字符串）。
+	// streaming=true 时返回去掉总超时的流式客户端（避免长推理流被切断）。
+	Client(tier Tier, streaming bool) (*http.Client, string)
+
+	// Mark 记录一次请求结果（成功/失败），供代理池健康/冷却维护。
+	Mark(proxyAddr string, status int, reqErr error)
+}
+
+// DirectTransport 是最简传输实现：直连（http.DefaultClient）、无代理、无健康维护。
+// 用于未注入真实网关传输的场景（单元测试、厂商独立冒烟）。
+type DirectTransport struct{}
+
+// Client 实现 Transport。
+func (DirectTransport) Client(_ Tier, _ bool) (*http.Client, string) {
+	return http.DefaultClient, ""
+}
+
+// Mark 实现 Transport（无操作）。
+func (DirectTransport) Mark(string, int, error) {}
 
 // ErrRules 描述厂商可重试/可切换/进坏账的状态码语义。
 // 现状（opencode）的 401/402/429/503 是写死的，这里按厂商差异化。
@@ -116,8 +157,8 @@ type Vendor interface {
 	// Chat 发起非流式聊天，返回 OpenAI 形态响应体。
 	Chat(ctx context.Context, msg *Message) (*Reply, error)
 
-	// ChatStream 发起流式 chat，返回 SSE 响应体（core 负责读流/续写）。
-	ChatStream(ctx context.Context, msg *Message) (io.ReadCloser, error)
+	// ChatStream 发起流式 chat，返回 SSE 流（core 负责读流/续写）。
+	ChatStream(ctx context.Context, msg *Message) (*Stream, error)
 
 	// Auth 根据入站请求构造厂商请求的认证头（如 "Bearer public"、"Bearer sk-..."）。
 	Auth(r *http.Request) string
