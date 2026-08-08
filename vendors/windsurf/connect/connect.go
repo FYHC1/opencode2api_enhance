@@ -443,6 +443,7 @@ type sseReader struct {
 	src       io.ReadCloser
 	fb        frameBuffer
 	done      bool
+	streamErr bool // 收到 end_stream 错误 trailer：产 error 事件而非 [DONE]
 	pending   []string
 	sessionID string
 }
@@ -461,6 +462,18 @@ func (r *sseReader) fill() error {
 	for _, fr := range frames {
 		if fr.endStream {
 			r.done = true
+			// Connect-RPC end_stream 帧可能携带 JSON trailer；若含 error 则产出
+			// SSE 错误事件（供上层"流中无感换号"触发），否则正常收尾 [DONE]。
+			txt := strings.TrimSpace(string(fr.payload))
+			if txt != "" && txt != "{}" {
+				var trailer map[string]any
+				if json.Unmarshal([]byte(txt), &trailer) == nil {
+					if e, ok := trailer["error"]; ok && e != nil {
+						r.streamErr = true
+						r.pending = append(r.pending, "data: "+toJSON(map[string]any{"error": e}))
+					}
+				}
+			}
 			continue
 		}
 		content, reasoning, fin, usage := decodeFrameDelta(fr.payload)
@@ -489,7 +502,7 @@ func (r *sseReader) fill() error {
 			}))
 		}
 	}
-	if r.done {
+	if r.done && !r.streamErr {
 		r.pending = append(r.pending, "data: [DONE]")
 	}
 	if err != nil && err != io.EOF && !r.done {

@@ -305,6 +305,9 @@ func (v *Vendor) Chat(ctx context.Context, msg *contract.Message) (*contract.Rep
 }
 
 // ChatStream 实现 contract.Vendor（流式）。Connect-RPC 流式接缝同 Chat。
+//
+// P3-B7：返回流经 midStreamSwitch 包装——流内错误/中断自动换号续写（用户无感）。
+// 借号失败/连接失败仍按老口径（标号冷却 + 上报错误），由 core 层厂商级 failover 兜底。
 func (v *Vendor) ChatStream(ctx context.Context, msg *contract.Message) (*contract.Stream, error) {
 	v.pool.mu.Lock()
 	chatter := v.cfg.Chatter
@@ -325,13 +328,18 @@ func (v *Vendor) ChatStream(ctx context.Context, msg *contract.Message) (*contra
 	if err != nil || stream == nil {
 		v.pool.release(string(acct), time.Now(), true)
 		if stream != nil {
-			return stream, err
+			stream.Close()
+		}
+		if err == nil {
+			err = errors.New("windsurf: 上游未返回流")
 		}
 		return nil, err
 	}
 	v.pool.touch(string(acct), time.Now())
 	v.preRegisterIfLow()
-	return stream, nil
+	// 流中无感换号（P3-B7）：接管流与账号生命周期，流内错误自动换号续写。
+	sw := newMidStreamSwitch(v, ctx, msg, stream.ReadCloser, string(acct))
+	return &contract.Stream{ReadCloser: sw, Status: stream.Status, NodeAddr: stream.NodeAddr}, nil
 }
 
 // SetPoolUsage 供上游用量刷新回写（P3-B 经 GetUserStatus 调用）。

@@ -98,3 +98,29 @@ func frameWithFlags(flags byte, payload []byte) []byte {
 	copy(out[5:], payload)
 	return out
 }
+
+func TestStreamSSESurfacesErrorTrailer(t *testing.T) {
+	// end_stream 帧携带错误 trailer → 流内应产出 error 事件而非 [DONE]（换号触发源）。
+	var body []byte
+	body = append(body, wrapEnvelope(EncodeString(fieldContent, "partial"))...)
+	body = append(body, frameWithFlags(0x02, []byte(`{"error":{"code":13,"message":"rate limited"}}`))...)
+
+	rt := &fakeRT{respBody: body}
+	c := NewClient(&http.Client{Transport: rt})
+	rc, err := c.StreamSSE(context.Background(), "tok-y", []ChatMessage{{Role: "user", Content: "hi"}}, "swe-1-6-slow", nil, nil)
+	if err != nil {
+		t.Fatalf("StreamSSE: %v", err)
+	}
+	defer rc.Close()
+	all, _ := io.ReadAll(rc)
+	sse := string(all)
+	if strings.Contains(sse, "DONE") {
+		t.Fatalf("error stream must not emit [DONE]: %s", sse)
+	}
+	if !strings.Contains(sse, `"error"`) {
+		t.Fatalf("SSE missing error event: %s", sse)
+	}
+	if !strings.Contains(sse, `"partial"`) {
+		t.Fatalf("SSE missing preceding content: %s", sse)
+	}
+}

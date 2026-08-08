@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"sync"
@@ -112,6 +113,9 @@ func chatViaVendor(v contract.Vendor, upstreamBody []byte, modelID string, auth 
 	}
 	msg := &contract.Message{
 		Model: modelID,
+		// 归一化消息：非 opencode 厂商（如 windsurf 账号池）不读 KeyRawBody，
+		// 走 Messages 字段；opencode 仍优先读 Options[KeyRawBody]，此字段对其无副作用。
+		Messages: rawBodyToContractMessages(upstreamBody),
 		Options: map[string]any{
 			opencode.KeyRawBody:    upstreamBody,
 			opencode.KeyAuthMode:   modeName(auth.Mode),
@@ -131,6 +135,8 @@ func chatViaVendorStream(v contract.Vendor, upstreamBody []byte, modelID string,
 	}
 	msg := &contract.Message{
 		Model: modelID,
+		// 归一化厂商（windsurf 池型）读 Messages 字段；opencode 仍走 Options[KeyRawBody]。
+		Messages: rawBodyToContractMessages(upstreamBody),
 		Options: map[string]any{
 			opencode.KeyRawBody:    upstreamBody,
 			opencode.KeyAuthMode:   modeName(auth.Mode),
@@ -139,6 +145,38 @@ func chatViaVendorStream(v contract.Vendor, upstreamBody []byte, modelID string,
 		},
 	}
 	return v.ChatStream(context.Background(), msg)
+}
+
+// rawBodyToContractMessages 从 OpenAI Chat 形态请求体提取归一化消息。
+// content 保持 string / 数组两种形态（与 contract.Msg.Content 语义一致），
+// 供非 opencode 厂商（windsurf 等）经 contract.Message.Messages 读取。
+func rawBodyToContractMessages(body []byte) []contract.Msg {
+	var req struct {
+		Messages []json.RawMessage `json:"messages"`
+	}
+	if json.Unmarshal(body, &req) != nil {
+		return nil
+	}
+	out := make([]contract.Msg, 0, len(req.Messages))
+	for _, raw := range req.Messages {
+		var m map[string]any
+		if err := json.Unmarshal(raw, &m); err != nil {
+			continue
+		}
+		role, _ := m["role"].(string)
+		if role == "" {
+			continue
+		}
+		msg := contract.Msg{Role: role}
+		switch c := m["content"].(type) {
+		case string:
+			msg.Content = c
+		case []any:
+			msg.Content = c
+		}
+		out = append(out, msg)
+	}
+	return out
 }
 
 // shouldSwitchVendor 判定某厂商的失败是否应切换下一个候选厂商。
