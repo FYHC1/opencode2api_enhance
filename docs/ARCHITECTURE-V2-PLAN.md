@@ -282,6 +282,17 @@ type PoolVendor interface {
 - **决策备注（自主授权，记录在案）**：① 管理包放 `core/manager`，依赖 contract 与既有网关设施，禁止反向；② `Error` 状态用外部标签数组形式 `{"Error":["msg"]}` 与 Rust serde 对齐；③ 探针每次换节点重启 sing-box（防模型目录缓存污染）；④ probe 使用裸 TCP HTTP 客户端（与 Rust http_get_json 语义一致，供 /api/reset-stats 复用）；⑤ Web 态默认开管理 API（受 requireAuth 保护），桌面态由 Tauri 壳设 `OPCODE2API_DATA_DIR` 隔离。
 - **验收**：浏览器打开 `localhost:<port>/` 可用全部管理功能；桌面版功能与现状等价（实例启停/扫描/统计/日志全链路）。
 
+**P4 进度日志**：
+
+| 子步骤 | 状态 | 日期 | commit / 备注 |
+|---|---|---|---|
+| P4-1 管理 API 层 | ✅ | 2026-08-08 | `2cca241`：core/manager（config/calllog/stats/registry/tcp/netstat）+ `/api/admin/*`HTTP（config/stats/reset/call-log/binaries/instances），单测全绿 |
+| P4-2 实例生命周期 | ⬜ | | 进行中 |
+| P4-3 节点扫描探针 | ⬜ | | |
+| P4-4 网关/批量/restart/data_clean | ⬜ | | |
+| P4-5 前端改走 HTTP + Tauri 薄壳化 | ⬜ | | |
+| P4-6 联动联调 | ⬜ | | |
+
 ### P5 多平台（Linux/macOS）
 - **目标**：壳层跨平台 + 打包矩阵。
 - **子计划（开工前细化）**：P5-1 端壳系统调用替换（端口清理→lsof /proc；开机自启→.desktop/LaunchAgent，可考虑 auto-launch crate；clash 目录按平台给配置）→ P5-2 embed.rs 按 `cfg!(target_os)` 选平台二进制 + CI 矩阵下载 sing-box → P5-3 tauri.conf 加 deb/rpm/AppImage（Linux）、dmg（macOS）→ P5-4 CI 三平台产物联验。
