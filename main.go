@@ -120,61 +120,75 @@ func main() {
 		BuildOpenCfg: managerInst.BuildOpenCodeCfgFor,
 		ListNodes:    managerInst.ListNodesWithGroup,
 	})
-	http.HandleFunc("/v1/chat/completions", loggingMiddleware(apiKeyAuthMiddleware(chatCompletionsHandler)))
-	http.HandleFunc("/v1/responses", loggingMiddleware(apiKeyAuthMiddleware(responsesHandler)))
-	http.HandleFunc("/v1/messages", loggingMiddleware(apiKeyAuthMiddleware(claudeMessagesHandler)))
-	http.HandleFunc("/v1/models", loggingMiddleware(apiKeyAuthMiddleware(listModelsHandler)))
-	http.HandleFunc("/login", loggingMiddleware(loginHandler))
-	http.HandleFunc("/logout", loggingMiddleware(logoutHandler))
-	http.HandleFunc("/api/config", loggingMiddleware(requireAuth(adminConfigHandler)))
-	http.HandleFunc("/api/stats", loggingMiddleware(requireAuth(adminStatsHandler)))
-	http.HandleFunc("/api/reset-stats", loggingMiddleware(apiKeyAuthMiddleware(resetStatsHandler)))
-	http.HandleFunc("/api/node-status", loggingMiddleware(apiKeyAuthMiddleware(nodeStatusHandler)))
-	http.HandleFunc("/api/reload", loggingMiddleware(requireAuth(reloadHandler)))
+
+
+	mux := http.NewServeMux()
+	registerHTTPRoutes(mux, managerInst)
+	addr := ":" + port
+	slog.Info("listening", "addr", addr)
+	if err := http.ListenAndServe(addr, mux); err != nil {
+		slog.Error("server terminated", "error", err)
+		os.Exit(1)
+	}
+}
+
+// registerHTTPRoutes 注册全部 HTTP 路由（/v1、/api、/api/admin、/health、静态 SPA）。
+func registerHTTPRoutes(mux *http.ServeMux, managerInst *manager.Manager) {
+	mux.HandleFunc("/v1/chat/completions", loggingMiddleware(apiKeyAuthMiddleware(chatCompletionsHandler)))
+	mux.HandleFunc("/v1/responses", loggingMiddleware(apiKeyAuthMiddleware(responsesHandler)))
+	mux.HandleFunc("/v1/messages", loggingMiddleware(apiKeyAuthMiddleware(claudeMessagesHandler)))
+	mux.HandleFunc("/v1/models", loggingMiddleware(apiKeyAuthMiddleware(listModelsHandler)))
+	mux.HandleFunc("/login", loggingMiddleware(loginHandler))
+	mux.HandleFunc("/logout", loggingMiddleware(logoutHandler))
+	mux.HandleFunc("/api/config", loggingMiddleware(requireAuth(adminConfigHandler)))
+	mux.HandleFunc("/api/stats", loggingMiddleware(requireAuth(adminStatsHandler)))
+	mux.HandleFunc("/api/reset-stats", loggingMiddleware(apiKeyAuthMiddleware(resetStatsHandler)))
+	mux.HandleFunc("/api/node-status", loggingMiddleware(apiKeyAuthMiddleware(nodeStatusHandler)))
+	mux.HandleFunc("/api/reload", loggingMiddleware(requireAuth(reloadHandler)))
 	// P4: 管理域并入 core（/api/admin/*，鉴权与既有 /api/* 一致；由 core/manager 实现）
-	http.HandleFunc("/api/admin/config", loggingMiddleware(requireAuth(managerInst.ConfigGetHandler())))
-	http.HandleFunc("/api/admin/config/set", loggingMiddleware(requireAuth(managerInst.ConfigSetHandler())))
-	http.HandleFunc("/api/admin/stats", loggingMiddleware(requireAuth(managerInst.StatsHandler())))
-	http.HandleFunc("/api/admin/stats/reset", loggingMiddleware(apiKeyAuthMiddleware(managerInst.ResetStatsHandler())))
-	http.HandleFunc("/api/admin/call-log", loggingMiddleware(requireAuth(managerInst.CallLogHandler())))
-	http.HandleFunc("/api/admin/call-log/clear", loggingMiddleware(requireAuth(managerInst.ClearCallLogHandler())))
-	http.HandleFunc("/api/admin/binaries", loggingMiddleware(apiKeyAuthMiddleware(managerInst.BinariesHandler())))
-	http.HandleFunc("/api/admin/instances", loggingMiddleware(requireAuth(managerInst.InstancesHandler())))
+	mux.HandleFunc("/api/admin/config", loggingMiddleware(requireAuth(managerInst.ConfigGetHandler())))
+	mux.HandleFunc("/api/admin/config/set", loggingMiddleware(requireAuth(managerInst.ConfigSetHandler())))
+	mux.HandleFunc("/api/admin/stats", loggingMiddleware(requireAuth(managerInst.StatsHandler())))
+	mux.HandleFunc("/api/admin/stats/reset", loggingMiddleware(apiKeyAuthMiddleware(managerInst.ResetStatsHandler())))
+	mux.HandleFunc("/api/admin/call-log", loggingMiddleware(requireAuth(managerInst.CallLogHandler())))
+	mux.HandleFunc("/api/admin/call-log/clear", loggingMiddleware(requireAuth(managerInst.ClearCallLogHandler())))
+	mux.HandleFunc("/api/admin/binaries", loggingMiddleware(apiKeyAuthMiddleware(managerInst.BinariesHandler())))
+	mux.HandleFunc("/api/admin/instances", loggingMiddleware(requireAuth(managerInst.InstancesHandler())))
 	// P4-5：装配运行依赖（进程执行器 / 网关 / 扫描），HTTP 管理面用同一份核心。
 	managerInst.SetDeps(manager.NewRealRunner(), manager.NewGateway(managerInst, 0), nil)
 	// P4-5: 管理域操作面路由（/api/admin/*）。
-	http.HandleFunc("/api/admin/nodes", loggingMiddleware(requireAuth(managerInst.NodesHandler())))
-	http.HandleFunc("/api/admin/instances/add", loggingMiddleware(requireAuth(managerInst.InstancesAddHandler())))
-	http.HandleFunc("/api/admin/instances/remove", loggingMiddleware(requireAuth(managerInst.InstancesRemoveHandler())))
-	http.HandleFunc("/api/admin/instances/start", loggingMiddleware(requireAuth(managerInst.InstancesStartHandler())))
-	http.HandleFunc("/api/admin/instances/stop", loggingMiddleware(requireAuth(managerInst.InstancesStopHandler())))
-	http.HandleFunc("/api/admin/instances/refresh", loggingMiddleware(requireAuth(managerInst.InstancesRefreshHandler())))
-	http.HandleFunc("/api/admin/instances/test", loggingMiddleware(requireAuth(managerInst.InstancesTestHandler())))
-	http.HandleFunc("/api/admin/instances/batch/add", loggingMiddleware(requireAuth(managerInst.BatchAddHandler())))
-	http.HandleFunc("/api/admin/instances/batch/start", loggingMiddleware(requireAuth(managerInst.BatchStartHandler())))
-	http.HandleFunc("/api/admin/instances/batch/stop", loggingMiddleware(requireAuth(managerInst.BatchStopHandler())))
-	http.HandleFunc("/api/admin/instances/batch/delete", loggingMiddleware(requireAuth(managerInst.BatchDeleteHandler())))
-	http.HandleFunc("/api/admin/instances/join-gateway", loggingMiddleware(requireAuth(managerInst.JoinGatewayHandler())))
-	http.HandleFunc("/api/admin/port/suggest", loggingMiddleware(requireAuth(managerInst.PortSuggestHandler())))
-	http.HandleFunc("/api/admin/port/check", loggingMiddleware(requireAuth(managerInst.PortCheckHandler())))
-	http.HandleFunc("/api/admin/scan/start", loggingMiddleware(requireAuth(managerInst.ScanStartHandler())))
-	http.HandleFunc("/api/admin/scan/status", loggingMiddleware(requireAuth(managerInst.ScanStatusHandler())))
-	http.HandleFunc("/api/admin/scan/stop", loggingMiddleware(requireAuth(managerInst.ScanStopHandler())))
-	http.HandleFunc("/api/admin/autostart", loggingMiddleware(requireAuth(managerInst.AutostartGetHandler())))
-	http.HandleFunc("/api/admin/autostart/set", loggingMiddleware(requireAuth(managerInst.AutostartSetHandler())))
-	http.HandleFunc("/api/admin/data/clean", loggingMiddleware(requireAuth(managerInst.DataCleanHandler())))
-	http.HandleFunc("/api/admin/gateway/status", loggingMiddleware(requireAuth(managerInst.GatewayStatusHandler())))
-	http.HandleFunc("/api/admin/gateway/route-mode", loggingMiddleware(requireAuth(managerInst.GatewayRouteModeHandler())))
-	http.HandleFunc("/api/admin/gateway/stop", loggingMiddleware(requireAuth(managerInst.GatewayStopHandler())))
-	http.HandleFunc("/api/admin/pool/restart", loggingMiddleware(requireAuth(managerInst.RestartPoolHandler())))
-	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/admin/nodes", loggingMiddleware(requireAuth(managerInst.NodesHandler())))
+	mux.HandleFunc("/api/admin/instances/add", loggingMiddleware(requireAuth(managerInst.InstancesAddHandler())))
+	mux.HandleFunc("/api/admin/instances/remove", loggingMiddleware(requireAuth(managerInst.InstancesRemoveHandler())))
+	mux.HandleFunc("/api/admin/instances/start", loggingMiddleware(requireAuth(managerInst.InstancesStartHandler())))
+	mux.HandleFunc("/api/admin/instances/stop", loggingMiddleware(requireAuth(managerInst.InstancesStopHandler())))
+	mux.HandleFunc("/api/admin/instances/refresh", loggingMiddleware(requireAuth(managerInst.InstancesRefreshHandler())))
+	mux.HandleFunc("/api/admin/instances/test", loggingMiddleware(requireAuth(managerInst.InstancesTestHandler())))
+	mux.HandleFunc("/api/admin/instances/batch/add", loggingMiddleware(requireAuth(managerInst.BatchAddHandler())))
+	mux.HandleFunc("/api/admin/instances/batch/start", loggingMiddleware(requireAuth(managerInst.BatchStartHandler())))
+	mux.HandleFunc("/api/admin/instances/batch/stop", loggingMiddleware(requireAuth(managerInst.BatchStopHandler())))
+	mux.HandleFunc("/api/admin/instances/batch/delete", loggingMiddleware(requireAuth(managerInst.BatchDeleteHandler())))
+	mux.HandleFunc("/api/admin/instances/join-gateway", loggingMiddleware(requireAuth(managerInst.JoinGatewayHandler())))
+	mux.HandleFunc("/api/admin/port/suggest", loggingMiddleware(requireAuth(managerInst.PortSuggestHandler())))
+	mux.HandleFunc("/api/admin/port/check", loggingMiddleware(requireAuth(managerInst.PortCheckHandler())))
+	mux.HandleFunc("/api/admin/scan/start", loggingMiddleware(requireAuth(managerInst.ScanStartHandler())))
+	mux.HandleFunc("/api/admin/scan/status", loggingMiddleware(requireAuth(managerInst.ScanStatusHandler())))
+	mux.HandleFunc("/api/admin/scan/stop", loggingMiddleware(requireAuth(managerInst.ScanStopHandler())))
+	mux.HandleFunc("/api/admin/autostart", loggingMiddleware(requireAuth(managerInst.AutostartGetHandler())))
+	mux.HandleFunc("/api/admin/autostart/set", loggingMiddleware(requireAuth(managerInst.AutostartSetHandler())))
+	mux.HandleFunc("/api/admin/data/clean", loggingMiddleware(requireAuth(managerInst.DataCleanHandler())))
+	mux.HandleFunc("/api/admin/gateway/status", loggingMiddleware(requireAuth(managerInst.GatewayStatusHandler())))
+	mux.HandleFunc("/api/admin/gateway/route-mode", loggingMiddleware(requireAuth(managerInst.GatewayRouteModeHandler())))
+	mux.HandleFunc("/api/admin/gateway/stop", loggingMiddleware(requireAuth(managerInst.GatewayStopHandler())))
+	mux.HandleFunc("/api/admin/pool/restart", loggingMiddleware(requireAuth(managerInst.RestartPoolHandler())))
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 	})
 	// P4-5: 前端静态托管。仓库构建产物 dist/「存在」时托管 SPA（Web 版），否则退回内嵌管理面板。
 	if distDir := frontendDistDir(); distDir != "" {
 		http.Handle("/assets/", http.StripPrefix("/assets/", http.FileServer(http.Dir(filepath.Join(distDir, "assets")))))
-		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			switch r.URL.Path {
 			case "/", "/index.html":
 				http.ServeFile(w, r, filepath.Join(distDir, "index.html"))
@@ -184,7 +198,7 @@ func main() {
 		})
 		slog.Info("frontend dist served", "dir", distDir)
 	} else {
-		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/" {
 				requireAuth(adminPageHandler)(w, r)
 				return
@@ -192,10 +206,5 @@ func main() {
 			http.NotFound(w, r)
 		})
 	}
-	addr := ":" + port
-	slog.Info("listening", "addr", addr)
-	if err := http.ListenAndServe(addr, nil); err != nil {
-		slog.Error("server terminated", "error", err)
-		os.Exit(1)
-	}
+
 }

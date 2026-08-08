@@ -41,7 +41,7 @@ func requireMethod(w http.ResponseWriter, r *http.Request, method string) bool {
 // ConfigViewHandler GET（也可承担 config_set 的 POST 分支，见 ConfigGetHandler）。
 func (m *Manager) ConfigGetHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := requireMethod(w, r, http.MethodGet); err {
+		if !requireMethod(w, r, http.MethodGet) {
 			return
 		}
 		writeJSON(w, m.ConfigViewOf())
@@ -54,7 +54,7 @@ func (m *Manager) ConfigGetHandler() http.HandlerFunc {
 //	或整表写回（兼容旧面板 /api/config 风格，忽略）
 func (m *Manager) ConfigSetHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := requireMethod(w, r, http.MethodPost); err {
+		if !requireMethod(w, r, http.MethodPost) {
 			return
 		}
 		var req struct {
@@ -76,7 +76,7 @@ func (m *Manager) ConfigSetHandler() http.HandlerFunc {
 // StatsHandler GET 统计聚合。
 func (m *Manager) StatsHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := requireMethod(w, r, http.MethodGet); err {
+		if !requireMethod(w, r, http.MethodGet) {
 			return
 		}
 		writeJSON(w, m.AggregateStats())
@@ -86,7 +86,7 @@ func (m *Manager) StatsHandler() http.HandlerFunc {
 // ResetStatsHandler POST 重置统计（?clearDeleted=bool）。
 func (m *Manager) ResetStatsHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := requireMethod(w, r, http.MethodPost); err {
+		if !requireMethod(w, r, http.MethodPost) {
 			return
 		}
 		clearDeleted := true
@@ -100,7 +100,7 @@ func (m *Manager) ResetStatsHandler() http.HandlerFunc {
 // CallLogHandler GET 调用日志（?limit=）。
 func (m *Manager) CallLogHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := requireMethod(w, r, http.MethodGet); err {
+		if !requireMethod(w, r, http.MethodGet) {
 			return
 		}
 		limit := 5000
@@ -116,7 +116,7 @@ func (m *Manager) CallLogHandler() http.HandlerFunc {
 // ClearCallLogHandler POST 清空日志。
 func (m *Manager) ClearCallLogHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := requireMethod(w, r, http.MethodPost); err {
+		if !requireMethod(w, r, http.MethodPost) {
 			return
 		}
 		if err := m.ClearCallLog(); err != nil {
@@ -137,7 +137,7 @@ type BinariesInfo struct {
 // BinariesHandler GET 二进制信息。
 func (m *Manager) BinariesHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := requireMethod(w, r, http.MethodGet); err {
+		if !requireMethod(w, r, http.MethodGet) {
 			return
 		}
 		info := BinariesInfo{BinDir: m.paths.BinDir}
@@ -150,7 +150,7 @@ func (m *Manager) BinariesHandler() http.HandlerFunc {
 // InstancesHandler GET 实例列表。
 func (m *Manager) InstancesHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := requireMethod(w, r, http.MethodGet); err {
+		if !requireMethod(w, r, http.MethodGet) {
 			return
 		}
 		writeJSON(w, m.ListInstances())
