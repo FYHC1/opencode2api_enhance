@@ -273,11 +273,15 @@ type PoolVendor interface {
 | 8c | P2 | P2-B2：vendor Chat/ChatStream 完整实现 + 4 项单测（zen/go 端点、429 重试、Anthropic 转换） | ✅ | 2026-08-08 | commit `63344ec` |
 | 8d | P2 | P2-B3：main handler 切流（chat 经 vendor），旧 upstream 实现移除，测试迁移 | ✅ | 2026-08-08 | commit `e5c391c`；旧重试/go端点/4xx用例经适配层全绿 |
 | 9 | P2 | 硬编码 URL 断言测试改写为对厂商 mock | ✅ | 2026-08-08 | buildOCRequest 用例删除，路由语义迁至 `vendors/opencode/chat_test.go` |
+| 9c | P2 | P2-C1：providers[] + routing 配置（AppConfig/applyConfig/config.example.json） | ✅ | 2026-08-08 | `7009327` + `65138bf` |
+| 9d | P2 | P2-C2：`core/router`（模型→厂商解析，failover 序）+ 单测 | ✅ | 2026-08-08 | `7ab4d82` |
+| 9e | P2 | P2-C3：适配层经路由器分发 + 厂商级 failover（Switchable/5xx/传输错；非可换即停）+ 单测 | ✅ | 2026-08-08 | `a8ed459`；429→切换通过、403→停 |
+| 9f | P2 | P2-C4：`/v1/models` 多厂商聚合（同名加厂商前缀；单厂商零变化）+ 单测 | ✅ | 2026-08-08 | `b045d94` |
 
-> **P2-B3 续接注记（给下次执行）**：main 侧保留薄适配层（`callOpenCodeAPI/Stream` 签名不变，内部桥接 `contract.Message` + 全局 vendor；`rootTransport` 已就绪，测试的 fake httpClient 自动生效）。关键点：(1) vendor 的 go 端点判定依赖它自己的 catalog，需在 `refreshModelCatalog` 内同步 `SetCatalog`；(2) 旧 `extractUpstreamAuth` → mode 字符串映射（public/auto/zen/go）写入 Options；(3) `KeyMaxRetries` 传 `maxRouteRetries()`；(4) 移除后清理 main 侧 Anthropic 转换重复代码与旧测试引用。
-| 10 | P3 | `vendors/windsurf/` Go 移植完成（注册/聊天/健康/存储/用量） | ⬜ | | |
+> **P2-B3 续接注记（供后续清理）**：main 侧适配层已稳定；剩余小项——convert.go/chat_protocol.go 中 Anthropic 转换重复代码（死代码，可留可清）。核心链路已全部经 `contract` 与 `vendors/`。
+| 10 | P3 | `vendors/windsurf/` Go 移植完成（注册/聊天/健康/存储/用量） | ⬜ | | 下一阶段 |
 | 11 | P3 | ★24h 冷却 / ★额度≤20% 预注册 / ★中途无感换号 三能力完成 | ⬜ | | 三能力为新建 |
-| 12 | P3 | `/v1/models` 双厂商聚合（前缀区分），分发与厂商级 failover 通过 | ⬜ | | |
+280→| 12 | P3 | `/v1/models` 双厂商聚合（前缀区分），分发与厂商级 failover 通过 | ✅ | 2026-08-08 | 聚合/前缀/分发/failover 已由 P2-C 落地（待 windsurf 真接） |
 | 13 | P3 | 池型全链路冒烟：无号自动注册→对话→额度低预注册→换号续写 | ⬜ | | |
 | 14 | P4 | P4 详细子计划制定（P4-1~P4-6） | ⬜ | | 动工前必须先行 |
 | 15 | P4 | 管理功能并入 core（HTTP API），浏览器全功能可用 | ⬜ | | |
@@ -291,8 +295,8 @@ type PoolVendor interface {
 | 阶段 | 状态 |
 |---|---|
 | P0 基线 | ✅ 已完成（分支已建，测试全绿，行为快照已记录） |
-| P1 拆 core | 🔄 进行中（P1.1 文件拆分 ✅，P1.2 包化 ⬜） |
-| P2 收厂商 | ⬜ 未开始 |
+| P1 拆 core | 🔄 进行中（P1.1 文件拆分 ✅；P1.2 包化部分完成——contract/aggregator/router 已独立成包，protocol/gateway/server 随 P3/P4 继续收敛） |
+| P2 收厂商 | ✅ 完成（契约/聚合/分发/failover 全绿；单厂商行为与基线一致） |
 | P3 加厂商 | ⬜ 未开始 |
 | P4 统一 UI | ⬜ 未开始 |
 | P5 多平台 | ⬜ 未开始 |
