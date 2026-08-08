@@ -194,8 +194,9 @@ type PoolVendor interface {
 
 | 子步骤 | 内容 | 对照组（Rust） | 备注 |
 |---|---|---|---|
-| P3-B1 | Connect-RPC 基础：最小 protobuf 编解码（varint / wire type 0/1/2/5 / packed fields） | `proto_min.rs` | 独立包 `vendors/windsurf/connect/`，纯函数 + 单测解码 golden 用例 |
-| P3-B2 | Chatter 实现：`POST server.codeium.com /exa.api_server_pb.ApiServerService/GetChatMessage`（Connect 帧：1 字节 flags + 4 字节 BE length）+ 元数据/模型选择器/会话指纹头；流式 SSE 帧解析 | `devin_connect.rs` | 用 fakeTransport 单测；先非流式 → 后流式 |
+| P3-B1 | Connect-RPC 基础：最小 protobuf 编解码（varint / wire type 0/1/2/5）+ GetUserStatus 用量解析 | ✅ | 2026-08-08 | `vendors/windsurf/connect/proto.go` + golden 单测；commit `4a85882` |
+| P3-B2 | Connect-RPC 客户端：request builders（clientMetadata/completionConfig/modelConfig/指纹）/ 帧解析（gzip/end）/ DoChat + OpenAI-SSE 流 | ✅ | 2026-08-08 | commit `4a85882`；端到端 fake-HTTP 单测（帧解析 / SSE / DONE） |
+| P3-B3 | 工具仿真：客户端 tools → XML `<tool_call>` 注入 system prompt（其实是可选项） | ⬜ | | 无工具需求先跳过，标注 YAGNI |
 | P3-B3 | 工具仿真（可选，跟进）：客户端 tools → XML `<tool_call>` 注入 system prompt，输出刮取转回 OpenAI tool_calls | `tool_emulation.rs` | 无则先不接 |
 | P3-B4 | Mailbox：TMaily（domains / generate / emails 轮询） | `tmaily.rs` | 真实 HTTP，可用 `contract.Transport` 注入 |
 | P3-B5 | Registrar：注册链 email_start → email_complete → bootstrap_session（post-auth+set-cookie）→ api-key → `windsurf_continue` → `ExchangeDevinCode` 换 session | `devin_auth.rs` | 入库到 pool（先登邮箱，成功后由上层注册 Start 触发） |
