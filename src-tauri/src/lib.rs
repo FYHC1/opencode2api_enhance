@@ -296,7 +296,7 @@ fn spawn_core_manager(data_dir: &std::path::Path, port: u16) -> std::io::Result<
         "-port",
         &port_str,
         "-password",
-        "sk-unified-local",
+        "",
         "-config",
     ])
     .arg(&cfg_path)
