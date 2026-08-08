@@ -17,6 +17,8 @@ pub struct AppState {
     pub manager: Arc<Mutex<instance::InstanceManager>>,
     pub scan: Arc<probe::ScanController>,
     pub gateway: Arc<Mutex<gateway::GatewayManager>>,
+    /// Go core 管理器子进程（大步3：管理职责已移交 HTTP，壳负责拉起/随退出终止）
+    pub core_child: Mutex<Option<std::process::Child>>,
 }
 
 
@@ -60,6 +62,10 @@ pub fn run() {
     }
 
     let (instances_path, binary_dir, runtime_dir) = commands::manager_paths();
+    let data_dir = instances_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_default();
     let mut manager = instance::InstanceManager::new(
         instances_path,
         binary_dir.clone(),
@@ -74,54 +80,35 @@ pub fn run() {
         binary_dir,
         runtime_dir,
     )));
-    // 启动即同步统一网关：恢复上次「运行中且入池」实例的代理池（无入池实例则停网关）
-    if let (Ok(mgr), Ok(mut gateway)) = (manager.lock(), gateway_manager.lock()) {
-        let _ = gateway.sync(mgr.list_instances());
+
+    // 大步3：管理职责移交 Go core（HTTP /api/admin/*）。壳只负责：
+    // 释放内嵌二进制 → 以管理器方式拉起 core → 窗口承载 core 的 SPA。
+    unsafe {
+        std::env::set_var("OPCODE2API_DATA_DIR", &data_dir);
     }
+    let core_child = match spawn_core_manager(&data_dir) {
+        Ok(child) => Some(child),
+        Err(e) => {
+            eprintln!("启动 core 管理器失败: {e}");
+            None
+        }
+    };
 
     tauri::Builder::default()
         .manage(AppState {
             manager,
             scan: Arc::new(probe::ScanController::new()),
             gateway: gateway_manager,
+            core_child: Mutex::new(core_child),
         })
         .invoke_handler(tauri::generate_handler![
-            commands::list_nodes,
-            commands::list_instances,
-            commands::refresh_states,
-            commands::add_instance,
-            commands::remove_instance,
-            commands::start_instance,
-            commands::stop_instance,
-            commands::test_instance,
-            commands::batch_add,
-            commands::batch_start,
-            commands::batch_stop,
-            commands::batch_delete,
-            commands::restart_pool,
-            commands::port_suggest,
-            commands::port_check,
-            commands::scan_start,
-            commands::scan_status,
-            commands::scan_stop,
-            commands::config_get,
-            commands::config_set,
+            // 大步3：仅保留壳命令（窗口/托盘/自启/二进制）；管理命令已被 HTTP 取代
             commands::autostart_get,
             commands::autostart_set,
             commands::get_binaries_info,
-
-            commands::get_stats,
-            commands::get_call_log,
-            commands::clear_call_log,
-            commands::reset_stats,
             commands::hide_to_tray,
             commands::toggle_maximize,
-            commands::quit_app,
-            commands::gateway_status,
-            commands::gateway_set_route_mode,
-            commands::gateway_stop,
-            commands::data_clean,
-            commands::set_join_gateway
+            commands::quit_app
         ])
 .setup(|app| {
             use tauri::Manager;
@@ -153,8 +140,13 @@ pub fn run() {
                     }
                 }
                 "quit" => {
-                    // 先停网关 + 全部实例，再退出（ExitRequested 也会兜底清理）
+                    // 先停 core 管理器（连带其网关/实例），再退出（ExitRequested 也会兜底清理）
                     if let Some(state) = app.try_state::<AppState>() {
+                        if let Ok(mut ch) = state.core_child.lock() {
+                            if let Some(mut c) = ch.take() {
+                                let _ = c.kill();
+                            }
+                        }
                         if let Ok(mut gateway) = state.gateway.lock() {
                             gateway.stop();
                         }
@@ -180,6 +172,13 @@ button: tauri::tray::MouseButton::Left,
                 }
             })
             .build(app)?;
+
+            // 窗口承载 core 管理器 SPA（core 已在本机 18100 端口就绪）
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.navigate(
+                    tauri::Url::parse("http://127.0.0.1:18100/").expect("core manager url"),
+                );
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -196,7 +195,12 @@ button: tauri::tray::MouseButton::Left,
             // 确保网关进程和实例进程不残留后台（网关端口、实例端口全部释放）
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 if let Some(state) = app.try_state::<AppState>() {
-                    // 先停网关（释放网关端口），再停实例（释放实例端口）
+                    // 先停 core 管理器，再停网关、实例（端口全部释放）
+                    if let Ok(mut ch) = state.core_child.lock() {
+                        if let Some(mut c) = ch.take() {
+                            let _ = c.kill();
+                        }
+                    }
                     if let Ok(mut gateway) = state.gateway.lock() {
                         gateway.stop();
                     }
@@ -204,4 +208,47 @@ button: tauri::tray::MouseButton::Left,
                 }
             }
         });
+}
+
+/// 拉起 Go core 管理器（bin/opencode2api.exe -port 18100 ...），等待 /health 就绪。
+/// 数据目录经 OPCODE2API_DATA_DIR 注入（setup 已设置）。
+fn spawn_core_manager(data_dir: &std::path::Path) -> std::io::Result<std::process::Child> {
+    use std::io::{Read, Write};
+    use std::process::Command;
+    use std::time::Duration;
+
+    let (_, binary_dir, _) = commands::manager_paths();
+    let exe = binary_dir.join("opencode2api.exe");
+    if !exe.exists() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "bin/opencode2api.exe 不存在（未释放内嵌组件）",
+        ));
+    }
+    let cfg_path = data_dir.join("config.json");
+    let child = Command::new(&exe)
+        .args(["-port", "18100", "-password", "sk-unified-local", "-config"])
+        .arg(&cfg_path)
+        .arg("-log-level")
+        .arg("warn")
+        .spawn()?;
+
+    // 等待 /health 就绪（最多 ~15s）
+    let mut ready = false;
+    for _ in 0..30 {
+        std::thread::sleep(Duration::from_millis(500));
+        if let Ok(mut stream) = std::net::TcpStream::connect("127.0.0.1:18100") {
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
+            let _ = stream.write_all(b"GET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+            let mut buf = [0u8; 64];
+            if stream.read(&mut buf).is_ok() && String::from_utf8_lossy(&buf).contains("200") {
+                ready = true;
+                break;
+            }
+        }
+    }
+    if !ready {
+        eprintln!("警告: core 管理器 /health 未在预期时间内就绪（窗口可能先于服务加载）");
+    }
+    Ok(child)
 }

@@ -296,7 +296,7 @@ type PoolVendor interface {
 | P4-3 节点扫描探针 | ✅ | 2026-08-08 | `c7cb80f`：yaml.go 最小 YAML（零依赖）、clash_parse.go（本地 profiles+外部 API+junk/group 过滤）、singbox.go 逐类型配置、opencodecfg.go 实例/网关配置、probe.go 并发控制器+逐节点免费模型测试；main 装配 SeamFuncs；单测全绿 |
 | P4-4 网关/批量/restart/data_clean | ✅ | 2026-08-08 | `0e7d958`：gateway.go（-gateway 子进程、成员=Running&&join_gateway、空即停/配置变重启/自动拉起、免费模型节流抓取）、batch.go（按节点去重+自动命名+端口+1、并行 4/8 worker）、restart_pool.go（停网关→全停→强清端口→并启成员→网关收尾）、data_clean.go（三级别含 .bak）；单测：gateway 启停/去重/data_clean 三级/restart 顺序 |
 | P4-5a 管理 API 全表面 + SPA 托管 | ✅ | 2026-08-08 | `905af85`：/api/admin 操作面齐全（节点/实例 CRUD·启停·刷新·测试/批量/端口/扫描/网关/入池/重启池/清数据/自启壳独占）；frontend dist 存在即托管 SPA；main SetDeps；HTTP 冒烟单测全绿 |
-| P4-5b 前端 api.ts 改走 fetch + Tauri invoke_handler 缩减 | 🔄 | 2026-08-08 | 大步1 done `e0196c3`（api.ts→fetch，npm build 绿）；大步2 自动化 ✅（`registerHTTPRoutes` 抽 mux + `e2e_http_test.go` 21 项全链路 PASS，并修复 P4-1 `admin_http.go` requireMethod 条件写反的 8 处 handler bug）；大步3 壳瘦身待做 |
+| P4-5b 前端 api.ts 改走 fetch + Tauri invoke_handler 缩减 | 🔄 | 2026-08-08 | 大步1 done `e0196c3`；大步2 自动化 ✅ `ae281b6`（E2E 21 项 PASS + 修复 admin_http requireMethod 反写 bug）；大步3 进行中：壳瘦身（invoke_handler 仅留窗口/托盘/自启/二进制，管理职责移交 Go core）cargo check ✅，tauri build 后台进行 |
 | P4-6 联动联调 | ⬜ | | |
 
 ### P5 多平台（Linux/macOS）
