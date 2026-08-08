@@ -9,7 +9,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -249,18 +248,22 @@ func (v *Vendor) Auth(r *http.Request) string {
 }
 
 // ---------------------------------------------------------------------------
-// 聊天入口
+// 会话初始化钩子（测试/管理端用）
 // ---------------------------------------------------------------------------
 
-// Chat 实现 contract.Vendor（非流式）。P2B 阶段由 core 完成切流后接入；
-// 当前未接线时返回明确错误，避免假响应。
-func (v *Vendor) Chat(ctx context.Context, msg *contract.Message) (*contract.Reply, error) {
-	return nil, fmt.Errorf("opencode vendor Chat: 尚未接线（P2B）")
+// SetSessionForTest 预置会话并消费 once，跳过版本探测（测试用）。
+func (v *Vendor) SetSessionForTest(ver, sid, pid string) {
+	v.ocClientVer = ver
+	v.ocSessionID = sid
+	v.ocProjectID = pid
+	v.ocOnce.Do(func() {})
 }
 
-// ChatStream 实现 contract.Vendor（流式）。同上，P2B 接线。
-func (v *Vendor) ChatStream(ctx context.Context, msg *contract.Message) (*contract.Stream, error) {
-	return nil, fmt.Errorf("opencode vendor ChatStream: 尚未接线（P2B）")
+// SetCatalog 注入模型目录缓存（core/aggregator 刷新后回填；也供测试）。
+func (v *Vendor) SetCatalog(models []contract.Model) {
+	v.modelMu.Lock()
+	v.cacheAll = append([]contract.Model(nil), models...)
+	v.modelMu.Unlock()
 }
 
 // ---------------------------------------------------------------------------
