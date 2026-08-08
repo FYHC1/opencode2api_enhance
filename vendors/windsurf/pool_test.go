@@ -31,12 +31,16 @@ type fakeRegistrar struct {
 	err   error
 }
 
-func (f *fakeRegistrar) Register(_ context.Context, mb MailboxProvider) (string, error) {
+func (f *fakeRegistrar) Register(_ context.Context, mb MailboxProvider) (*RegisterResult, error) {
 	if f.err != nil {
-		return "", f.err
+		return nil, f.err
 	}
 	f.calls++
-	return mb.Create(context.Background())
+	addr, err := mb.Create(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	return &RegisterResult{Email: addr, SessionToken: "tok-" + addr}, nil
 }
 
 type fakeChatter struct {

@@ -144,7 +144,12 @@ func parseMessage(data []byte) (RawMessage, error) {
 	return out, nil
 }
 
-func (m *RawMessage) firstString(field uint32) string {
+// ParseTop 解析顶层 protobuf 消息（供外部解析 Exchange 等响应）。
+func ParseTop(data []byte) (RawMessage, error) {
+	return parseMessage(data)
+}
+
+func (m *RawMessage) FirstString(field uint32) string {
 	if v := m.Strings[field]; len(v) > 0 {
 		return v[0]
 	}
@@ -154,7 +159,7 @@ func (m *RawMessage) firstString(field uint32) string {
 	return ""
 }
 
-func (m *RawMessage) firstVarint(field uint32) (uint64, bool) {
+func (m *RawMessage) FirstVarint(field uint32) (uint64, bool) {
 	if v := m.Varints[field]; len(v) > 0 {
 		return v[0], true
 	}
@@ -197,37 +202,37 @@ func isPlanName(s string) bool {
 }
 
 func applyUsageVarints(m *RawMessage, out *UsageFields) {
-	if v, ok := m.firstVarint(8); ok && v > 0 && v <= 1_000_000 {
+	if v, ok := m.FirstVarint(8); ok && v > 0 && v <= 1_000_000 {
 		out.RemainingMessages = v
 		out.HasMessages = true
 	}
-	if v, ok := m.firstVarint(14); ok && v <= 100 {
+	if v, ok := m.FirstVarint(14); ok && v <= 100 {
 		out.DailyRemainingPct = v
 		out.HasDailyPct = true
 	}
-	if v, ok := m.firstVarint(15); ok && v <= 100 {
+	if v, ok := m.FirstVarint(15); ok && v <= 100 {
 		out.WeeklyRemainingPct = v
 		out.HasWeeklyPct = true
 	}
-	if v, ok := m.firstVarint(17); ok && v > 1_600_000_000 {
+	if v, ok := m.FirstVarint(17); ok && v > 1_600_000_000 {
 		out.DailyResetUnix = v
 	}
-	if v, ok := m.firstVarint(18); ok && v > 1_600_000_000 {
+	if v, ok := m.FirstVarint(18); ok && v > 1_600_000_000 {
 		out.WeeklyResetUnix = v
 	}
 }
 
 func applyPlanMessage(m *RawMessage, out *UsageFields) {
-	if name := m.firstString(2); isPlanName(name) {
+	if name := m.FirstString(2); isPlanName(name) {
 		out.PlanName = name
 	}
-	if t, ok := m.firstVarint(1); ok && t < 1000 {
+	if t, ok := m.FirstVarint(1); ok && t < 1000 {
 		out.TeamsTier = t
 	}
-	if v, ok := m.firstVarint(10); ok && v >= 100 && v <= 1_000_000 {
+	if v, ok := m.FirstVarint(10); ok && v >= 100 && v <= 1_000_000 {
 		out.TotalMessages = v
 	}
-	if v, ok := m.firstVarint(12); ok && v >= 1 && v <= 1_000_000 {
+	if v, ok := m.FirstVarint(12); ok && v >= 1 && v <= 1_000_000 {
 		out.RemainingMessages = v
 		out.HasMessages = true
 	}
@@ -248,7 +253,7 @@ func ExtractUsageFromUserStatus(data []byte) UsageFields {
 			applyPlanMessage(&sub, &out)
 		}
 	}
-	if name := top.firstString(2); isPlanName(name) {
+	if name := top.FirstString(2); isPlanName(name) {
 		out.PlanName = name
 	}
 
@@ -272,7 +277,7 @@ func ExtractUsageFromUserStatus(data []byte) UsageFields {
 			break
 		}
 	}
-	if t, ok := msg.firstVarint(10); ok && t < 1000 {
+	if t, ok := msg.FirstVarint(10); ok && t < 1000 {
 		out.TeamsTier = t
 	}
 
@@ -284,7 +289,7 @@ func ExtractUsageFromUserStatus(data []byte) UsageFields {
 					applyPlanMessage(&pm, &out)
 				}
 			}
-			if name := em.firstString(2); isPlanName(name) {
+			if name := em.FirstString(2); isPlanName(name) {
 				out.PlanName = name
 			}
 			applyUsageVarints(&em, &out)

@@ -43,10 +43,10 @@ func TestParseRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if raw.firstString(1) != "hello" {
-		t.Fatalf("field1 = %q", raw.firstString(1))
+	if raw.FirstString(1) != "hello" {
+		t.Fatalf("field1 = %q", raw.FirstString(1))
 	}
-	if v, _ := raw.firstVarint(2); v != 42 {
+	if v, _ := raw.FirstVarint(2); v != 42 {
 		t.Fatalf("field2 = %d", v)
 	}
 }

@@ -253,9 +253,9 @@ func decodeFrameDelta(payload []byte) (content, reasoning string, finish *int64,
 	if err != nil {
 		return "", "", nil, nil
 	}
-	content = m.firstString(fieldContent)
-	reasoning = m.firstString(fieldReason)
-	if v, ok := m.firstVarint(fieldFinish); ok {
+	content = m.FirstString(fieldContent)
+	reasoning = m.FirstString(fieldReason)
+	if v, ok := m.FirstVarint(fieldFinish); ok {
 		f := int64(v)
 		finish = &f
 	}
@@ -264,8 +264,8 @@ func decodeFrameDelta(payload []byte) (content, reasoning string, finish *int64,
 		if err != nil {
 			continue
 		}
-		p, pok := mm.firstVarint(2)
-		c, cok := mm.firstVarint(3)
+		p, pok := mm.FirstVarint(2)
+		c, cok := mm.FirstVarint(3)
 		if pok || cok {
 			usage = &[2]uint64{p, c}
 			break

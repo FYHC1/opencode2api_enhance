@@ -25,10 +25,16 @@ type MailboxProvider interface {
 	WaitCode(ctx context.Context, address, hint string, timeout time.Duration) (code string, err error)
 }
 
+// RegisterResult 是一次注册的产出（账号池记录所需）。
+type RegisterResult struct {
+	Email        string // 账号标识（邮箱）
+	SessionToken string // windsurf session token（Connect-RPC 用）
+}
+
 // Registrar 完成一个账号的注册链路（临时邮箱 → 服务端注册 → session token 入库）。
 type Registrar interface {
-	// Register 注册一个账号并返回其唯一标识（邮箱），供账号池记录。
-	Register(ctx context.Context, mb MailboxProvider) (email string, err error)
+	// Register 注册一个账号并返回其标识与会话令牌，供账号池记录。
+	Register(ctx context.Context, mb MailboxProvider) (*RegisterResult, error)
 }
 
 // Chatter 是上游聊天传输（Devin/Windsurf Connect-RPC）。P3-B 由 connect 包实现。
@@ -114,25 +120,6 @@ func jsonQuote(s string) string {
 // ---------------------------------------------------------------------------
 // 暂缺实现时给出明确占位（不产生假行为）
 // ---------------------------------------------------------------------------
-
-// tmailyMailbox 是 TMaily 临时邮箱的骨架实现（真实 HTTP 客户端见 P3-B）。
-// 当前占位：返回明确未实现错误，避免静默假注册。
-type tmailyMailbox struct {
-	c *http.Client
-}
-
-// newTMailyMailbox 构造 TMaily 邮箱提供者（P3-B 实现 HTTP 逻辑）。
-func newTMailyMailbox(client *http.Client) MailboxProvider {
-	return &tmailyMailbox{c: client}
-}
-
-func (t *tmailyMailbox) Create(_ context.Context) (string, error) {
-	return "", errNotImplemented("TMaily create mailbox (P3-B)")
-}
-
-func (t *tmailyMailbox) WaitCode(_ context.Context, _ string, _ string, _ time.Duration) (string, error) {
-	return "", errNotImplemented("TMaily wait code (P3-B)")
-}
 
 type errNotImplemented string
 

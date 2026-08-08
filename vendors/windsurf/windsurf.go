@@ -174,7 +174,7 @@ func (v *Vendor) registerNew(ctx context.Context, need int) error {
 	}()
 
 	for i := 0; i < need; i++ {
-		email, err := v.cfg.Registrar.Register(ctx, v.cfg.Mailbox)
+		res, err := v.cfg.Registrar.Register(ctx, v.cfg.Mailbox)
 		if err != nil {
 			v.mu.Lock()
 			v.lastErr = err.Error()
@@ -182,11 +182,12 @@ func (v *Vendor) registerNew(ctx context.Context, need int) error {
 			return err
 		}
 		v.pool.add(&Account{
-			Email:      email,
-			QuotaDaily: 100, QuotaWeekly: 100, // 未知额度，乐观按 100 计
+			Email:                res.Email,
+			WindsurfSessionToken: res.SessionToken,
+			QuotaDaily:           100, QuotaWeekly: 100, // 未知额度，乐观按 100 计
 			CreatedAt: time.Now(),
 		})
-		slog.Info("windsurf: account registered", "email_masked", maskEmail(email))
+		slog.Info("windsurf: account registered", "email_masked", maskEmail(res.Email))
 	}
 	return nil
 }
@@ -339,7 +340,21 @@ func (v *Vendor) SetPoolUsage(email string, daily, weekly float64) {
 }
 
 func (v *Vendor) preUsageRefresh(email string) {
-	// P3-B：异步 GetUserStatus 回写额度；当前为空实现（池行为不受影响）。
+	token := v.pool.tokenOf(email)
+	if token == "" {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		daily, weekly, err := fetchUsage(ctx, token, v.cfg.HTTPClient)
+		if err != nil {
+			slog.Debug("windsurf: usage refresh failed", "err", err)
+			return
+		}
+		v.SetPoolUsage(email, daily, weekly)
+		v.preRegisterIfLow()
+	}()
 }
 
 // shouldSwitch 判定账号级失败是否值得换号（传输错误 / 可切换状态码）。
