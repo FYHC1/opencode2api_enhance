@@ -289,7 +289,7 @@ type PoolVendor interface {
 | P4-1 管理 API 层 | ✅ | 2026-08-08 | `2cca241`：core/manager（config/calllog/stats/registry/tcp/netstat）+ `/api/admin/*`HTTP（config/stats/reset/call-log/binaries/instances），单测全绿 |
 | P4-2 实例生命周期 | ✅ | 2026-08-08 | `797e2af`：Runner 抽象（CREATE_NO_WINDOW/taskkill/SIGKILL/pidAlive）、短锁启动（sing-box→opencode→等口）、stop/remove/reconcile/refresh、端口 LCG suggest/check/force-free、Content-Length 精确读；fake runner+占口单测 |
 | P4-3 节点扫描探针 | ✅ | 2026-08-08 | `c7cb80f`：yaml.go 最小 YAML（零依赖）、clash_parse.go（本地 profiles+外部 API+junk/group 过滤）、singbox.go 逐类型配置、opencodecfg.go 实例/网关配置、probe.go 并发控制器+逐节点免费模型测试；main 装配 SeamFuncs；单测全绿 |
-| P4-4 网关/批量/restart/data_clean | 🔄 | | 进行中（gateway.go 起始） |
+| P4-4 网关/批量/restart/data_clean | ✅ | 2026-08-08 | `0e7d958`：gateway.go（-gateway 子进程、成员=Running&&join_gateway、空即停/配置变重启/自动拉起、免费模型节流抓取）、batch.go（按节点去重+自动命名+端口+1、并行 4/8 worker）、restart_pool.go（停网关→全停→强清端口→并启成员→网关收尾）、data_clean.go（三级别含 .bak）；单测：gateway 启停/去重/data_clean 三级/restart 顺序 |
 | P4-5 前端改走 HTTP + Tauri 薄壳化 | ⬜ | | |
 | P4-6 联动联调 | ⬜ | | |
 
