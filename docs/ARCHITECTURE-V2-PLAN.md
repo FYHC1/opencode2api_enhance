@@ -200,12 +200,12 @@ type PoolVendor interface {
 | P3-B4 | Mailbox：TMaily（domains / generate / emails 轮询） | ✅ | 2026-08-08 | `vendors/windsurf/tmaily.go` + httptest 单测；commit `55ff34b` |
 | P3-B5 | Registrar：注册链 connections → email_start → WaitCode → complete → post-auth/bootstrap → windsurf/continue → ExchangeDevinCode 换 session | ✅ | 2026-08-08 | `devin_auth.go` + 全链 httptest；commit `55ff34b` |
 | P3-B6 | 用量回写：GetUserStatus → SetPoolUsage；Chat 成功后异步刷新 + 周期刷新 | ✅ | 2026-08-08 | `usage.go` + 单测；commit `55ff34b` |
-| P3-B7 | 流中无感换号：Chatter 流内错误 → 换号重发（与 core/gateway 断点续写衔接） | ⬜ | | 收尾项 |
+| P3-B7 | 流中无感换号：Chatter 流内错误 → 换号重发（与 core/gateway 断点续写衔接） | ✅ | 2026-08-08 | `vendors/windsurf/midstream.go`；流内 error 事件 / 无 [DONE] 的 EOF → 已吐内容回卷 → 换号续接（与 `buildResumeBody` 同文）；commit `00ae506`。真机冒烟待验收项 13 |
 | P3-B3 | 工具仿真（可选，跟进）：客户端 tools → XML `<tool_call>` 注入 system prompt，输出刮取转回 OpenAI tool_calls | `tool_emulation.rs` | 无则先不接 |
 | P3-B4 | Mailbox：TMaily（domains / generate / emails 轮询） | `tmaily.rs` | 真实 HTTP，可用 `contract.Transport` 注入 |
 | P3-B5 | Registrar：注册链 email_start → email_complete → bootstrap_session（post-auth+set-cookie）→ api-key → `windsurf_continue` → `ExchangeDevinCode` 换 session | `devin_auth.rs` | 入库到 pool（先登邮箱，成功后由上层注册 Start 触发） |
 | P3-B6 | 用量回写：`GetUserStatus`（seat_management）→ 填 `SetPoolUsage`；Chat 成功/周期异步刷新 | `usage.rs` / `windsurf_api.rs` | 挂钩 `preUsageRefresh` |
-| P3-B7 | 流中无感换号：Chatter 流内 capacity/错误事件 → 回卷广播 → 换号重发（与 core/gateway 断点续写衔接） | 原项目 MAX_HOPS 为流前重试，流中断换号需新写 | 验收项 13 的收尾 |
+| P3-B7 | 流中无感换号：Chatter 流内 capacity/错误事件 → 回卷广播 → 换号重发（与 core/gateway 断点续写衔接） | ✅ 2026-08-08（commit `00ae506`）；原 Rust 仅流前 MAX_HOPS=3 重试 | 验收项 13 的收尾：换号逻辑已在 vendor 内落地 |
 
 > 完成后顺序验证：单号正常 / 429 自动换号 / 额度≤20% 预注册 / 第二天旧号解冻复用 / 中途断流换号续写。真实环境冒烟由用户提供（需 Devin 站点可达 + 临时邮箱服务可用）。
 
@@ -303,9 +303,9 @@ type PoolVendor interface {
 | 9f | P2 | P2-C4：`/v1/models` 多厂商聚合（同名加厂商前缀；单厂商零变化）+ 单测 | ✅ | 2026-08-08 | `b045d94` |
 
 > **P2-B3 续接注记（供后续清理）**：main 侧适配层已稳定；剩余小项——convert.go/chat_protocol.go 中 Anthropic 转换重复代码（死代码，可留可清）。核心链路已全部经 `contract` 与 `vendors/`。
-| 10 | P3 | `vendors/windsurf/` 池型厂商（池/冷却/健康/自动注册/借号换号 + PoolVendor 契约） | 🔄 | 2026-08-08 | 池层+契约+P34单测 ✅ `edde8b8`；接缝实现（Chatter Connect-RPC / TMaily / Registrar）待 P3-B |
-| 10b | P3 | P3-B：Chatter（Connect-RPC 协议移植）/ Mailbox（TMaily）/ Registrar（devin_auth 注册链）真实实现 | ⬜ | | 上游协议移植，工作量最大 |
-| 11 | P3 | ★24h 冷却 / ★额度≤20% 预注册 / ★中途无感换号 三能力完成 | 🔄 | | 冷却+预注册 ✅（池层）；"流中无感换号"待 P3-B（涉及网关续写衔接） |
+| 10 | P3 | `vendors/windsurf/` 池型厂商（池/冷却/健康/自动注册/借号换号 + PoolVendor 契约） | ✅ | 2026-08-08 | 池层+契约 ✅ `edde8b8`；接缝（Chatter/TMaily/Registrar/用量/流中换号）已全部落地 P3-B1~B7 |
+| 10b | P3 | P3-B：Chatter（Connect-RPC 协议移植）/ Mailbox（TMaily）/ Registrar（devin_auth 注册链）真实实现 | ✅ | 2026-08-08 | B1~B6 `4a85882`/`55ff34b`；B7 流中无感换号 `00ae506`；全链路单测绿，待真机冒烟 |
+| 11 | P3 | ★24h 冷却 / ★额度≤20% 预注册 / ★中途无感换号 三能力完成 | ✅ | 2026-08-08 | 冷却+预注册 ✅（池层 `edde8b8`）；流中无感换号 ✅（`00ae506`，回卷续写与网关断点续写同文衔接） |
 280→| 12 | P3 | `/v1/models` 双厂商聚合（前缀区分），分发与厂商级 failover 通过 | ✅ | 2026-08-08 | 聚合/前缀/分发/failover 已由 P2-C 落地（待 windsurf 真接） |
 | 13 | P3 | 池型全链路冒烟：无号自动注册→对话→额度低预注册→换号续写 | ⬜ | | |
 | 14 | P4 | P4 详细子计划制定（P4-1~P4-6） | ⬜ | | 动工前必须先行 |
@@ -322,7 +322,7 @@ type PoolVendor interface {
 | P0 基线 | ✅ 已完成（分支已建，测试全绿，行为快照已记录） |
 | P1 拆 core | 🔄 进行中（P1.1 文件拆分 ✅；P1.2 已出 contract/aggregator/router 三包，protocol/gateway/server 随后续收敛） |
 | P2 收厂商（opencode 收拢） | ✅ 完成（契约/聚合/分发/failover 全绿；单厂商行为与基线一致） |
-| P3 池型厂商（windsurf） | 🔄 池层 ✅（P3-A）；上游协议移植（Chatter/TMaily/Registrar）为 P3-B |
+| P3 池型厂商（windsurf） | ✅ 池层+全接缝完成（P3-A 池层 `edde8b8`；P3-B1~B7 上游协议移植 `4a85882`/`55ff34b`/`00ae506`；三能力：冷却/预注册/流中无感换号全部落地） |
 | P3 加厂商 | ⬜ 未开始 |
 | P4 统一 UI | ⬜ 未开始 |
 | P5 多平台 | ⬜ 未开始 |
