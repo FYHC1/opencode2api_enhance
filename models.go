@@ -140,32 +140,19 @@ func getCandidateModels(auth UpstreamAuth, modelID string) []string {
 	return getModelIDs()
 }
 
-// startModelRefresh 定时刷新模型列表（每 10 分钟）
+// startModelRefresh 定时刷新模型列表（每 10 分钟）；数据源为厂商聚合器（aggregator），
+// 拉取后同步写入 modelsCache / goModelsCache。
 func startModelRefresh() {
 	go func() {
 		ticker := time.NewTicker(10 * time.Minute)
 		defer ticker.Stop()
 		for range ticker.C {
-			fetched, err := fetchModels()
-			if err == nil && len(fetched) > 0 {
-				modelMu.Lock()
-				modelsCache = fetched
-				modelsLoaded = true
-				modelMu.Unlock()
-				slog.Info("models auto-refreshed", "count", len(fetched))
-			} else if err != nil {
-				slog.Error("free models refresh failed", "error", err)
-			}
-
-			goFetched, goErr := fetchGoModels()
-			if goErr == nil && len(goFetched) > 0 {
-				modelMu.Lock()
-				goModelsCache = goFetched
-				modelMu.Unlock()
-				slog.Info("go catalog auto-refreshed", "count", len(goFetched))
-			} else if goErr != nil {
-				slog.Error("go catalog refresh failed", "error", goErr)
-			}
+			refreshModelCatalog()
+			modelMu.RLock()
+			n := len(modelsCache)
+			ng := len(goModelsCache)
+			modelMu.RUnlock()
+			slog.Info("model catalog auto-refreshed", "zen", n, "go", ng)
 		}
 	}()
 }

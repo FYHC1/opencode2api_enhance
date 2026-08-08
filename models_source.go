@@ -1,0 +1,91 @@
+package main
+
+import (
+	"context"
+	"log/slog"
+	"net/http"
+	"time"
+
+	"github.com/6Kmfi6HP/opencode2api/core/aggregator"
+	"github.com/6Kmfi6HP/opencode2api/core/contract"
+	"github.com/6Kmfi6HP/opencode2api/vendors/opencode"
+)
+
+// surfaceGoKey 对应 contract.Model.Meta["surface"] 的 go 目录取值（见 vendors/opencode）。
+const surfaceGoKey = "go"
+
+// globalAgg 是全局厂商聚合器（main 启动时装配；单元测试中保持 nil）。
+var globalAgg *aggregator.Aggregator
+
+// rootTransport 把 core/contract.Transport 桥接到本包既有的代理池/健康实现：
+// 厂商（opencode）复用现有 SOCKS5 池、冷却与坏池逻辑；
+// 单元测试替换 httpClient 时，经此桥自动生效。
+type rootTransport struct{}
+
+func (rootTransport) Client(tier contract.Tier, streaming bool) (*http.Client, string) {
+	tt := TierFree
+	if tier == contract.TierPaid {
+		tt = TierPaid
+	}
+	if streaming {
+		return getStreamingHTTPClientForTierWithProxy(tt)
+	}
+	return getHTTPClientForTierWithProxy(tt)
+}
+
+func (rootTransport) Mark(proxyAddr string, status int, reqErr error) {
+	markSocks5Result(proxyAddr, status, reqErr)
+}
+
+// newAggregator 装配厂商注册表（当前：opencode）。
+func newAggregator() *aggregator.Aggregator {
+	agg := aggregator.New()
+	agg.Register(opencode.New(opencode.Config{
+		ID:            "opencode",
+		Name:          "OpenCode",
+		Transport:     rootTransport{},
+		AdminPassword: adminPassword,
+	}))
+	return agg
+}
+
+// refreshModelCatalog 拉取各厂商目录并写入既有缓存（同步，启动与定时共用）。
+func refreshModelCatalog() {
+	if globalAgg == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	if err := globalAgg.Refresh(ctx); err != nil {
+		slog.Warn("model catalog refresh failed", "error", err)
+	}
+	syncModelsFromAggregator(globalAgg)
+}
+
+// syncModelsFromAggregator 把聚合目录写入既有 modelsCache / goModelsCache（按 surface 分流），
+// 保证单厂商配置下 /v1/models 与路由行为与基线一致。
+func syncModelsFromAggregator(agg *aggregator.Aggregator) {
+	catalog := agg.Catalog()
+	if len(catalog) == 0 {
+		return
+	}
+	now := time.Now().Unix()
+	var zen, goM []ModelInfo
+	for _, m := range catalog {
+		info := ModelInfo{ID: m.ID, Object: "model", Created: now, OwnedBy: m.Provider}
+		if m.Meta != nil && m.Meta["surface"] == surfaceGoKey {
+			goM = append(goM, info)
+		} else {
+			zen = append(zen, info)
+		}
+	}
+	modelMu.Lock()
+	if len(zen) > 0 {
+		modelsCache = zen
+		modelsLoaded = true
+	}
+	if len(goM) > 0 {
+		goModelsCache = goM
+	}
+	modelMu.Unlock()
+}

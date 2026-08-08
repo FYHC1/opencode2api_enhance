@@ -60,25 +60,13 @@ func main() {
 	callLogEnabled = gatewayMode // 仅网关进程记录全流程日志（对齐 node_stats 语义）
 	slog.Info("config loaded", "path", configPath)
 	initOCSession()
-	models, err := fetchModels()
-	if err != nil {
-		slog.Warn("failed to fetch models on startup", "error", err)
-	} else {
-		modelMu.Lock()
-		modelsCache = models
-		modelsLoaded = true
-		modelMu.Unlock()
-		slog.Info("models loaded", "count", len(models))
-	}
-
-	goModels, goErr := fetchGoModels()
-	if goErr != nil {
-		slog.Warn("failed to fetch go catalog on startup", "error", goErr)
-	} else {
-		modelMu.Lock()
-		goModelsCache = goModels
-		modelMu.Unlock()
-		slog.Info("go catalog loaded", "count", len(goModels))
+	globalAgg = newAggregator()
+	refreshModelCatalog()
+	modelMu.RLock()
+	nLoaded := len(modelsCache)
+	modelMu.RUnlock()
+	if nLoaded > 0 {
+		slog.Info("models loaded", "count", nLoaded)
 	}
 	startModelRefresh()
 	slog.Info("server starting",
