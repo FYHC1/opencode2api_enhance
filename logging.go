@@ -100,6 +100,9 @@ var (
 	configMu             sync.RWMutex
 	storedResponses      = map[string]StoredResponseState{}
 	storedResponsesMu    sync.RWMutex
+	// 厂商注册表与路由（配置驱动；applyConfig 写入）
+	providersCfg []ProviderCfg
+	routingCfg   RoutingCfg
 )
 
 // ======================== 管理面板认证 ========================

@@ -27,6 +27,28 @@ type AppConfig struct {
 	BadThreshold int `json:"bad_threshold,omitempty"`
 	// ShowNodePrefix 是否在对话流首段展示「🤖 节点 · 模型」前缀（默认关闭）
 	ShowNodePrefix *bool `json:"show_node_prefix,omitempty"`
+
+	// Providers 厂商注册表（配置驱动；缺省 = 单 opencode）
+	Providers []ProviderCfg `json:"providers,omitempty"`
+	// Routing 模型→厂商路由
+	Routing RoutingCfg `json:"routing,omitempty"`
+}
+
+// ProviderCfg 描述一个模型厂商（vendors/ 下的实现）。
+type ProviderCfg struct {
+	ID   string `json:"id"`   // 厂商标识，与厂商实现 ID() 一致（如 "opencode"）
+	Type string `json:"type"` // 厂商类型（"opencode" | "windsurf" | ...），用于选择实现
+	Name string `json:"name,omitempty"`
+	// Enabled 开关；nil 视为 true。
+	Enabled *bool `json:"enabled,omitempty"`
+}
+
+// RoutingCfg 是模型→厂商分发配置。
+type RoutingCfg struct {
+	// ModelProvider 模型名 → 厂商 ID 的强制映射（优先于厂商目录匹配）。
+	ModelProvider map[string]string `json:"model_provider_map,omitempty"`
+	// DefaultProvider 兜底厂商（缺省 "opencode"）。
+	DefaultProvider string `json:"default_provider,omitempty"`
 }
 
 // ======================== Claude Messages API 类型 ========================

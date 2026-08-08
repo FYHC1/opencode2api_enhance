@@ -44,6 +44,10 @@ func applyConfig(cfg AppConfig) {
 	if cfg.ShowNodePrefix != nil {
 		showNodePrefix = *cfg.ShowNodePrefix
 	}
+	if cfg.Providers != nil {
+		providersCfg = append([]ProviderCfg(nil), cfg.Providers...)
+	}
+	routingCfg = cfg.Routing
 
 	if cfg.RouteMode == "round_robin" || cfg.RouteMode == "failover" || cfg.RouteMode == "smart" {
 		routeMode = cfg.RouteMode
