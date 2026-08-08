@@ -71,6 +71,7 @@ func httpRequest(method, path string, port uint16, readTimeout time.Duration, au
 
 	reader := bufio.NewReader(conn)
 	status := 0
+	contentLength := -1
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
@@ -87,10 +88,25 @@ func httpRequest(method, path string, port uint16, readTimeout time.Duration, au
 				status = code
 			}
 		}
+		if k, v, ok := strings.Cut(line, ":"); ok && strings.EqualFold(strings.TrimSpace(k), "Content-Length") {
+			if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+				contentLength = n
+			}
+		}
 	}
-	rest, err := io.ReadAll(reader)
-	if err != nil {
-		return status, rest, err
+	var rest []byte
+	if contentLength >= 0 {
+		// 按 Content-Length 精确读取（避免依赖连接关闭；Windows 关闭延迟会触发超时）
+		rest = make([]byte, contentLength)
+		if _, err := io.ReadFull(reader, rest); err != nil {
+			return status, rest, err
+		}
+	} else {
+		b, err := io.ReadAll(reader)
+		if err != nil {
+			return status, b, err
+		}
+		rest = b
 	}
 	return status, rest, nil
 }

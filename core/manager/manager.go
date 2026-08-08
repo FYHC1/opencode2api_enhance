@@ -76,6 +76,9 @@ type Instance struct {
 type Manager struct {
 	paths Paths
 	mu    sync.Mutex
+
+	seamsMu sync.Mutex
+	seamsFn *SeamFuncs // 可插拔接缝（P4-3 填充；nil = 未装配）
 }
 
 // New 创建管理器。

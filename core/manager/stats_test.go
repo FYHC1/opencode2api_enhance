@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"bytes"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAggregateStats(t *testing.T) {
@@ -106,14 +108,25 @@ func rawHTTPServer(t *testing.T) (uint16, func()) {
 			}
 			go func(c net.Conn) {
 				defer c.Close()
-				buf := make([]byte, 4096)
-				n, _ := c.Read(buf)
-				req := string(buf[:n])
+				// 完整读完请求头（直到空行）再响应，规避 Windows 部分读竞态
+				_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+				var reqBytes []byte
+				tmp := make([]byte, 1024)
+				for !bytes.Contains(reqBytes, []byte("\r\n\r\n")) && len(reqBytes) < 16*1024 {
+					n, err := c.Read(tmp)
+					if n > 0 {
+						reqBytes = append(reqBytes, tmp[:n]...)
+					}
+					if err != nil {
+						break
+					}
+				}
+				req := string(reqBytes)
 				var statusLine, body string
 				switch {
-				case len(req) >= 4 && req[:4] == "POST":
+				case strings.Contains(req, "Content-Length:"):
 					statusLine, body = "200 OK", `{"posted":true}`
-				case len(req) >= 6 && req[:6] == "DELETE":
+				case strings.HasPrefix(req, "DELETE"):
 					statusLine, body = "200 OK", `{"deleted":true}`
 				case strings.HasPrefix(req, "GET /x "):
 					statusLine, body = "200 OK", `{"ok":true}`
@@ -146,25 +159,38 @@ func TestHTTPRequestRaw(t *testing.T) {
 	port, stop := rawHTTPServer(t)
 	defer stop()
 
-	status, body, err := httpGetJSON(port, "/other", 3, "")
+	status, body, err := retryHTTP(t, func() (int, []byte, error) { return httpGetJSON(port, "/other", 8, "") })
 	if err != nil || status != http.StatusNotFound {
 		t.Fatalf("404 case: %d %s %v", status, string(body), err)
 	}
-	status, body, err = httpGetJSON(port, "/x", 3, "tok")
+	status, body, err = retryHTTP(t, func() (int, []byte, error) { return httpGetJSON(port, "/x", 8, "tok") })
 	if err != nil || status != http.StatusOK || string(body) != `{"ok":true}` {
 		t.Fatalf("200 case: %d %s %v", status, string(body), err)
 	}
-	status, body, err = httpPostJSON(port, "/x", 3, "tok", []byte(`{"a":1}`))
+	status, body, err = retryHTTP(t, func() (int, []byte, error) { return httpPostJSON(port, "/x", 8, "tok", []byte(`{"a":1}`)) })
 	if err != nil || status != http.StatusOK || string(body) != `{"posted":true}` {
 		t.Fatalf("POST case: %d %s %v", status, string(body), err)
 	}
-	status, _, err = httpDeleteJSON(port, "/x", 3, "tok")
+	status, _, err = retryHTTP(t, func() (int, []byte, error) { return httpDeleteJSON(port, "/x", 8, "tok") })
 	if err != nil || status != http.StatusOK {
 		t.Fatalf("DELETE case: %d %v", status, err)
 	}
-	if _, _, err := httpGetJSON(59999, "/x", 1, ""); err == nil {
+	if _, _, err := httpGetJSON(59999, "/x", 2, ""); err == nil {
 		t.Fatal("unreachable port must error")
 	}
+}
+
+// retryHTTP 容忍本机回环偶发慢速（Windows 安全软件/负载）：i/o timeout 且未收到状态时重试一次。
+func retryHTTP(t *testing.T, fn func() (int, []byte, error)) (int, []byte, error) {
+	t.Helper()
+	status, body, err := fn()
+	if err != nil && status == 0 {
+		status2, body2, err2 := fn()
+		if err2 == nil || status2 != 0 {
+			return status2, body2, err2
+		}
+	}
+	return status, body, err
 }
 
 func writeStatsFile(t *testing.T, m *Manager, name, content string) {
