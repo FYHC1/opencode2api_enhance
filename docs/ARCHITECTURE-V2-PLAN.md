@@ -207,6 +207,8 @@ type PoolVendor interface {
   - 顺带清理：过时文档（DEPLOYMENT.md/RELEASE.md）、config.example.json 补全可选字段、版本号双轨说明。
 - **验收**：每拆一个包 `go test ./...` 全绿；行为与基线一致（路由表、配置项、/v1/models 输出不变）。
 
+> **排序决策（用户已拍板，2026-08-08）**：**P2 优先于 P1.2b~f**。理由：契约（P1.2a）已就绪，先落地多厂商能力；剩余包化（protocol/gateway/aggregator/router/server）在 P2/P3 改同一批代码时同步进行（P2 将新建 `core/aggregator` 与 `core/router`），避免二次搬运。计划表仍按原 P1.2 子计划追踪。
+
 ### P1.2 子计划（包化 core/*）
 
 > 目标：把 package main 中的领域文件提升为独立包，强制单向依赖，为 P2 厂商接入铺路。每子步骤结束必须 `go test -count=1 ./...` 全绿才提交。
@@ -264,9 +266,10 @@ type PoolVendor interface {
 | 4b | P1.2 | 包化：六包拆分进行中（P1.2a contract ✅；P1.2b~f 待做） | 🔄 | 2026-08-08 | 子计划见「四、P1.2」；commit `95bbc82` |
 | 5 | P1 | 拆分过程每阶段测试全绿，行为与基线一致 | ⬜ | | 每步 `go test -count=1 ./...` |
 | 6 | P1 | 过时文档清理 + config.example.json 补全 + 版本号口径说明 | ⬜ | | 随 P1.2 收尾处理 |
-| 7 | P2 | `core/contract` 定稿（基础 + PoolVendor） | ⬜ | | |
-| 8 | P2 | `vendors/opencode/` 实现并接入，单厂商配置下行为与基线一致 | ⬜ | | |
-| 9 | P2 | 硬编码 URL 断言测试改写为对厂商 mock | ⬜ | | |
+| 7 | P2 | `core/contract` 定稿（基础 + PoolVendor + Tier/Transport/Stream/Meta） | ✅ | 2026-08-08 | 见 `core/contract/contract.go`；commit `de91054` |
+| 7b | P2 | `core/aggregator` 聚合层（合并/刷新/隔离） + 单测 | ✅ | 2026-08-08 | commit `de91054` |
+| 8 | P2 | `vendors/opencode/` 实现（会话/目录/免费/错误语义） | 🔄 | | 目录层 ✅；Chat/ChatStream 切流接线=P2B |
+| 9 | P2 | 硬编码 URL 断言测试改写为对厂商 mock | ⬜ | | 随 P2B 切流同步做 |
 | 10 | P3 | `vendors/windsurf/` Go 移植完成（注册/聊天/健康/存储/用量） | ⬜ | | |
 | 11 | P3 | ★24h 冷却 / ★额度≤20% 预注册 / ★中途无感换号 三能力完成 | ⬜ | | 三能力为新建 |
 | 12 | P3 | `/v1/models` 双厂商聚合（前缀区分），分发与厂商级 failover 通过 | ⬜ | | |
