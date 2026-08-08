@@ -1,0 +1,301 @@
+# 架构 V2 改造计划：多模型厂商 + 多端（本仓库唯一事实来源）
+
+> **本计划书是本次改造的"唯一事实来源"**。后续交接（人 / AI）一律按本文档逐阶段、逐验收项推进，并按「五、验收计划表」实时更新完成状态。
+>
+> - 状态：**实施中**（当前 P0）
+> - 分支：`feat/architecture-v2`（已从 `feature/debug-tooling` 分出，2026-08-08）
+> - 基线日期：2026-08-08
+> - 上游参考：本项目根目录；第二厂商原型 `D:\AI_Projects\windsurf-account-manager\source`
+
+---
+
+## 〇、背景与原始需求（为什么做这件事）
+
+### 0.1 起因（用户原话整理）
+
+> 随着社区的朋友不断地对本项目添砖加瓦，感觉项目的地基还是要打大，不然容易倒塌。需要对整个项目架构做梳理，核心目标：把内容拆分成各个独立的模块，兼容可扩展性，兼容后续各个不同的终端、平台，兼容后续增加其他的 API 模型。
+> 比如我们现在是 opencode，明天要是有个智谱的（后改为 windsurf 账号池）也来做模型底层，我们需要一个上层的 models 接口返回 opencode 和智谱（windsurf）发出的全部可用的免费模型；上层请求时，中间层做分发。
+
+### 0.2 两个改造维度
+
+| 维度 | 需求 | 落点 |
+|---|---|---|
+| A·多模型厂商 | 上层 `/v1/models` 聚合所有厂商免费模型；请求由中间层分发（模型→厂商解析、厂商级 failover） | `vendors/` + `core/`（P2/P3） |
+| B·多端多平台 | 未来出现 Web、Linux、macOS 等版本；一套代码、一个平台一个产物 | `ui/` + 打包矩阵（P4/P5） |
+
+### 0.3 第二个厂商定为"账号池型"（重要）
+
+第二个后端不是 API Key 型，而是 **Devin/Windsurf 账号池**（原型：`windsurf-account-manager`）。特征：
+
+- 账号动态注册（临时邮箱 → 注册 → 换 session token，走 Devin/Windsurf 上游）；
+- 请求时按健康度挑号，额度低自动换号；旧号 24h 冷却防无限注册；
+- **用户全程无感**（核心诉求，见「三、3.3 无感对话动作」）。
+
+### 0.4 目标一句话
+
+> **加新模型厂商 = 在 `vendors/` 下加一个子文件夹 + 实现契约 + 配置登记一行，core 零改动；上层（UI）永远只跟 core 打交道。**
+
+---
+
+## 一、现状分析摘要（2026-08-08 基线快照）
+
+### 1.1 三层架构现状
+
+```
+React 前端（6 页） ──invoke──> Rust 管理器（35 command） ──子进程──> Go 代理核心
+src/                    src-tauri/src/                     main.go 等（根目录 .go）
+```
+
+### 1.2 Go 核心（改造主战场）
+
+- `main.go` 单文件 **5320 行**：HTTP 服务、配置、鉴权、SOCKS5 代理池、上游调用、模型目录、三种协议 handler、管理面板、统计。零第三方依赖（纯 stdlib）。9 个测试文件，全部 mock/httptest、不触网。
+- 路由：`/v1/chat/completions`、`/v1/responses`、`/v1/messages`、`/v1/models`、`/api/config`、`/api/stats`、`/api/reload`、`/api/node-status`、`/health`、`/`（内嵌管理面板）。
+- **协议层已解耦**（最有价值资产）：三种入站协议 → 统一 OpenAI 格式（`convertRequest` main.go:1511）→ `buildUpstreamBody` 发出 → 响应转回各协议。新厂商接入点就在这个"统一出口"。
+- **上游强耦合（硬编码，无抽象）**：
+  - 5 个硬编码 URL：`opencode.ai/zen/v1/models`、`/zen/go/v1/models`、`/zen/v1/chat/completions`、`/zen/go/v1/chat/completions`、`registry.npmjs.org/opencode-ai/latest`（main.go:448/502/528/2008/2010）
+  - 专属头 `x-opencode-client/project/session/request` + UA（main.go:2018-2022）
+  - 鉴权语义 `go:`/`zen:` 前缀、`sk-` key 校验（main.go:1921-1958）
+  - 免费判定 `-free` 后缀 + 魔数 `big-pickle`（main.go:1990-1993）
+- **已具备可复用能力**：SOCKS5 代理池 3 模式（smart/failover/round_robin）+ 健康/坏池；流内超时 + 断点续写切换（gateway_timeout.go）；配置热更新（不重启不打断 SSE）；token/节点统计；调用日志。
+- 入口 flags：`-port`（默认 8000）、`-config`、`-password`（默认 123456）、`-gateway`、`-log-level`、`-log-file`、`-version`（main.go:5229-5238）。
+
+### 1.3 Rust 管理器（实质 Windows-only）
+
+- 35 个 tauri command：实例/节点/扫描/统计/日志/设置全流程。
+- Windows 专属点：内嵌 `bin/opencode2api.exe` + `bin/sing-box.exe`（embed.rs include_bytes!）；`taskkill`；`netstat -ano` 端口清理（非 Windows 空实现）；注册表开机自启；Clash Verge profiles 目录（`#[cfg(windows)]`）；NSIS 打包；`%APPDATA%`。
+- 编译层面可跨平台（Cargo.toml 无 Windows-only crate），硬阻塞全在运行时。
+
+### 1.4 windsurf-account-manager 原型盘点（P3 移植源）
+
+| 模块（Rust） | 作用 | 与用户诉求对照 |
+|---|---|---|
+| devin_auth.rs | 注册链路（app.devin.ai + codeium.com） | ✅ 有 |
+| devin_connect.rs | Connect-RPC protobuf 聊天（server.codeium.com） | ✅ 有 |
+| proto_min.rs | 手写最小 protobuf 编解码 | ✅ 有 |
+| tmaily.rs | 临时邮箱收码 | ✅ 有 |
+| health.rs | 健康分（额度分 + 滚动窗口 trouble） | ✅ 有 |
+| store.rs | SQLite 账号库 accounts.db | ✅ 有 |
+| usage.rs / windsurf_api.rs | 用量查询 GetUserStatus | ✅ 有 |
+| proxy_server.rs | 本地 OpenAI 兼容反代（127.0.0.1:3003，swe-1-6-slow） | ✅ 有 |
+| **24h 冷却** | — | ❌ **没有，需新建** |
+| **额度 ≤20% 预注册** | — | ❌ **没有，需新建**（只有 5% 干旱/0% 耗尽） |
+| **中途无感换号** | — | 🔶 只有流建立前换号（MAX_HOPS=3），**流中不换**，需新建 |
+
+> 迁移决策（已拍板）：三件缺失能力在 `vendors/windsurf/`（Go 移植版）内新建，不依赖原 Rust 项目。
+
+---
+
+## 二、已拍板决策（用户逐条确认，2026-08-08）
+
+| # | 议题 | 决策 |
+|---|---|---|
+| 1 | 第二厂商形态 | **A**：账号管理逻辑整体移植进 `vendors/windsurf/`（Rust→Go 重写，vendor 自包含；无号即注册 / 额度≤20% 预注册 / 24h 冷却在 vendor 内实现） |
+| 2 | 管理逻辑是否并入 core（P4 大决策） | **并入**：Rust→Go 移植，一份实现服务所有端（Web/桌面/服务器） |
+| 3 | 同名模型冲突 | **前缀区分**：`opencode/x`、`windsurf/x` |
+| 4 | Web 版定位 | **单用户/内网**（沿用现有密码鉴权；GitHub 已有人提多用户 PR，后续再调整，本次不做） |
+| 5 | 新分支基线 | **从 `feature/debug-tooling` 分出** `feat/architecture-v2` |
+| 6 | 兼容性红线 | 厂商特有信息（鉴权头、错误码表、会话标识、免费判定规则等）一律进厂商实现或配置，**不写死在 core**；有不确定处先问再定 |
+
+---
+
+## 三、目标架构
+
+### 3.1 文件夹结构
+
+```
+opencode2api_enhance_main/
+├── core/                        ← 核心层（中间层，跨平台、可独立部署）
+│   ├── contract/               ← 厂商契约：数据线束规格（接口 + 数据结构）
+│   ├── protocol/               ← 协议转换：OpenAI / Anthropic / Responses ↔ 统一格式
+│   ├── router/                 ← 分发：请求→选厂商；厂商内部→选节点代理
+│   ├── aggregator/             ← 模型聚合：/v1/models 合并全部厂商模型
+│   ├── gateway/                ← 横切：鉴权、统计、日志、配置热更新、超时续写
+│   └── server/                 ← HTTP 路由 + 启动入口
+├── vendors/                    # 厂商层（底层，一厂商 = 一子文件夹）
+│   ├── opencode/               # 第一厂商（现有硬编码收拢处）
+│   │   └── contract.go         # 实现 core/contract
+│   └── windsurf/               # 第二厂商（账号池型，Rust→Go 移植 + 三能力新建）
+│       ├── contract.go         # 实现 core/contract（含 PoolVendor）
+│       ├── devin_auth.go       # 注册链路
+│       ├── devin_connect.go    # Connect-RPC 聊天
+│       ├── proto_min.go        # 最小 protobuf
+│       ├── tmaily.go           # 临时邮箱
+│       ├── health.go           # 健康分
+│       ├── store.go            # 账号库（SQLite→Go）
+│       ├── usage.go            # 用量查询
+│       ├── cooldown.go         # ★新建：24h 冷却
+│       └── autoreg.go          # ★新建：额度阈值预注册
+├── ui/                         # 界面层（只做界面）
+│   ├── web/                    # React 前端（复用现有 src/，浏览器可用）
+│   └── desktop/                # Tauri 薄壳（窗口/托盘/内嵌二进制）
+└── main.go                     # 入口：只做装配（读配置→注册厂商→启动 core）
+```
+
+### 3.2 厂商契约（core/contract）
+
+**必给三件**：
+
+| # | 契约 | 说明 |
+|---|---|---|
+| 1 | `Chat()` / `ChatStream()` | 聊天调用：非流式 + 流式（SSE） |
+| 2 | `ListModels()` + `IsFree()` | 模型目录（动态抓取 + 静态兜底） + 免费判定 |
+| 3 | `Auth()` | 鉴权：认证头构造、key 合法性判断 |
+
+**建议三件**：模型能力元 `Model.Caps`（tools/thinking/vision/上下文）；错误语义 `ErrSemantics`（可重试/可切厂商/进坏账状态码，按厂商差异化）；健康状态 `Health()`。
+
+**可选两件**：会话/身份头生命周期；版本探测/UA。
+
+**账号池扩展接口（core 用类型断言发现，厂商可选实现）**：
+
+```go
+type PoolVendor interface {
+    EnsureReady(ctx) error          // 请求前保证可用账号（必要时自动注册/换号）
+    PoolStatus() PoolStatus         // 可用数 / 冷却数 / 干旱 / 全池最低额度%
+    Acquire() (AcctID, error)       // 借号（受冷却与健康约束）
+    Release(id)                     // 还号（进入 24h 冷却）
+}
+```
+
+### 3.3 用户无感对话的完整动作（P3 验收核心）
+
+```
+请求进来 → 厂商是账号池型？是 → EnsureReady()（无可用号可认自动注册新号）
+       → 挑健康号 → 发请求 → 成功：后台刷新该号用量
+       → 该号额度 ≤ 20% → 立即预注册新号（后台，不阻塞用户）
+       → 该号被限/报错 → 自动换另一个健康号续写（沿用现有断点续写机制）
+       → 旧号 24h 冷却到期前不参与挑选（防无限注册）
+```
+
+### 3.4 模型聚合 + 分发（用户核心诉求）
+
+- **聚合**：`/v1/models` 遍历所有已注册厂商目录 → 合并 → 每条带 `provider` 字段 → 免费过滤（opencode 免费模型 + windsurf `swe-1-6-slow` 同列表）。
+- **分发**：`model=X` → 查"模型→厂商映射表"（如 `swe-1-6-slow → windsurf`）→ 未命中则遍历厂商目录谁提供 X → 兜底默认厂商 → 选中后走现有节点代理池路由。
+- **厂商级 failover**：连续失败（5xx/429）→ 切到同样提供该模型的下一个厂商。
+
+### 3.5 跨平台与打包（维度 B 的答案）
+
+- **代码一份**：core + vendors 纯 Go 天然跨平台（现状已实践 9 目标交叉编译）；ui/web 浏览器通用；ui/desktop（Tauri）三平台壳。
+- **一平台一包**（CI 矩阵一次出全，每个产物内嵌对应平台的 core + sing-box + 同一套 UI）：
+
+| 平台 | 产物 | 用户拿到 |
+|---|---|---|
+| Windows | NSIS 安装 exe（现状）+ 便携 zip | 1 个安装包 |
+| macOS | `.dmg`（内含 `.app`） | 1 个安装包 |
+| Linux | `.deb`/`.rpm` + **AppImage**（单文件） | 1 个安装包或单文件 |
+| Web/服务器 | 不打包：同一管理二进制启动即服务；公网部署放 Linux 或 Docker | 无安装 |
+
+> 概念纠正：mac 惯例 .dmg/.app、Linux 惯例 .deb/.rpm（AppImage 才是"一个文件跑"），但**每个平台用户拿到的都是恰好 1 个完整产物**，与现状 Windows"1 个 exe"心智一致。
+
+---
+
+## 四、实施阶段（每阶段：目标 / 改动 / 验收；P0 已完成项打勾）
+
+### P0 基线（当前）
+- **目标**：干净起点，行为快照。
+- **改动**：建分支 `feat/architecture-v2`；跑 `go test ./...` 全绿；记录路由/配置/`/v1/models` 现状。
+- **验收**：测试全绿；行为快照记录在案（可回溯）。
+
+### P1 拆 core（纯重构，零行为变化）
+- **目标**：把 `main.go`（5320 行）按 6 个模块拆包。
+- **改动**：
+  - `core/contract/`：契约接口 + 数据结构（先定义，厂商层 P2 实现）。
+  - `core/protocol/`：三种协议请求/响应类型 + 双向转换（迁出 main.go 相关函数：convertRequest、claudeStreamHandler、responsesStreamHandler、convertMessagesForUpstream 等）。
+  - `core/router/`：上游请求构造与调用（暂不抽象，先整体搬入：callOpenCodeAPI(Stream)、buildOCRequestWithEndpoint、buildUpstreamBody）。
+  - `core/aggregator/`：模型目录缓存、别名、免费判定、listModelsHandler（fetchModels、fetchGoModels、resolveModel、startModelRefresh）。
+  - `core/gateway/`：鉴权/统计/日志/配置热更新/超时续写（apiKeyAuth、recordTokenUsage、startConfigWatcher、streamWithResume 等，gateway_timeout.go 整体迁入）。
+  - `core/server/`：路由注册 + main() 入口（main.go 保留为薄入口，只做装配）。
+  - 顺带清理：过时文档（DEPLOYMENT.md/RELEASE.md）、config.example.json 补全可选字段、版本号双轨说明。
+- **验收**：每拆一个包 `go test ./...` 全绿；行为与基线一致（路由表、配置项、/v1/models 输出不变）。
+
+### P2 收厂商（第一个厂商：opencode）
+- **目标**：定义契约并验证"契约可被实现"。
+- **改动**：
+  - `core/contract/` 定稿（必给 3 + 建议 3 + 可选 2 + PoolVendor）。
+  - 新建 `vendors/opencode/`：把 P1 里 router/aggregator 中的 opencode 硬编码收拢为 `OpenCodeVendor`（URL、鉴权、专属头、免费判定、目录抓取、错误语义全部进厂商）。
+  - `core/router/` 改为通过契约调用厂商；配置新增 `providers` 数组 + `routing`（model_provider_map、default_provider）。
+  - 现有测试改为对 OpenCodeVendor 的 mock 断言（硬编码 URL 断言同步改写）。
+- **验收**：单厂商配置下 `/v1/models` 输出与基线一致；分发单测覆盖映射/兜底/失败切换。
+
+### P3 加厂商（第二家·账号池型）
+- **目标**：双厂商并存，池型厂商全能力落地。
+- **改动**：
+  - 新建 `vendors/windsurf/`：Rust→Go 移植 devin_auth / devin_connect / proto_min / tmaily / health / store / usage / proxy 逻辑。
+  - ★新建三能力：`cooldown.go`（24h 冷却）、`autoreg.go`（额度≤20% 预注册）、流中无感换号（沿用 core/gateway 断点续写 + 账号切换）。
+  - 聚合：`/v1/models` 返回 opencode 免费模型 + `swe-1-6-slow`（前缀 `opencode/`、`windsurf/`）。
+- **验收**：双厂商并存；池型"无号自动注册 / 额度≤20% 预注册 / 24h 冷却 / 中途无感换号"全链路通过（单测 + 冒烟）。
+
+### P4 统一 UI + Web 版（★需先制定详细子计划再动工）
+- **目标**：管理功能并入 core（HTTP API），一份实现服务所有端。
+- **子计划（拟定，开工前细化）**：P4-1 管理 API 层（35 command → HTTP）→ P4-2 实例生命周期移植 → P4-3 节点扫描探针移植 → P4-4 sing-box 配置生成移植 → P4-5 前端改走 HTTP + Tauri 薄壳化 → P4-6 联动联调。
+- **验收**：浏览器打开 `localhost:<port>/` 可用全部管理功能；桌面版功能与现状等价（实例启停/扫描/统计/日志全链路）。
+
+### P5 多平台（Linux/macOS）
+- **目标**：壳层跨平台 + 打包矩阵。
+- **改动**：内嵌二进制按平台（cfg!(target_os) + CI 矩阵）；替换 Windows 系统调用（端口清理/开机自启/进程终止/Clash 目录）；tauri.conf.json 加 deb/rpm/AppImage、dmg；CI 平台矩阵。
+- **验收**：Linux/macOS 上跑通 实例启停 + 节点扫描 + 网关 + 托盘；CI 每平台产出完整包。
+
+---
+
+## 五、验收计划表（完成一项勾一项，逐步更新）
+
+> 维护规则：每完成一个验收项，把该行 `状态` 改为 ✅（注明完成日期与验证命令/证据）。每阶段完成时更新一次"阶段状态"。
+
+| # | 阶段 | 验收项 | 状态 | 完成日期 | 验证方式 / 备注 |
+|---|---|---|---|---|---|
+| 1 | P0 | 分支 `feat/architecture-v2` 建立（自 feature/debug-tooling） | ✅ | 2026-08-08 | `git branch --show-current` |
+| 2 | P0 | `go test ./...` 全绿 | ✅ | 2026-08-08 | `go -C <proj> test -count=1 ./...`（全绿）+ `go vet ./...` |
+| 3 | P0 | 行为快照记录（路由表/配置/`/v1/models` 输出） | ✅ | 2026-08-08 | 见「一、现状分析摘要」 |
+| 4 | P1 | `core/` 六个包拆分完成，main.go 仅留装配入口 | ⬜ | | |
+| 5 | P1 | 拆分过程每包测试全绿，行为与基线一致 | ⬜ | | 逐包 `go test ./...` |
+| 6 | P1 | 过时文档清理 + config.example.json 补全 + 版本号口径说明 | ⬜ | | |
+| 7 | P2 | `core/contract` 定稿（基础 + PoolVendor） | ⬜ | | |
+| 8 | P2 | `vendors/opencode/` 实现并接入，单厂商配置下行为与基线一致 | ⬜ | | |
+| 9 | P2 | 硬编码 URL 断言测试改写为对厂商 mock | ⬜ | | |
+| 10 | P3 | `vendors/windsurf/` Go 移植完成（注册/聊天/健康/存储/用量） | ⬜ | | |
+| 11 | P3 | ★24h 冷却 / ★额度≤20% 预注册 / ★中途无感换号 三能力完成 | ⬜ | | 三能力为新建 |
+| 12 | P3 | `/v1/models` 双厂商聚合（前缀区分），分发与厂商级 failover 通过 | ⬜ | | |
+| 13 | P3 | 池型全链路冒烟：无号自动注册→对话→额度低预注册→换号续写 | ⬜ | | |
+| 14 | P4 | P4 详细子计划制定（P4-1~P4-6） | ⬜ | | 动工前必须先行 |
+| 15 | P4 | 管理功能并入 core（HTTP API），浏览器全功能可用 | ⬜ | | |
+| 16 | P4 | 桌面版功能与现状等价；Tauri 薄壳化 | ⬜ | | |
+| 17 | P5 | core/vendors 在 Linux/macOS 编译通过 | ⬜ | | |
+| 18 | P5 | 壳层 Windows 系统调用替换 + 内嵌二进制按平台 | ⬜ | | |
+| 19 | P5 | CI 打包矩阵出全（Win NSIS / mac dmg / Linux deb+rpm+AppImage） | ⬜ | | |
+
+### 阶段状态汇总
+
+| 阶段 | 状态 |
+|---|---|
+| P0 基线 | ✅ 已完成（分支已建，测试全绿，行为快照已记录） |
+| P1 拆 core | ⬜ 未开始 |
+| P2 收厂商 | ⬜ 未开始 |
+| P3 加厂商 | ⬜ 未开始 |
+| P4 统一 UI | ⬜ 未开始 |
+| P5 多平台 | ⬜ 未开始 |
+
+---
+
+## 六、开发纪律（延续本项目已有 "阶段回滚" 心法）
+
+1. **阶段化**：P0→P5 分阶段；复杂处（P4、P3 的 Go 移植）预先拆分**子开发计划**，每个子阶段走"实现→测试→验证"闭环。
+2. **验证不过顺延**：阶段末验证未通过的项，**并入下一阶段计划"上阶段遗留问题"节**修复，不静默带过。
+3. **每阶段一提交**：每阶段一个 commit（含测试），测绿才推进；真行为不变阶段（P1）与新增抽象阶段（P2 后）分开提交。
+4. **兼容性红线**：厂商特有信息一律进厂商层/配置，不进 core 写死；拿不准先问用户。
+
+---
+
+## 七、风险与遗留问题
+
+1. P2 抽厂商时硬编码 URL 断言需同步改写（测试=行为契约）。
+2. P4 Rust 移植量大：逐命令对照验证，按子计划分步落地。
+3. windsurf 原项目依赖 TMaily 公共 API（`tmaily.com`）——第三方可用性是外部风险；移植时保留其重试/兜底逻辑。
+4. 本地环境：`cargo test` 受 WinLibs 工具链限制（`STATUS_ENTRYPOINT_NOT_FOUND`，CI 无此问题）——Rust 侧验证以 `cargo check` + CI 为准。
+5. 过时文档与版本号双轨（CHANGELOG v1.x vs package.json 0.1.1）随 P1 清理。
+
+---
+
+## 八、参考附录
+
+- 本项目关键代码位置：main.go（路由 5292-5313 / 上游调用 2046-2184 / 模型 500-644 / 鉴权 1921-1958 / 配置 1136-1248）；gateway_timeout.go（流内超时续写）。
+- 第二厂商原型：`D:\AI_Projects\windsurf-account-manager\source\src-tauri\src\*.rs`（模块映射见「一、1.4」）。
+- 会话计划快照：本文件即为唯一事实来源，无需旁挂。
