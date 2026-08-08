@@ -266,6 +266,11 @@ type PoolVendor interface {
 
 ### P4 统一 UI + Web 版（★需先制定详细子计划再动工）
 - **目标**：管理功能并入 core（HTTP API），一份实现服务所有端。
+- **执行策略（2026-08-08 定案：先 exe 后 Web，按大步验证）**：
+  1. **大步 1 接线**（=P4-5b 核心）：`src/lib/api.ts` 的 `invoke` 全部换成 `fetch('/api/admin/*')`，TS 类型与 6 个页面零改动；同时把 Go 侧漏出的字段补齐（如 `GatewayStatus.free_models_loading`）。**验证**：`go test ./...` 全绿 + `npm run build` 通过 + 浏览器能打开页面。
+  2. **大步 2 浏览器快速验收**（=P4-6 缩小版）：core 起在 `localhost:<port>`，浏览器把 6 页全链路走一遍（登录→节点→加实例→启动→测试→入网关池→网关状态→统计/日志），问题集中修。
+  3. **大步 3 exe 出口**：Tauri 壳瘦身（窗口/托盘/自启/二进制路径）、壳拉起 core 管理器（`OPCODE2API_DATA_DIR`）、`cargo check` + NSIS → 交付 exe。**验证 `npm run tauri:build` 产出 exe + 桌面走查**。
+  - 验证节奏：3 大步各一次完整，不做小步校验（用户拍板）；大步内保持正常提交。
 - **子计划（细化版 2026-08-08，已开工；行为规格来自 `src-tauri/src/*.rs` 全量工读）**：
 
 > **核心决策**：新增 Go 包 `core/manager` 承载管理域（实例生命周期/端口/clash 解析/sing-box 配置/probe 扫描/网关/统计/日志/应用配置），HTTP 层为 `/api/admin/*`（鉴权复用现有 `requireAuth` 会话 + `apiKeyAuth`）。实例模型保持"子进程"（与现状一致，最小侵入）：同一 core 二进制既可单独运行（单实例网关，现状），也可作为管理器 spawn 自身子进程当实例。壳专属命令（hide_to_tray/quit/toggle_maximize·窗口操作）不并入 core，保留 Tauri invoke；autostart/binaries 双轨（core 提供 HTTP 供 Web 用）。Windows 专属系统调用先行真实现，非 Windows 空桩（P5 替换）。
