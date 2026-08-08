@@ -58,6 +58,8 @@ export default function LogsPage({
   const [onlyIssues, setOnlyIssues] = useState(false)
   // 按天筛选：'' = 全部日期
   const [dateFilter, setDateFilter] = useState('')
+  // 视图切换：日志列表 / 时段分析 / 节点分析
+  const [view, setView] = useState<'list' | 'hour' | 'node'>('list')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
 
   const load = useCallback(
@@ -152,7 +154,32 @@ export default function LogsPage({
         </div>
       </div>
 
+      {/* 视图切换：日志列表 / 时段分析 / 节点分析 */}
+      <div className="flex items-center gap-1 mb-4 bg-zinc-100/80 rounded-xl p-1 w-fit">
+        {(
+          [
+            ['list', '日志列表'],
+            ['hour', '时段分析'],
+            ['node', '节点分析'],
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setView(id)}
+            className={clsx(
+              'px-4 py-1.5 rounded-lg text-[13px] font-medium transition-colors',
+              view === id ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500 hover:text-zinc-700',
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
       {/* 汇总 + 过滤 */}
+      {view === 'list' && (
+      <>
       <div className="bg-white rounded-2xl border p-4 mb-4 flex flex-wrap items-center gap-4">
         <div className="flex gap-5 text-sm">
           <span className="text-zinc-600">
@@ -168,19 +195,21 @@ export default function LogsPage({
             异常/切换 <b>{issueCount}</b>
           </span>
         </div>
+        {dates.length > 1 && (
         <select
           value={dateFilter}
           onChange={(e) => setDateFilter(e.target.value)}
           className="px-2.5 py-1.5 rounded-lg border border-zinc-200 bg-white text-[13px] text-zinc-600 outline-none"
           title="按日期筛选"
         >
-          <option value="">全部日期</option>
+          <option value="">全部日期（{dates.length} 天）</option>
           {dates.map((d) => (
             <option key={d} value={d}>
               {d}
             </option>
           ))}
         </select>
+        )}
         <label className="flex items-center gap-2 text-sm text-zinc-600 cursor-pointer ml-auto">
           <input
             type="checkbox"
@@ -309,6 +338,197 @@ export default function LogsPage({
         <Activity size={12} />
         每 5 秒自动刷新 · 保留上限可在设置页调整
       </div>
+      </>
+      )}
+
+      {/* 时段分析（阶段4填充） */}
+      {view === 'hour' && <HourAnalysisView logs={logs} />}
+      {/* 节点分析（阶段4填充） */}
+      {view === 'node' && <NodeAnalysisView logs={logs} />}
+    </div>
+  )
+}
+
+/** 超时/错误类事件（用于分析统计） */
+const ISSUE_EVENT_TYPES = [
+  'switch',
+  'ttft_timeout',
+  'silence_timeout',
+  'stream_interrupt',
+  'stream_error',
+  'connect_error',
+  'upstream_error',
+  'all_failed',
+]
+
+type HourStat = {
+  hour: number
+  requests: number
+  ok: number
+  totalMs: number
+  issueCount: number
+}
+
+type NodeStat = {
+  node: string
+  requests: number
+  ok: number
+  totalMs: number
+  issueCount: number
+}
+
+const fmtPct = (n: number) => `${(n * 100).toFixed(0)}%`
+
+/** 时段分析视图：按小时聚合请求数/平均耗时/失败率/异常次数（纯 CSS 条形图） */
+function HourAnalysisView({ logs }: { logs: CallLogRecord[] }) {
+  const hours = useMemo(() => {
+    const arr: HourStat[] = Array.from({ length: 24 }, (_, i) => ({
+      hour: i,
+      requests: 0,
+      ok: 0,
+      totalMs: 0,
+      issueCount: 0,
+    }))
+    for (const l of logs) {
+      const d = new Date(l.ts)
+      if (Number.isNaN(d.getTime())) continue
+      const s = arr[d.getHours()]!
+      s.requests++
+      if (l.status === 'ok') s.ok++
+      s.totalMs += l.duration_ms ?? 0
+      s.issueCount += (l.events ?? []).filter((e) => ISSUE_EVENT_TYPES.includes(e.type)).length
+    }
+    return arr
+  }, [logs])
+
+  const withData = hours.filter((h) => h.requests > 0)
+  const maxReq = Math.max(1, ...hours.map((h) => h.requests))
+
+  return (
+    <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm p-5">
+      <div className="text-[14px] font-semibold text-zinc-900 mb-1">时段分析</div>
+      <div className="text-[12px] text-zinc-400 mb-4">
+        按小时统计请求分布与耗时，帮助定位一天中相对卡顿的时段（数据来自保留期内的调用日志）
+      </div>
+      {withData.length === 0 ? (
+        <div className="py-12 text-center text-zinc-400 text-sm">暂无日志数据</div>
+      ) : (
+        <>
+          {/* 24 小时条形图（柱高 ∝ 请求数） */}
+          <div className="flex items-end gap-[3px] h-32 mb-4">
+            {hours.map((h) => (
+              <div key={h.hour} className="flex-1 flex flex-col justify-end items-center h-full group relative" title={`${String(h.hour).padStart(2, '0')} 时：${h.requests} 请求`}>
+                {h.requests > 0 && (
+                  <>
+                    <div
+                      className={clsx(
+                        'w-full rounded-t-sm transition-all',
+                        h.requests > 0 && h.ok / h.requests >= 0.9 ? 'bg-teal-500' : 'bg-amber-400',
+                      )}
+                      style={{ height: `${Math.max((h.requests / maxReq) * 100, 4)}%` }}
+                    />
+                    <div className="absolute bottom-full mb-1 hidden group-hover:block bg-zinc-900 text-white text-[10px] rounded px-1.5 py-0.5 whitespace-nowrap z-10">
+                      {String(h.hour).padStart(2, '0')} 时 · {h.requests} 请求 · 均耗 {fmtDur(h.requests ? Math.round(h.totalMs / h.requests) : 0)}
+                    </div>
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+          {/* 明细表 */}
+          <table className="w-full text-[13px]">
+            <thead>
+              <tr className="text-left text-[12px] text-zinc-500 border-b border-zinc-100">
+                <th className="py-2 pr-3 font-medium">时段</th>
+                <th className="py-2 pr-3 font-medium text-right">请求数</th>
+                <th className="py-2 pr-3 font-medium text-right">平均耗时</th>
+                <th className="py-2 pr-3 font-medium text-right">失败率</th>
+                <th className="py-2 font-medium text-right">异常/切换</th>
+              </tr>
+            </thead>
+            <tbody>
+              {withData.map((h) => (
+                <tr key={h.hour} className="border-b border-zinc-50">
+                  <td className="py-1.5 pr-3 text-zinc-800">{String(h.hour).padStart(2, '0')}:00 - {String(h.hour).padStart(2, '0')}:59</td>
+                  <td className="py-1.5 pr-3 text-right tabular-nums text-zinc-600">{h.requests}</td>
+                  <td className="py-1.5 pr-3 text-right tabular-nums text-zinc-600">{fmtDur(Math.round(h.totalMs / h.requests))}</td>
+                  <td className="py-1.5 pr-3 text-right tabular-nums text-zinc-600">{fmtPct(1 - h.ok / h.requests)}</td>
+                  <td className="py-1.5 text-right tabular-nums text-zinc-600">{h.issueCount}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+    </div>
+  )
+}
+
+/** 节点分析视图：按节点聚合请求数/成功率/平均耗时/异常次数（排序表 + 成功率条） */
+function NodeAnalysisView({ logs }: { logs: CallLogRecord[] }) {
+  const nodes = useMemo(() => {
+    const m = new Map<string, NodeStat>()
+    for (const l of logs) {
+      // 最终节点：nodes 链最后一项；无则归「未知」
+      const node = l.nodes?.slice(-1)[0] ?? '未知'
+      let s = m.get(node)
+      if (!s) {
+        s = { node, requests: 0, ok: 0, totalMs: 0, issueCount: 0 }
+        m.set(node, s)
+      }
+      s.requests++
+      if (l.status === 'ok') s.ok++
+      s.totalMs += l.duration_ms ?? 0
+      s.issueCount += (l.events ?? []).filter((e) => ISSUE_EVENT_TYPES.includes(e.type)).length
+    }
+    return [...m.values()].sort((a, b) => b.requests - a.requests || b.issueCount - a.issueCount)
+  }, [logs])
+
+  return (
+    <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm p-5">
+      <div className="text-[14px] font-semibold text-zinc-900 mb-1">节点分析</div>
+      <div className="text-[12px] text-zinc-400 mb-4">
+        按最终出口节点聚合，评估各节点请求量、成功率与稳定性（数据来自保留期内的调用日志）
+      </div>
+      {nodes.length === 0 ? (
+        <div className="py-12 text-center text-zinc-400 text-sm">暂无日志数据</div>
+      ) : (
+        <table className="w-full text-[13px]">
+          <thead>
+            <tr className="text-left text-[12px] text-zinc-500 border-b border-zinc-100">
+              <th className="py-2 pr-3 font-medium">节点</th>
+              <th className="py-2 pr-3 font-medium text-right">请求数</th>
+              <th className="py-2 pr-3 font-medium text-right">成功率</th>
+              <th className="py-2 pr-3 font-medium text-right">平均耗时</th>
+              <th className="py-2 font-medium text-right">异常/切换</th>
+            </tr>
+          </thead>
+          <tbody>
+            {nodes.map((n) => {
+              const rate = n.requests > 0 ? n.ok / n.requests : 0
+              return (
+                <tr key={n.node} className="border-b border-zinc-50">
+                  <td className="py-2 pr-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-zinc-800 font-mono text-[12px] truncate max-w-[220px]">{n.node}</span>
+                      <div className="flex-1 h-1.5 bg-zinc-100 rounded-full overflow-hidden min-w-[60px]">
+                        <div
+                          className={clsx('h-full rounded-full', rate >= 0.9 ? 'bg-teal-500' : rate >= 0.5 ? 'bg-amber-400' : 'bg-red-400')}
+                          style={{ width: `${rate * 100}%` }}
+                        />
+                      </div>
+                    </div>
+                  </td>
+                  <td className="py-2 pr-3 text-right tabular-nums text-zinc-600">{n.requests}</td>
+                  <td className="py-2 pr-3 text-right tabular-nums text-zinc-600">{fmtPct(rate)}</td>
+                  <td className="py-2 pr-3 text-right tabular-nums text-zinc-600">{fmtDur(Math.round(n.totalMs / n.requests))}</td>
+                  <td className="py-2 text-right tabular-nums text-zinc-600">{n.issueCount}</td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      )}
     </div>
   )
 }
