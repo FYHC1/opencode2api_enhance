@@ -261,7 +261,7 @@ type PoolVendor interface {
 | 2 | P0 | `go test ./...` 全绿 | ✅ | 2026-08-08 | `go -C <proj> test -count=1 ./...`（全绿）+ `go vet ./...` |
 | 3 | P0 | 行为快照记录（路由表/配置/`/v1/models` 输出） | ✅ | 2026-08-08 | 见「一、现状分析摘要」 |
 | 4 | P1.1 | 文件拆分：main.go(5320行) → 21 个同包领域文件，main.go 仅留入口 | ✅ | 2026-08-08 | commit `dcb217b`；`go test -count=1 ./...` 全绿 |
-| 4b | P1.2 | 包化：拆成 `core/{contract,protocol,router,aggregator,gateway,server}` 六个独立包 | ⬜ | | 动工前先出 P1.2 子计划 |
+| 4b | P1.2 | 包化：六包拆分进行中（P1.2a contract ✅；P1.2b~f 待做） | 🔄 | 2026-08-08 | 子计划见「四、P1.2」；commit `95bbc82` |
 | 5 | P1 | 拆分过程每阶段测试全绿，行为与基线一致 | ⬜ | | 每步 `go test -count=1 ./...` |
 | 6 | P1 | 过时文档清理 + config.example.json 补全 + 版本号口径说明 | ⬜ | | 随 P1.2 收尾处理 |
 | 7 | P2 | `core/contract` 定稿（基础 + PoolVendor） | ⬜ | | |
