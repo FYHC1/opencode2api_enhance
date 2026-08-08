@@ -74,30 +74,42 @@ func syncVendorState(v *opencode.Vendor) {
 	v.SetCatalog(all)
 }
 
-// callOpenCodeAPI 非流式上游调用（适配层，签名与历史一致）。
-func callOpenCodeAPI(upstreamBody []byte, modelID string, auth UpstreamAuth) ([]byte, int, http.Header, string, error) {
-	v := mainCodeVendor()
-	syncVendorState(v)
-	msg := &contract.Message{
-		Model: modelID,
-		Options: map[string]any{
-			opencode.KeyRawBody:    upstreamBody,
-			opencode.KeyAuthMode:   modeName(auth.Mode),
-			opencode.KeyAuthToken:  auth.Token,
-			opencode.KeyMaxRetries: maxRouteRetries(),
-		},
+// chatCandidates 返回可服务 modelID 的厂商（failover 顺序）。
+// 未装配路由器（测试环境）时退化为单 opencode。
+func chatCandidates(modelID string) []contract.Vendor {
+	if chatRouterVar != nil {
+		if cs := chatRouterVar.Candidates(modelID); len(cs) > 0 {
+			return cs
+		}
 	}
-	reply, err := v.Chat(context.Background(), msg)
-	if reply == nil {
-		return nil, 0, nil, "", err
-	}
-	return reply.Body, reply.Status, reply.Headers, reply.NodeAddr, err
+	return []contract.Vendor{mainCodeVendor()}
 }
 
-// callOpenCodeAPIStream 流式上游调用（适配层，签名与历史一致）。
-func callOpenCodeAPIStream(upstreamBody []byte, modelID string, auth UpstreamAuth) (io.ReadCloser, int, http.Header, string, error) {
-	v := mainCodeVendor()
-	syncVendorState(v)
+// seedVendorCatalog 把 globalAgg 中属于该厂商的模型推给它（SetCatalog 可选实现）。
+func seedVendorCatalog(v contract.Vendor) {
+	if globalAgg == nil {
+		return
+	}
+	seeder, ok := v.(interface{ SetCatalog([]contract.Model) })
+	if !ok {
+		return
+	}
+	var mine []contract.Model
+	for _, m := range globalAgg.Catalog() {
+		if m.Provider == v.ID() {
+			mine = append(mine, m)
+		}
+	}
+	seeder.SetCatalog(mine)
+}
+
+// chatViaVendor 经单个厂商发起非流式上游调用。
+func chatViaVendor(v contract.Vendor, upstreamBody []byte, modelID string, auth UpstreamAuth) (*contract.Reply, error) {
+	if oc, ok := v.(*opencode.Vendor); ok && oc == mainCodeVendor() {
+		syncVendorState(oc)
+	} else {
+		seedVendorCatalog(v)
+	}
 	msg := &contract.Message{
 		Model: modelID,
 		Options: map[string]any{
@@ -107,11 +119,99 @@ func callOpenCodeAPIStream(upstreamBody []byte, modelID string, auth UpstreamAut
 			opencode.KeyMaxRetries: maxRouteRetries(),
 		},
 	}
-	stream, err := v.ChatStream(context.Background(), msg)
-	if stream == nil {
-		return nil, 0, nil, "", err
+	return v.Chat(context.Background(), msg)
+}
+
+// chatViaVendorStream 构造单个厂商的流式上游调用。
+func chatViaVendorStream(v contract.Vendor, upstreamBody []byte, modelID string, auth UpstreamAuth) (*contract.Stream, error) {
+	if oc, ok := v.(*opencode.Vendor); ok && oc == mainCodeVendor() {
+		syncVendorState(oc)
+	} else {
+		seedVendorCatalog(v)
 	}
-	return stream.ReadCloser, stream.Status, nil, stream.NodeAddr, err
+	msg := &contract.Message{
+		Model: modelID,
+		Options: map[string]any{
+			opencode.KeyRawBody:    upstreamBody,
+			opencode.KeyAuthMode:   modeName(auth.Mode),
+			opencode.KeyAuthToken:  auth.Token,
+			opencode.KeyMaxRetries: maxRouteRetries(),
+		},
+	}
+	return v.ChatStream(context.Background(), msg)
+}
+
+// shouldSwitchVendor 判定某厂商的失败是否应切换下一个候选厂商。
+// 有上游状态码 → 按厂商 Switchable 语义 + 5xx 判定；无状态码（传输错误）→ 切换。
+func shouldSwitchVendor(v contract.Vendor, status int, _ error) bool {
+	if status == 0 {
+		return true
+	}
+	rules := v.ErrSemantics()
+	for _, s := range rules.Switchable {
+		if status == s {
+			return true
+		}
+	}
+	return status >= 500 && status < 600
+}
+
+// callOpenCodeAPI 非流式上游调用（适配层；路由 + 厂商级 failover）。
+func callOpenCodeAPI(upstreamBody []byte, modelID string, auth UpstreamAuth) ([]byte, int, http.Header, string, error) {
+	cands := chatCandidates(modelID)
+
+	var lastReply *contract.Reply
+	var lastErr error
+	for i, v := range cands {
+		reply, err := chatViaVendor(v, upstreamBody, modelID, auth)
+		if err == nil && reply != nil && reply.Status >= 200 && reply.Status < 300 {
+			return reply.Body, reply.Status, reply.Headers, reply.NodeAddr, nil
+		}
+		lastReply, lastErr = reply, err
+		if i == len(cands)-1 {
+			break
+		}
+		status := 0
+		if reply != nil {
+			status = reply.Status
+		}
+		if !shouldSwitchVendor(v, status, err) {
+			break
+		}
+	}
+	if lastReply == nil {
+		return nil, 0, nil, "", lastErr
+	}
+	return lastReply.Body, lastReply.Status, lastReply.Headers, lastReply.NodeAddr, lastErr
+}
+
+// callOpenCodeAPIStream 流式上游调用（适配层；路由 + 厂商级 failover；签名与历史一致）。
+func callOpenCodeAPIStream(upstreamBody []byte, modelID string, auth UpstreamAuth) (io.ReadCloser, int, http.Header, string, error) {
+	cands := chatCandidates(modelID)
+
+	var lastStream *contract.Stream
+	var lastErr error
+	for i, v := range cands {
+		stream, err := chatViaVendorStream(v, upstreamBody, modelID, auth)
+		if err == nil && stream != nil && stream.Status >= 200 && stream.Status < 300 {
+			return stream.ReadCloser, stream.Status, nil, stream.NodeAddr, nil
+		}
+		lastStream, lastErr = stream, err
+		if i == len(cands)-1 {
+			break
+		}
+		status := 0
+		if stream != nil {
+			status = stream.Status
+		}
+		if !shouldSwitchVendor(v, status, err) {
+			break
+		}
+	}
+	if lastStream == nil {
+		return nil, 0, nil, "", lastErr
+	}
+	return lastStream.ReadCloser, lastStream.Status, nil, lastStream.NodeAddr, lastErr
 }
 
 // ======================== 安全响应头过滤 ========================

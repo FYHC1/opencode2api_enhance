@@ -8,6 +8,7 @@ import (
 
 	"github.com/6Kmfi6HP/opencode2api/core/aggregator"
 	"github.com/6Kmfi6HP/opencode2api/core/contract"
+	chatRouter "github.com/6Kmfi6HP/opencode2api/core/router"
 	"github.com/6Kmfi6HP/opencode2api/vendors/opencode"
 )
 
@@ -16,6 +17,9 @@ const surfaceGoKey = "go"
 
 // globalAgg 是全局厂商聚合器（main 启动时装配；单元测试中保持 nil）。
 var globalAgg *aggregator.Aggregator
+
+// chatRouterVar 是全局"模型→厂商"路由器（main 启动时装配；测试默认 nil → 单 opencode 兜底）。
+var chatRouterVar *chatRouter.Router
 
 // rootTransport 把 core/contract.Transport 桥接到本包既有的代理池/健康实现：
 // 厂商（opencode）复用现有 SOCKS5 池、冷却与坏池逻辑；
@@ -37,16 +41,54 @@ func (rootTransport) Mark(proxyAddr string, status int, reqErr error) {
 	markSocks5Result(proxyAddr, status, reqErr)
 }
 
-// newAggregator 装配厂商注册表（当前：opencode）。
+// newAggregator 按配置装配厂商注册表。
+//
+// 缺省（providers 为空/未配置）时注册单 opencode，保持与基线一致；
+// 配置可声明多个厂商（type: "opencode" | 后续 "windsurf"）。
+// 调用方需保证 config 已 applyConfig（providersCfg 就绪）。
 func newAggregator() *aggregator.Aggregator {
 	agg := aggregator.New()
-	agg.Register(opencode.New(opencode.Config{
-		ID:            "opencode",
-		Name:          "OpenCode",
-		Transport:     rootTransport{},
-		AdminPassword: adminPassword,
-	}))
+
+	configMu.RLock()
+	cfgs := append([]ProviderCfg(nil), providersCfg...)
+	configMu.RUnlock()
+
+	if len(cfgs) == 0 {
+		cfgs = []ProviderCfg{{ID: "opencode", Type: "opencode", Name: "OpenCode"}}
+	}
+	for _, pc := range cfgs {
+		if pc.Enabled != nil && !*pc.Enabled {
+			continue
+		}
+		name := pc.Name
+		if name == "" {
+			name = pc.ID
+		}
+		switch pc.Type {
+		case "opencode":
+			agg.Register(opencode.New(opencode.Config{
+				ID:            pc.ID,
+				Name:          name,
+				Transport:     rootTransport{},
+				AdminPassword: adminPassword,
+			}))
+		default:
+			slog.Warn("unknown provider type, skipped", "id", pc.ID, "type", pc.Type)
+		}
+	}
 	return agg
+}
+
+// newChatRouter 按配置构造"模型→厂商"路由器（缺省默认 opencode）。
+func newChatRouter(agg *aggregator.Aggregator) *chatRouter.Router {
+	configMu.RLock()
+	mm := make(map[string]string, len(routingCfg.ModelProvider))
+	for k, v := range routingCfg.ModelProvider {
+		mm[k] = v
+	}
+	defaultID := routingCfg.DefaultProvider
+	configMu.RUnlock()
+	return chatRouter.New(agg, mm, defaultID)
 }
 
 // refreshModelCatalog 拉取各厂商目录并写入既有缓存（同步，启动与定时共用）。

@@ -61,6 +61,7 @@ func main() {
 	slog.Info("config loaded", "path", configPath)
 	initOCSession()
 	globalAgg = newAggregator()
+	chatRouterVar = newChatRouter(globalAgg)
 	refreshModelCatalog()
 	modelMu.RLock()
 	nLoaded := len(modelsCache)
