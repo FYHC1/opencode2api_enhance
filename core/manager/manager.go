@@ -79,11 +79,56 @@ type Manager struct {
 
 	seamsMu sync.Mutex
 	seamsFn *SeamFuncs // 可插拔接缝（P4-3 填充；nil = 未装配）
+
+	// 运行依赖（HTTP 操作层装配，P4-5）
+	depMu  sync.Mutex
+	runner Runner
+	gw     *Gateway
+	scan   *ScanController
 }
 
 // New 创建管理器。
 func New(dataDir string) *Manager {
 	return &Manager{paths: ResolvePaths(dataDir)}
+}
+
+// SetDeps 装配运行依赖（进程执行器 / 网关 / 扫描控制器；任一可为 nil）。
+func (m *Manager) SetDeps(runner Runner, gw *Gateway, scan *ScanController) {
+	m.depMu.Lock()
+	defer m.depMu.Unlock()
+	m.runner = runner
+	m.gw = gw
+	m.scan = scan
+}
+
+// Run 返回进程执行器（nil → realRunner）。
+func (m *Manager) Run() Runner {
+	m.depMu.Lock()
+	defer m.depMu.Unlock()
+	if m.runner == nil {
+		return &realRunner{}
+	}
+	return m.runner
+}
+
+// Gateway 返回网关管理器（nil → 惰性创建）。
+func (m *Manager) Gateway() *Gateway {
+	m.depMu.Lock()
+	defer m.depMu.Unlock()
+	if m.gw == nil {
+		m.gw = NewGateway(m, 0)
+	}
+	return m.gw
+}
+
+// Scanner 返回扫描控制器（nil → 惰性创建）。
+func (m *Manager) Scanner() *ScanController {
+	m.depMu.Lock()
+	defer m.depMu.Unlock()
+	if m.scan == nil {
+		m.scan = NewScanController(m, m.runner)
+	}
+	return m.scan
 }
 
 // Paths 暴露路径集合（供探针/网关等子模块复用）。
