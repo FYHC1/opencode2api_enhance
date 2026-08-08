@@ -240,7 +240,7 @@ func (g *Gateway) Status(runner Runner) GatewayStatus {
 			message = "统一网关未启动"
 		}
 	}
-	models := append([]string(nil), g.models...)
+	models := append([]string{}, g.models...)
 	updated := g.updatedAt
 	modelsErr := g.modelsErr
 	port := g.port

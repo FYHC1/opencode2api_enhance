@@ -1,4 +1,11 @@
 // API 对接层：桌面(壳)与 Web 共用，统一调用 core 的 /api/admin/* HTTP 接口。
+// 开机自启是桌面壳（Tauri invoke）独占能力，见 autostartGet/autostartSet。
+
+// 动态加载 Tauri invoke（Web 构建无 @tauri-apps/api 依赖时仍可编译运行）。
+async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  const mod = await import('@tauri-apps/api/core')
+  return mod.invoke<T>(cmd, args)
+}
 
 // ─── 类型定义（与 Rust 端 serde 结构一一对应） ───────────────────────
 
@@ -302,9 +309,17 @@ export const api = {
   configGet: () => req<ConfigView>('GET', '/config'),
   configSet: (key: string, value: string) => req<void>('POST', '/config/set', { key, value }),
 
-  // 开机自启
-  autostartGet: async () => (await req<{ enabled: boolean }>('GET', '/autostart')).enabled,
-  autostartSet: (enabled: boolean) => req<void>('POST', '/autostart/set', { enabled }),
+  // 开机自启：桌面壳（Tauri invoke）独占；Web 环境无此能力，返回 false。
+  autostartGet: async (): Promise<boolean> => {
+    try {
+      return await tauriInvoke<boolean>('autostart_get')
+    } catch {
+      return false
+    }
+  },
+  autostartSet: async (enabled: boolean): Promise<void> => {
+    await tauriInvoke<void>('autostart_set', { enabled })
+  },
 
   // 二进制信息
   getBinariesInfo: () => req<BinariesInfo>('GET', '/binaries'),

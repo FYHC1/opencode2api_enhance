@@ -71,7 +71,14 @@ func yamlParse(text string) (*yamlNode, error) {
 			stack = append(stack, frame{node: item, indent: ind})
 			rest := strings.TrimSpace(strings.TrimPrefix(content, "-"))
 			if rest != "" {
-				if k, v, ok := splitYAML(rest); ok {
+				if strings.HasPrefix(rest, "{") {
+					// flow-style map 列表项：- {k: v, ...} → 填进 item.vs
+					if fm, ok := parseFlowMap(rest); ok {
+						item.vs = fm.vs
+					} else {
+						item.kind = kindSlice
+					}
+				} else if k, v, ok := splitYAML(rest); ok {
 					yamlSetKey(&stack, ind, k, strings.TrimSpace(v))
 				} else {
 					item.kind = kindSlice
@@ -109,23 +116,85 @@ func yamlSetKey(stack *[]frame, ind int, key, val string) {
 	cur.vs[key] = parseScalarOrList(val)
 }
 
-// parseScalarOrList 标量或内联列表。
+// parseScalarOrList 标量、内联列表或内联 map（flow-style）。
 func parseScalarOrList(v string) *yamlNode {
 	if strings.HasPrefix(v, "[") {
 		node := &yamlNode{kind: kindSlice}
 		v = strings.TrimSuffix(strings.TrimSpace(v), "]")
 		v = strings.TrimPrefix(v, "[")
-		for _, part := range strings.Split(v, ",") {
+		for _, part := range splitFlowItems(v) {
 			if s := strings.TrimSpace(part); s != "" {
-				node.list = append(node.list, parseScalar(s))
+				node.list = append(node.list, parseScalarOrList(s))
 			}
 		}
 		return node
 	}
+	if strings.HasPrefix(v, "{") {
+		if n, ok := parseFlowMap(v); ok {
+			return n
+		}
+	}
 	return parseScalar(v)
 }
 
-// parseScalar 标量（去引号）。
+// parseFlowMap 解析 flow-style map：{k: v, k2: v2, ...} → kindMap 节点。
+// 值支持标量/内联列表/嵌套 map；逗号切分遵循引号与括号深度。
+func parseFlowMap(s string) (*yamlNode, bool) {
+	inner := strings.TrimSpace(s)
+	if !strings.HasPrefix(inner, "{") || !strings.HasSuffix(inner, "}") {
+		return nil, false
+	}
+	inner = strings.TrimSpace(inner[1 : len(inner)-1])
+	node := &yamlNode{kind: kindMap, vs: map[string]*yamlNode{}}
+	for _, part := range splitFlowItems(inner) {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		k, v, ok := splitYAML(part)
+		if !ok {
+			continue
+		}
+		node.vs[strings.TrimSpace(k)] = parseScalarOrList(strings.TrimSpace(v))
+	}
+	return node, true
+}
+
+// splitFlowItems 按“引号外 + 括号深度 0”的逗号切分（flow-style 内部）。
+func splitFlowItems(s string) []string {
+	var out []string
+	inSQ, inDQ := false, false
+	depth := 0
+	start := 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\'':
+			if !inDQ {
+				inSQ = !inSQ
+			}
+		case '"':
+			if !inSQ {
+				inDQ = !inDQ
+			}
+		case '{', '[':
+			if !inSQ && !inDQ {
+				depth++
+			}
+		case '}', ']':
+			if !inSQ && !inDQ && depth > 0 {
+				depth--
+			}
+		case ',':
+			if !inSQ && !inDQ && depth == 0 {
+				out = append(out, s[start:i])
+				start = i + 1
+			}
+		}
+	}
+	out = append(out, s[start:])
+	return out
+}
+
 func parseScalar(v string) *yamlNode {
 	v = strings.TrimSpace(v)
 	if len(v) >= 2 {

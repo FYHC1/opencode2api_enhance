@@ -26,7 +26,7 @@ func (m *Manager) nodeViews() []NodeView {
 	if sf.ListNodes == nil {
 		return []NodeView{}
 	}
-	var out []NodeView
+	out := []NodeView{}
 	for _, n := range sf.ListNodes() {
 		out = append(out, NodeView{
 			Name: n.Name, NodeType: n.NodeType, Server: n.Server, Port: n.Port,

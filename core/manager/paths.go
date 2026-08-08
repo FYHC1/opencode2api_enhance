@@ -44,16 +44,26 @@ func ResolvePaths(dataDir string) Paths {
 	if dataDir == "" {
 		dataDir = DefaultDataDir()
 	}
-	exeDir, err := os.Executable()
-	if err != nil {
-		exeDir = "."
+	exeDir := "."
+	if p, e := os.Executable(); e == nil {
+		exeDir = filepath.Dir(p)
+	}
+	// 约定：Go core 由壳（Rust）释放到 <壳exe>/bin/ 下运行，sing-box.exe 与 core 同目录。
+	// 因此 binDir 默认 = core 所在目录（filepath.Dir(os.Executable())），无需再拼 "bin"。
+	binDir := exeDir
+	// 兼容旧形态：若 core 目录下没有 sing-box，但父级存在 bin/ 子目录，则回退（如单文件 Web 直跑）。
+	if _, err := os.Stat(filepath.Join(exeDir, "sing-box.exe")); err != nil {
+		alt := filepath.Join(exeDir, "bin")
+		if fi, e := os.Stat(filepath.Join(alt, "sing-box.exe")); e == nil && !fi.IsDir() {
+			binDir = alt
+		}
 	}
 	return Paths{
 		DataDir:    dataDir,
 		Config:     filepath.Join(dataDir, "config.json"),
 		Instances:  filepath.Join(dataDir, "instances.json"),
 		RuntimeDir: filepath.Join(dataDir, "runtime"),
-		BinDir:     filepath.Join(filepath.Dir(exeDir), "bin"),
+		BinDir:     binDir,
 	}
 }
 

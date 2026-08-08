@@ -189,21 +189,29 @@ type ConfigView struct {
 }
 
 // ConfigViewOf 生成前端视图（密码与 clash token 脱敏为掩码）。
+// 默认值与 Rust config_get 一致：未设置时返回默认超时区间/探测数/日志上限，
+// 避免前端拿到 0 导致输入框空白、校验拦截（min ≤ 0 非法）而"按钮不可用"。
 func (m *Manager) ConfigViewOf() ConfigView {
 	cfg := m.loadConfig()
+	def := func(v, d int64) int64 {
+		if v <= 0 {
+			return d
+		}
+		return v
+	}
 	return ConfigView{
 		BaseURL:             cfg.BaseURL,
 		DefaultPassword:     maskSecret(cfg.DefaultPassword),
 		HasPassword:         cfg.DefaultPassword != "",
 		ClashExternalURL:    cfg.ClashExternalURL,
 		HasClashToken:       cfg.ClashAuthToken != "",
-		TimeoutTTFTMinMS:    cfg.TimeoutTTFTMinMS,
-		TimeoutTTFTMaxMS:    cfg.TimeoutTTFTMaxMS,
-		TimeoutSilenceMinMS: cfg.TimeoutSilenceMinMS,
-		TimeoutSilenceMaxMS: cfg.TimeoutSilenceMaxMS,
-		FailoverProbeMin:    cfg.FailoverProbeMin,
-		FailoverProbeMax:    cfg.FailoverProbeMax,
-		CallLogMax:          cfg.CallLogMax,
+		TimeoutTTFTMinMS:    def(cfg.TimeoutTTFTMinMS, 10000),
+		TimeoutTTFTMaxMS:    def(cfg.TimeoutTTFTMaxMS, 10000),
+		TimeoutSilenceMinMS: def(cfg.TimeoutSilenceMinMS, 5000),
+		TimeoutSilenceMaxMS: def(cfg.TimeoutSilenceMaxMS, 5000),
+		FailoverProbeMin:    def(cfg.FailoverProbeMin, 2),
+		FailoverProbeMax:    def(cfg.FailoverProbeMax, 3),
+		CallLogMax:          def(cfg.CallLogMax, 5000),
 		ShowNodePrefix:      cfg.ShowNodePrefix,
 	}
 }

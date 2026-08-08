@@ -3,6 +3,9 @@
   "identifier": "default",
   "description": "opencode2api 管理器桌面权限",
   "windows": ["main"],
+  "remote": {
+    "urls": ["http://127.0.0.1:*", "http://localhost:*"]
+  },
   "permissions": [
     "core:default",
     "core:window:allow-close",

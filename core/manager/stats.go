@@ -94,7 +94,7 @@ func (m *Manager) AggregateStats() StatsSummary {
 	if err != nil {
 		return StatsSummary{}
 	}
-	var instances []InstanceStat
+	instances := []InstanceStat{}
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -111,7 +111,7 @@ func (m *Manager) AggregateStats() StatsSummary {
 			continue
 		}
 		var requests, prompt, completion, total int64
-		var models []ModelStat
+		models := []ModelStat{}
 		for model, ms := range goStats.Models {
 			if ms == nil {
 				continue
@@ -134,7 +134,7 @@ func (m *Manager) AggregateStats() StatsSummary {
 		if name == "_unified-gateway" {
 			display = unifiedGatewayName
 		}
-		var nodes []GatewayNodeStat
+		nodes := []GatewayNodeStat{}
 		if name == "_unified-gateway" {
 			if nd, err := os.ReadFile(filepath.Join(dir, "node_stats.json")); err == nil {
 				var gns GoNodeStatsData
@@ -213,7 +213,7 @@ func writeEmptyStatsFile(path string, isNodes bool) error {
 // clearDeleted=是否清除已删除实例的历史统计目录。
 // 注：HTTP 复位依赖 tcp 包（P4-1 的 httpDo），运行实例复位在 P4-2 装配后完整可用。
 func (m *Manager) ResetStats(clearDeleted bool) ResetStatsResult {
-	res := ResetStatsResult{}
+	res := ResetStatsResult{Failed: []string{}}
 	defaultPW := m.effectiveDefaultPassword()
 
 	instances := m.ListInstances()

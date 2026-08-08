@@ -7,20 +7,28 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"time"
 
 	"github.com/6Kmfi6HP/opencode2api/core/manager"
 )
 
 // frontendDistDir 返回前端构建产物目录（存在 dist/index.html 时）。
-// 查找顺序：可执行文件旁 → 当前工作目录。
+// 查找顺序：exe 旁 → 当前工作目录；dev（tauri dev，cwd=src-tauri）额外向上找仓库根 dist。
 func frontendDistDir() string {
-	cands := []string{}
+	var cands []string
 	if exe, err := os.Executable(); err == nil {
-		cands = append(cands, filepath.Join(filepath.Dir(exe), "dist"))
+		exeDir := filepath.Dir(exe)
+		cands = append(cands,
+			filepath.Join(exeDir, "dist"),                // 便携包：exe 旁
+			filepath.Join(exeDir, "..", "..", "..", "dist"), // dev：target/debug/bin → 仓库根
+		)
 	}
 	if wd, err := os.Getwd(); err == nil {
-		cands = append(cands, filepath.Join(wd, "dist"))
+		cands = append(cands,
+			filepath.Join(wd, "dist"),   // 常规：cwd/dist
+			filepath.Join(wd, "..", "dist"), // dev：cwd=src-tauri → 仓库根
+		)
 	}
 	for _, d := range cands {
 		if _, err := os.Stat(filepath.Join(d, "index.html")); err == nil {
@@ -126,10 +134,31 @@ func main() {
 	registerHTTPRoutes(mux, managerInst)
 	addr := ":" + port
 	slog.Info("listening", "addr", addr)
-	if err := http.ListenAndServe(addr, mux); err != nil {
+	if err := http.ListenAndServe(addr, withRecover(mux)); err != nil {
 		slog.Error("server terminated", "error", err)
 		os.Exit(1)
 	}
+}
+
+// withRecover 全局 panic 兜底：任何 handler panic 都会记录堆栈并返回 500 JSON，
+// 而不是 net/http 默认的空 500（前端无法定位、表现为"按钮无效"）。
+func withRecover(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.Error("handler panic",
+					"method", r.Method,
+					"path", r.URL.Path,
+					"panic", rec,
+					"stack", string(debug.Stack()),
+				)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`{"error":"internal error: handler panic"}`))
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
 }
 
 // registerHTTPRoutes 注册全部 HTTP 路由（/v1、/api、/api/admin、/health、静态 SPA）。

@@ -79,7 +79,7 @@ func (c *ScanController) Snapshot() ScanProgress {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	out := c.progress
-	out.Results = append([]ProbeResult(nil), c.progress.Results...)
+	out.Results = append([]ProbeResult{}, c.progress.Results...)
 	return out
 }
 
