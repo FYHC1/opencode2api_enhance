@@ -267,7 +267,7 @@ type PoolVendor interface {
   - 聚合：`/v1/models` 返回 opencode 免费模型 + `swe-1-6-slow`（前缀 `opencode/`、`windsurf/`）。
 - **验收**：双厂商并存；池型"无号自动注册 / 额度≤20% 预注册 / 24h 冷却 / 中途无感换号"全链路通过（单测 + 冒烟）。
 
-### P4 统一 UI + Web 版（★需先制定详细子计划再动工）
+### P4 统一 UI + Web 版（★需先制定详细子计划再动工）——✅ 已完成（2026-08-09，win exe 交付）
 - **目标**：管理功能并入 core（HTTP API），一份实现服务所有端。
 - **执行策略（2026-08-08 定案：先 exe 后 Web，按大步验证）**：
   1. **大步 1 接线**（=P4-5b 核心）：`src/lib/api.ts` 的 `invoke` 全部换成 `fetch('/api/admin/*')`，TS 类型与 6 个页面零改动；同时把 Go 侧漏出的字段补齐（如 `GatewayStatus.free_models_loading`）。**验证**：`go test ./...` 全绿 + `npm run build` 通过 + 浏览器能打开页面。
@@ -299,8 +299,8 @@ type PoolVendor interface {
 | P4-3 节点扫描探针 | ✅ | 2026-08-08 | `c7cb80f`：yaml.go 最小 YAML（零依赖）、clash_parse.go（本地 profiles+外部 API+junk/group 过滤）、singbox.go 逐类型配置、opencodecfg.go 实例/网关配置、probe.go 并发控制器+逐节点免费模型测试；main 装配 SeamFuncs；单测全绿 |
 | P4-4 网关/批量/restart/data_clean | ✅ | 2026-08-08 | `0e7d958`：gateway.go（-gateway 子进程、成员=Running&&join_gateway、空即停/配置变重启/自动拉起、免费模型节流抓取）、batch.go（按节点去重+自动命名+端口+1、并行 4/8 worker）、restart_pool.go（停网关→全停→强清端口→并启成员→网关收尾）、data_clean.go（三级别含 .bak）；单测：gateway 启停/去重/data_clean 三级/restart 顺序 |
 | P4-5a 管理 API 全表面 + SPA 托管 | ✅ | 2026-08-08 | `905af85`：/api/admin 操作面齐全（节点/实例 CRUD·启停·刷新·测试/批量/端口/扫描/网关/入池/重启池/清数据/自启壳独占）；frontend dist 存在即托管 SPA；main SetDeps；HTTP 冒烟单测全绿 |
-| P4-5b 前端 api.ts 改走 fetch + Tauri invoke_handler 缩减 | 🔄 | 2026-08-08 | 大步1 ✅ `e0196c3`；大步2 自动化 ✅ `ae281b6`（E2E 21 项 PASS + 修 requireMethod 反写 bug）；大步3 ✅：壳瘦身 `c79312f` + cargo check 绿 + `tauri build --no-bundle` 产出 exe（1m50s）；剩余：NSIS 安装包（可选 bundle）、桌面人工走查 |
-| P4-6 联动联调 | ⬜ | | |
+| P4-5b 前端 api.ts 改走 fetch + Tauri invoke_handler 缩减 | ✅ | 2026-08-09 | 大步1 ✅ `e0196c3`；大步2 自动化 ✅ `ae281b6`（E2E 21 项 PASS + 修 requireMethod 反写 bug）；大步3 ✅：壳瘦身 `c79312f` + cargo check 绿 + `tauri build --no-bundle` 产出 exe（1m50s）；**已交付 win exe 供客户使用** |
+| P4-6 联动联调 + 用户验收驱动修复 | ✅ | 2026-08-09 | 用户真机验收驱动 12 个修复提交：端口隔离 `e6d7164`/sanitize `82f044f`/Job Object `dcb566e`/文案对齐 `d456715`+`6e1aab2`/autostart 移 core `8703913`/节点池按钮+行点击 `54d6875`+`799747b` 等；**win exe 可交付**（NSIS 安装包仍可选未做） |
 
 ### P5 多平台（Linux/macOS）
 - **目标**：壳层跨平台 + 打包矩阵。
@@ -320,8 +320,8 @@ type PoolVendor interface {
 | 2 | P0 | `go test ./...` 全绿 | ✅ | 2026-08-08 | `go -C <proj> test -count=1 ./...`（全绿）+ `go vet ./...` |
 | 3 | P0 | 行为快照记录（路由表/配置/`/v1/models` 输出） | ✅ | 2026-08-08 | 见「一、现状分析摘要」 |
 | 4 | P1.1 | 文件拆分：main.go(5320行) → 21 个同包领域文件，main.go 仅留入口 | ✅ | 2026-08-08 | commit `dcb217b`；`go test -count=1 ./...` 全绿 |
-| 4b | P1.2 | 包化：六包拆分进行中（P1.2a contract ✅；P1.2b~f 待做） | 🔄 | 2026-08-08 | 子计划见「四、P1.2」；commit `95bbc82` |
-| 5 | P1 | 拆分过程每阶段测试全绿，行为与基线一致 | ⬜ | | 每步 `go test -count=1 ./...` |
+| 4b | P1.2 | 包化：contract/aggregator/router 三包已出；protocol/gateway/server 未拆（根目录 main 包仍含管理域代码） | 🔄 | 2026-08-08 | 子计划见「四、P1.2」；commit `95bbc82`；**注意：P4 期间新增 core/manager 包承载管理域，P1.2 剩余包化已非当务之急** |
+| 5 | P1 | 拆分过程每阶段测试全绿，行为与基线一致 | ⬜ | | 每步 `go test -count=1 ./...`；P4 大量改动后仍全绿 |
 | 6 | P1 | 过时文档清理 + config.example.json 补全 + 版本号口径说明 | ⬜ | | 随 P1.2 收尾处理 |
 | 7 | P2 | `core/contract` 定稿（基础 + PoolVendor + Tier/Transport/Stream/Meta） | ✅ | 2026-08-08 | 见 `core/contract/contract.go`；commit `de91054` |
 | 7b | P2 | `core/aggregator` 聚合层（合并/刷新/隔离） + 单测 | ✅ | 2026-08-08 | commit `de91054` |
@@ -340,10 +340,11 @@ type PoolVendor interface {
 | 10b | P3 | P3-B：Chatter（Connect-RPC 协议移植）/ Mailbox（TMaily）/ Registrar（devin_auth 注册链）真实实现 | ✅ | 2026-08-08 | B1~B6 `4a85882`/`55ff34b`；B7 流中无感换号 `00ae506`；全链路单测绿，待真机冒烟 |
 | 11 | P3 | ★24h 冷却 / ★额度≤20% 预注册 / ★中途无感换号 三能力完成 | ✅ | 2026-08-08 | 冷却+预注册 ✅（池层 `edde8b8`）；流中无感换号 ✅（`00ae506`，回卷续写与网关断点续写同文衔接） |
 280→| 12 | P3 | `/v1/models` 双厂商聚合（前缀区分），分发与厂商级 failover 通过 | ✅ | 2026-08-08 | 聚合/前缀/分发/failover 已由 P2-C 落地（待 windsurf 真接） |
-| 13 | P3 | 池型全链路冒烟：无号自动注册→对话→额度低预注册→换号续写 | ⬜ | | |
+| 13 | P3 | 池型全链路冒烟：无号自动注册→对话→额度低预注册→换号续写 | ⬜ | | 需真实 windsurf 账号/环境；当前无真机验证 |
 | 14 | P4 | P4 详细子计划制定（P4-1~P4-6） | ✅ | 2026-08-08 | 「四、P4」细化版：核心决策+验收点+决策备注；行为来源 `src-tauri/*.rs` 工读 |
-| 15 | P4 | 管理功能并入 core（HTTP API），浏览器全功能可用 | ⬜ | | |
-| 16 | P4 | 桌面版功能与现状等价；Tauri 薄壳化 | ⬜ | | |
+| 15 | P4 | 管理功能并入 core（HTTP API），浏览器全功能可用 | ✅ | 2026-08-09 | P4-1~P4-5 全落地（commit `2cca241`/`797e2af`/`c7cb80f`/`0e7d958`/`905af85`）；E2E HTTP 21 项 PASS |
+| 16 | P4 | 桌面版功能与现状等价；Tauri 薄壳化 | ✅ | 2026-08-09 | 大步1~3 完成：api.ts 走 HTTP（`e0196c3`）→ 壳薄壳化（`c79312f`）→ exe 交付（`7022b95`）；随后 12 个修复提交收敛到可用 |
+| 16b | P4 | 大步3 之后系统性修复（用户验收驱动） | ✅ | 2026-08-09 | 端口隔离（`e6d7164`）、sanitize 实例名（`82f044f`）、Job Object 防孤儿（`dcb566e`）、文案逐字对齐（`d456715`/`6e1aab2`）、autostart 移 core（`8703913`）、节点池入池/独享+行点击（`54d6875`/`799747b`）；**win exe 已可交付客户使用** |
 | 17 | P5 | core/vendors 在 Linux/macOS 编译通过 | ⬜ | | |
 | 18 | P5 | 壳层 Windows 系统调用替换 + 内嵌二进制按平台 | ⬜ | | |
 | 19 | P5 | CI 打包矩阵出全（Win NSIS / mac dmg / Linux deb+rpm+AppImage） | ⬜ | | |
@@ -353,11 +354,11 @@ type PoolVendor interface {
 | 阶段 | 状态 |
 |---|---|
 | P0 基线 | ✅ 已完成（分支已建，测试全绿，行为快照已记录） |
-| P1 拆 core | 🔄 进行中（P1.1 文件拆分 ✅；P1.2 已出 contract/aggregator/router 三包，protocol/gateway/server 随后续收敛） |
+| P1 拆 core | 🔄 部分完成（P1.1 文件拆分 ✅；P1.2 已出 contract/aggregator/router 三包 + P4 期间新增 manager 包；protocol/gateway/server 未拆，根目录 main 包仍含管理域代码） |
 | P2 收厂商（opencode 收拢） | ✅ 完成（契约/聚合/分发/failover 全绿；单厂商行为与基线一致） |
 | P3 池型厂商（windsurf） | ✅ 池层+全接缝完成（P3-A 池层 `edde8b8`；P3-B1~B7 上游协议移植 `4a85882`/`55ff34b`/`00ae506`；三能力：冷却/预注册/流中无感换号全部落地） |
-| P3 加厂商 | ⬜ 未开始 |
-| P4 统一 UI | ⬜ 未开始 |
+| P3 加厂商 | ⬜ 未开始（池型全链路真机冒烟 #13 待做） |
+| P4 统一 UI | ✅ **已完成并可交付**（管理功能并入 core HTTP API → 前端走 HTTP → 壳薄壳化 → exe 打包 → 系统性验收修复；win exe 已能让客户使用） |
 | P5 多平台 | ⬜ 未开始 |
 
 ---
