@@ -246,7 +246,7 @@ func (m *Manager) ResetStats(clearDeleted bool) ResetStatsResult {
 	// 统一网关
 	gwDir := filepath.Join(m.paths.RuntimeDir, "_unified-gateway")
 	gwOK := false
-	if status, _, err := httpDeleteJSON(unifiedGatewayPort, "/api/reset-stats", 6, unifiedGatewayKey); err == nil && status >= 200 && status < 300 {
+	if status, _, err := httpDeleteJSON(unifiedGatewayPort, "/api/reset-stats", 6, effectiveGatewayKey(m.loadConfig())); err == nil && status >= 200 && status < 300 {
 		gwOK = true
 	}
 	if gwOK {
