@@ -29,6 +29,7 @@ UI 参照 Windsurf Account Manager 的浅色官网风格：Tauri 2 无边框窗�
 - **节点扫描**：一键扫描全部节点（经 Clash 外部控制 + 本地 Verge profiles），按分组展示，结果分类（ok / config / socks / tls / upstream / timeout / other）与延迟；勾选可用节点批量添加为实例
 - **多代理节点**：每实例自动生成 sing-box 配置走所选节点（trojan / vless / vmess / shadowsocks / ws），opencode2api 的 SOCKS5 指向 sing-box
 - **Clash 集成**：配置 Clash 外部控制地址与密钥即可拉取节点；也可读取 Clash Verge 本地 profiles 目录
+- **订阅导入**：节点池支持「从订阅导入」——自动识别 Clash YAML / V2Ray base64 / 明文链接三种格式，容错解码（URL-safe 变体/缺 padding/含换行均可）、节点名 percent-decode（中文/emoji）、公告伪节点过滤、重名去重、IPv6 主机，解析能力对齐 mihomo/v2rayN 等主流客户端（详见 [订阅解析调研](docs/SUBSCRIPTION-RESEARCH.md)）
 - **触摸保活**：系统托盘常驻，关闭窗口实例继续代理
 - **设置**：Clash 外部控制、实例默认密码、开机自启、二进制状态
 
@@ -132,6 +133,7 @@ src-tauri/src/            # Rust 后端
   opencode_cfg.rs         # opencode2api 子进程配置生成
   instance.rs             # 实例生命周期（子进程启停/探测）
   probe.rs                # 节点扫描探针
+  subscribe.rs            # 订阅拉取与解析（Clash YAML/base64/明文，容错解码）
   config.rs               # 应用配置（%APPDATA%）
   commands.rs             # Tauri command 层
   embed.rs                # 内嵌二进制释放
