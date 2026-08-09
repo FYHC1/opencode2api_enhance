@@ -50,6 +50,7 @@ func (m *Manager) NodesHandler() http.HandlerFunc {
 // ---------------------------------------------------------------- 实例生命周期
 
 // InstancesAddHandler POST {name,port,node,password} → Instance。
+// 对齐 Rust add_instance：节点/端口校验、空密码自动生成 sk-、空名称自动命名。
 func (m *Manager) InstancesAddHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !requireMethodOK(w, r, http.MethodPost) {
@@ -65,19 +66,39 @@ func (m *Manager) InstancesAddHandler() http.HandlerFunc {
 			writeErr(w, http.StatusBadRequest, "bad request body")
 			return
 		}
-		if req.Name == "" || req.Node == "" {
-			writeErr(w, http.StatusBadRequest, "name/node 必填")
+		if req.Node == "" {
+			writeErr(w, http.StatusBadRequest, "节点不能为空")
 			return
 		}
+		if req.Port < 1024 {
+			writeErr(w, http.StatusBadRequest, "端口需 >= 1024")
+			return
+		}
+		// 空密码自动生成 sk-（Rust add_instance 语义）
+		password := req.Password
+		if password == "" {
+			password = genSkKey()
+		}
+		// 空名称自动命名（Rust next_auto_name 语义）
+		name := req.Name
+		if name == "" {
+			for i := 1; ; i++ {
+				cand := "实例" + itoa16(i)
+				if !m.hasInstanceName(cand) {
+					name = cand
+					break
+				}
+			}
+		}
 		inst := Instance{
-			Name: req.Name, Port: req.Port, Node: req.Node, Password: req.Password,
+			Name: name, Port: req.Port, Node: req.Node, Password: password,
 			SingboxPort: req.Port + 10000, JoinGateway: false,
 		}
 		if err := m.AddInstance(inst); err != nil {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		got, _ := m.FindInstance(req.Name)
+		got, _ := m.FindInstance(name)
 		writeJSON(w, got)
 	}
 }
@@ -168,6 +189,7 @@ type TestResult struct {
 }
 
 // InstancesTestHandler POST {name} → TestResult（免费模型最小请求实测）。
+// 对齐 Rust prepare_test：实例未启动时给出友好提示，而非裸报 TCP 连接错误。
 func (m *Manager) InstancesTestHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !requireMethodOK(w, r, http.MethodPost) {
@@ -181,6 +203,16 @@ func (m *Manager) InstancesTestHandler() http.HandlerFunc {
 		inst, ok := m.FindInstance(name)
 		if !ok {
 			writeErr(w, http.StatusNotFound, "实例不存在: "+name)
+			return
+		}
+		// 前置校验：未运行（含启动中/停止中/错误态）直接返回友好提示（Rust prepare_test 语义）
+		if inst.Status.State != "Running" {
+			writeJSON(w, TestResult{
+				Name:    name,
+				Port:    inst.Port,
+				OK:      false,
+				Message: "实例 '" + name + "' 当前状态为 " + inst.Status.State + "，请先启动后再测试",
+			})
 			return
 		}
 		start := time.Now()
@@ -639,6 +671,7 @@ func (m *Manager) GatewayStatusHandler() http.HandlerFunc {
 }
 
 // GatewayRouteModeHandler POST {mode}。
+// 对齐 Rust gateway_set_route_mode：仅接受 smart / failover / round_robin。
 func (m *Manager) GatewayRouteModeHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !requireMethodOK(w, r, http.MethodPost) {
@@ -649,6 +682,10 @@ func (m *Manager) GatewayRouteModeHandler() http.HandlerFunc {
 		}
 		if json.NewDecoder(r.Body).Decode(&req) != nil || req.Mode == "" {
 			writeErr(w, http.StatusBadRequest, "mode 必填")
+			return
+		}
+		if req.Mode != "smart" && req.Mode != "failover" && req.Mode != "round_robin" {
+			writeErr(w, http.StatusBadRequest, "路由模式仅支持 smart / failover / round_robin")
 			return
 		}
 		m.Gateway().SetRouteMode(req.Mode)
