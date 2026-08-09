@@ -320,7 +320,7 @@ type PoolVendor interface {
 | 2 | P0 | `go test ./...` 全绿 | ✅ | 2026-08-08 | `go -C <proj> test -count=1 ./...`（全绿）+ `go vet ./...` |
 | 3 | P0 | 行为快照记录（路由表/配置/`/v1/models` 输出） | ✅ | 2026-08-08 | 见「一、现状分析摘要」 |
 | 4 | P1.1 | 文件拆分：main.go(5320行) → 21 个同包领域文件，main.go 仅留入口 | ✅ | 2026-08-08 | commit `dcb217b`；`go test -count=1 ./...` 全绿 |
-| 4b | P1.2 | 包化：contract/aggregator/router 三包已出；protocol/gateway/server 未拆 | 🔄 | 2026-08-08 | **决策（2026-08-09）：剩余包化暂缓**——P2/P3/P4 已通过独立包完成，根目录 34 文件均为活跃代码（协议转换被 handler 用、admin 老接口仍注册、legacy 独立 module 不影响构建）；在 win exe 已交付客户的前提下，强行拆包风险大于收益，待有明确需求（如 Web 多端拆分）再动 |
+| 4b | P1.2 | 包化：contract/aggregator/router/manager/protocol 五包完成；gateway/server 状态收敛未做 | 🔄 | 2026-08-09 | **P1.2a~b 完成**：contract（`de91054`）、protocol（类型+纯转换全下沉 `fe942b2`，含 claude/anthropic/responses 转换 + 类型别名桥）、aggregator/router（P2 期间）、manager（P4 期间）。**P1.2c/f（core/gateway 状态收敛 + core/server handler 依赖注入）待决策**：42 全局变量收敛 + 重写 13 测试约 60 处 save/restore，估 8-14 天，win exe 已交付前提下纯内务收益低；协议层已独立复用，核心目标达成 |
 | 5 | P1 | 拆分过程每阶段测试全绿，行为与基线一致 | ⬜ | | 每步 `go test -count=1 ./...`；P4 大量改动后仍全绿 |
 | 6 | P1 | 过时文档清理 + config.example.json 补全 + 版本号口径说明 | ⬜ | | 随 P1.2 收尾处理 |
 | 7 | P2 | `core/contract` 定稿（基础 + PoolVendor + Tier/Transport/Stream/Meta） | ✅ | 2026-08-08 | 见 `core/contract/contract.go`；commit `de91054` |
@@ -354,7 +354,7 @@ type PoolVendor interface {
 | 阶段 | 状态 |
 |---|---|
 | P0 基线 | ✅ 已完成（分支已建，测试全绿，行为快照已记录） |
-| P1 拆 core | 🔄 部分完成（P1.1 文件拆分 ✅；P1.2 已出 contract/aggregator/router 三包 + P4 期间新增 manager 包；protocol/gateway/server 未拆，根目录 main 包仍含管理域代码） |
+| P1 拆 core | ✅ 核心完成（P1.1 文件拆分；P1.2a/b/d/e + P4 期间 manager 包：contract/protocol/aggregator/router/manager 五包就位；仅 core/gateway 状态收敛 + core/server handler 依赖注入待决策——纯内务重构，协议层已独立复用） |
 | P2 收厂商（opencode 收拢） | ✅ 完成（契约/聚合/分发/failover 全绿；单厂商行为与基线一致） |
 | P3 池型厂商（windsurf） | ✅ 池层+全接缝完成（P3-A 池层 `edde8b8`；P3-B1~B7 上游协议移植 `4a85882`/`55ff34b`/`00ae506`；三能力：冷却/预注册/流中无感换号全部落地） |
 | P3 加厂商 | ✅ **已完成**（池型全链路真机冒烟通过 2026-08-09：无号自动注册→真实对话 swe-1-6-slow；后续额度预注册/流中换号单测覆盖，可随用随验） |
