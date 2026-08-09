@@ -1,10 +1,12 @@
 // API 对接层：桌面(壳)与 Web 共用，统一调用 core 的 /api/admin/* HTTP 接口。
 // 开机自启是桌面壳（Tauri invoke）独占能力，见 autostartGet/autostartSet。
 
-// 动态加载 Tauri invoke（Web 构建无 @tauri-apps/api 依赖时仍可编译运行）。
+// 静态引入 Tauri invoke（@tauri-apps/api 已在依赖；Web 构建无 Tauri 时 invoke 调用会抛错，
+// 由调用方 catch 降级处理）。动态 import 在 Tauri v2 webview 下可能因模块解析失败导致命令不可用。
+import { invoke } from '@tauri-apps/api/core'
+
 async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  const mod = await import('@tauri-apps/api/core')
-  return mod.invoke<T>(cmd, args)
+  return invoke<T>(cmd, args)
 }
 
 // ─── 类型定义（与 Rust 端 serde 结构一一对应） ───────────────────────

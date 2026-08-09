@@ -172,7 +172,8 @@ const doRemove = async (name: string) => {
       const r = await api.testInstance(name)
       setTestResults((prev) => ({ ...prev, [name]: r }))
       if (r.ok) toast(`「${name}」测试通过：${r.message}（${r.latency_ms}ms）`)
-      else toast(`「${name}」测试失败：${r.message}`, false)
+      // 失败 toast 与表格徽章一致：直接显示 r.message（已含完整文案，避免重复实例名）
+      else toast(r.message || '测试失败', false)
     } catch (e) {
       toast(String(e), false)
     }
