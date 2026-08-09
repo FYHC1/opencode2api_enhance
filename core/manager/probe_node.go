@@ -2,6 +2,7 @@
 package manager
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -97,12 +98,12 @@ func (c *ScanController) probeNode(opts ScanOptions, node ClashNode, pair portPa
 	}
 	if httpErr != nil {
 		msg := httpErr.Error()
-		if strings.Contains(msg, "timed out") {
+		if strings.Contains(msg, "timed out") || strings.Contains(msg, "超时") {
 			base.Category = "timeout"
 		} else {
 			base.Category = "other"
 		}
-		base.Message = msg
+		base.Message = "请求失败: " + msg
 		return base
 	}
 	switch {
@@ -113,7 +114,7 @@ func (c *ScanController) probeNode(opts ScanOptions, node ClashNode, pair portPa
 	default:
 		base.Category = "other"
 	}
-	base.Message = truncateProbe(string(body), 200)
+	base.Message = fmt.Sprintf("HTTP %d，%s", status, truncateProbe(string(body), 160))
 	return base
 }
 

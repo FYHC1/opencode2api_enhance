@@ -94,7 +94,7 @@ func (m *Manager) ConfigGet(key string) (string, error) {
 	case "show_node_prefix":
 		return strconv.FormatBool(cfg.ShowNodePrefix), nil
 	default:
-		return "", fmt.Errorf("未知配置键: %s", key)
+		return "", fmt.Errorf("Unknown config key: %s", key)
 	}
 }
 
@@ -162,11 +162,11 @@ func (m *Manager) ConfigSet(key, value string) error {
 	case "show_node_prefix":
 		b, err := strconv.ParseBool(value)
 		if err != nil {
-			return fmt.Errorf("invalid boolean for %s: %s", key, value)
+			return fmt.Errorf("invalid boolean for show_node_prefix: %s", value)
 		}
 		cfg.ShowNodePrefix = b
 	default:
-		return errors.New("未知配置键: " + key)
+		return errors.New("Unknown config key: " + key)
 	}
 	return m.saveConfig(cfg)
 }

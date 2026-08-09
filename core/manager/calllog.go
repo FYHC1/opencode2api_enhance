@@ -5,6 +5,7 @@ package manager
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -94,7 +95,9 @@ func (m *Manager) ReadCallLog(max int) []CallLogRecord {
 func (m *Manager) ClearCallLog() error {
 	path := m.CallLogPath()
 	if _, err := os.Stat(path); err == nil {
-		return os.Remove(path)
+		if err := os.Remove(path); err != nil {
+			return fmt.Errorf("删除日志文件失败: %w", err)
+		}
 	}
 	return nil
 }

@@ -16,13 +16,26 @@ const singboxWait = 10 * time.Second
 // openCodeWait opencode2api 监听端口就绪等待。
 const openCodeWait = 15 * time.Second
 
+// fileExists 判断文件是否存在。
+func fileExists(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && !fi.IsDir()
+}
+
 // StartInstance 启动实例（短锁模式）。
+// 对齐 Rust start_instance_inner：已 Running 时单独提示"已在运行"（batch 走 markStartingLocked 报"正在忙"）。
 func (m *Manager) StartInstance(runner Runner, name string) error {
 	if runner == nil {
 		runner = &realRunner{}
 	}
 	// 阶段1：锁内快照 + 置 Starting
 	m.mu.Lock()
+	for _, e := range m.load() {
+		if e.Name == name && e.Status.State == "Running" {
+			m.mu.Unlock()
+			return fmt.Errorf("实例 '%s' 已在运行", name)
+		}
+	}
 	inst, err := m.markStartingLocked(name)
 	m.mu.Unlock()
 	if err != nil {
@@ -65,7 +78,7 @@ func (m *Manager) markStartingLocked(name string) (Instance, error) {
 		_ = m.save(list)
 		return list[i], nil
 	}
-	return Instance{}, errors.New("实例不存在: " + name)
+	return Instance{}, errors.New("实例不存在")
 }
 
 // startInstanceLockFree 锁外执行：sing-box → 等口 → opencode2api → 等口。
@@ -76,18 +89,18 @@ func (m *Manager) startInstanceLockFree(runner Runner, inst *Instance) error {
 	}
 	node, ok := sf.ResolveNode(inst.Node)
 	if !ok {
-		return fmt.Errorf("节点未找到: %s", inst.Node)
+		return fmt.Errorf("未找到节点 '%s'", inst.Node)
 	}
 	dir := m.paths.RuntimeDirOf(inst.Name)
 	if err := os.MkdirAll(filepath.Join(dir, "logs"), 0o755); err != nil {
-		return err
+		return fmt.Errorf("创建实例目录失败: %w", err)
 	}
 	sbCfg, err := sf.BuildSingbox(node, inst.SingboxPort)
 	if err != nil {
 		return fmt.Errorf("生成 sing-box 配置失败: %w", err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "singbox.json"), sbCfg, 0o644); err != nil {
-		return err
+		return fmt.Errorf("写入 sing-box 配置失败: %w", err)
 	}
 	sbPID, err := runner.Start(ExecSpec{
 		Bin:      m.binPath("sing-box"),
@@ -98,12 +111,16 @@ func (m *Manager) startInstanceLockFree(runner Runner, inst *Instance) error {
 		NoWindow: true,
 	})
 	if err != nil {
+		// 对齐 Rust：可执行文件缺失时给出专门文案
+		if sbBin := m.binPath("sing-box"); !fileExists(sbBin) {
+			return fmt.Errorf("未找到 sing-box 可执行文件: %s", sbBin)
+		}
 		return fmt.Errorf("启动 sing-box 失败: %w", err)
 	}
 	inst.SingboxPID = &sbPID
 	if err := waitForPort(inst.SingboxPort, singboxWait); err != nil {
 		_ = runner.Kill(sbPID)
-		return errors.New("sing-box 端口未就绪: " + err.Error())
+		return fmt.Errorf("sing-box 在 10s 内未能监听 127.0.0.1:%d", inst.SingboxPort)
 	}
 	ocCfg, err := sf.BuildOpenCfg(inst.SingboxPort)
 	if err != nil {
@@ -112,7 +129,7 @@ func (m *Manager) startInstanceLockFree(runner Runner, inst *Instance) error {
 	}
 	if err := os.WriteFile(filepath.Join(dir, "opencode2api.json"), ocCfg, 0o644); err != nil {
 		_ = runner.Kill(sbPID)
-		return err
+		return fmt.Errorf("写入 opencode2api 配置失败: %w", err)
 	}
 	ocPID, err := runner.Start(ExecSpec{
 		Bin:      m.binPath("opencode2api"),
@@ -124,13 +141,17 @@ func (m *Manager) startInstanceLockFree(runner Runner, inst *Instance) error {
 	})
 	if err != nil {
 		_ = runner.Kill(sbPID)
+		// 对齐 Rust：可执行文件缺失时给出专门文案
+		if ocBin := m.binPath("opencode2api"); !fileExists(ocBin) {
+			return fmt.Errorf("未找到 opencode2api 可执行文件: %s", ocBin)
+		}
 		return fmt.Errorf("启动 opencode2api 失败: %w", err)
 	}
 	inst.PID = &ocPID
 	if err := waitForPort(inst.Port, openCodeWait); err != nil {
 		_ = runner.Kill(ocPID)
 		_ = runner.Kill(sbPID)
-		return errors.New("opencode2api 端口未就绪: " + err.Error())
+		return fmt.Errorf("opencode2api 在 15s 内未能监听 0.0.0.0:%d", inst.Port)
 	}
 	return nil
 }
@@ -162,7 +183,7 @@ func (m *Manager) StopInstance(runner Runner, name string) error {
 		list[i].Status = StatusStopped()
 		return m.save(list)
 	}
-	return errors.New("实例不存在: " + name)
+	return errors.New("实例不存在")
 }
 
 // RemoveInstanceAlive 删除实例：best-effort 先停止再移除记录。
@@ -187,7 +208,7 @@ func (m *Manager) RemoveInstanceAlive(runner Runner, name string) error {
 		list = append(list[:i], list[i+1:]...)
 		return m.save(list)
 	}
-	return errors.New("实例不存在: " + name)
+	return errors.New("实例不存在")
 }
 
 // ReconcileStates 校正状态：Running/Starting 但 pid 已不存在 → Stopped。

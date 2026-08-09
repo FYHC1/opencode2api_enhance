@@ -141,7 +141,7 @@ func (g *Gateway) startChild(runner Runner) error {
 		NoWindow: true,
 	})
 	if err != nil {
-		g.setErr(fmt.Sprintf("启动统一网关失败: %v", err))
+		g.setErr(fmt.Sprintf("启动统一 API 网关失败: %v", err))
 		return err
 	}
 	g.mu.Lock()

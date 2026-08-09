@@ -159,17 +159,17 @@ func (m *Manager) AddInstance(inst Instance) error {
 		return errors.New("实例名不能为空")
 	}
 	if inst.Port < 1024 {
-		return errors.New("端口必须 ≥ 1024")
+		return errors.New("端口需 >= 1024")
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	list := m.load()
 	for _, e := range list {
 		if e.Name == inst.Name {
-			return errors.New("实例名已存在: " + inst.Name)
+			return errors.New("实例 '" + inst.Name + "' 已存在")
 		}
 		if e.Port == inst.Port {
-			return errors.New("端口已被实例占用: " + itoa(inst.Port))
+			return errors.New("端口 " + itoa(inst.Port) + " 已被其他实例占用")
 		}
 	}
 	inst.Status = StatusStopped()
@@ -188,7 +188,7 @@ func (m *Manager) RemoveInstance(name string) error {
 			return m.save(list)
 		}
 	}
-	return errors.New("实例不存在: " + name)
+	return errors.New("实例不存在")
 }
 
 // UpdateInstance 就地更新实例并持久化（供状态机流转）。
@@ -202,7 +202,7 @@ func (m *Manager) UpdateInstance(inst Instance) error {
 			return m.save(list)
 		}
 	}
-	return errors.New("实例不存在: " + inst.Name)
+	return errors.New("实例不存在")
 }
 
 // load 读取注册表（锁内调用）。

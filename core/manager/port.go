@@ -44,7 +44,7 @@ func (m *Manager) PortSuggest() (uint16, error) {
 			return candidate, nil
 		}
 	}
-	return 0, errors.New("无法找到可用端口（200 次尝试后）")
+	return 0, errors.New("未找到可用端口")
 }
 
 // basePortForSuggest 端口建议基址：优先环境变量 OPCODE2API_INSTANCE_BASE_PORT
@@ -67,7 +67,7 @@ type PortCheckResult struct {
 // PortCheck 检查端口是否可被新实例使用。
 func (m *Manager) PortCheck(port uint16) PortCheckResult {
 	if port < 1024 {
-		return PortCheckResult{Available: false, Reason: "端口必须 ≥ 1024"}
+		return PortCheckResult{Available: false, Reason: "端口需 >= 1024"}
 	}
 	if m.isPortUsedByInstance(port) {
 		return PortCheckResult{Available: false, Reason: "已被实例占用"}

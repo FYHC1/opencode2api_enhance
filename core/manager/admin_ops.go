@@ -118,6 +118,11 @@ func (m *Manager) InstancesRemoveHandler() http.HandlerFunc {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		// 对齐 Rust remove_instance：从池中剔除后同步网关
+		if err := m.Gateway().sync(m.Run()); err != nil {
+			writeErr(w, http.StatusInternalServerError, "同步网关失败: "+err.Error())
+			return
+		}
 		writeJSON(w, map[string]any{"status": "ok"})
 	}
 }
@@ -207,11 +212,16 @@ func (m *Manager) InstancesTestHandler() http.HandlerFunc {
 		}
 		// 前置校验：未运行（含启动中/停止中/错误态）直接返回友好提示（Rust prepare_test 语义）
 		if inst.Status.State != "Running" {
+			// 对齐 Rust {:?}：Error 态渲染为 Error("msg")
+			state := inst.Status.State
+			if state == "Error" && len(inst.Status.Error) > 0 {
+				state = `Error("` + inst.Status.Error[0] + `")`
+			}
 			writeJSON(w, TestResult{
 				Name:    name,
 				Port:    inst.Port,
 				OK:      false,
-				Message: "实例 '" + name + "' 当前状态为 " + inst.Status.State + "，请先启动后再测试",
+				Message: "实例 '" + name + "' 当前状态为 " + state + "，请先启动后再测试",
 			})
 			return
 		}
@@ -741,7 +751,10 @@ func (m *Manager) JoinGatewayHandler() http.HandlerFunc {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		_ = m.Gateway().sync(m.Run())
+		if err := m.Gateway().sync(m.Run()); err != nil {
+			writeErr(w, http.StatusInternalServerError, "同步网关失败: "+err.Error())
+			return
+		}
 		writeJSON(w, map[string]any{"status": "ok"})
 	}
 }

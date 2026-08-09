@@ -98,7 +98,7 @@ func (c *ScanController) allocatePorts(opts ScanOptions, need int) ([]portPair, 
 		pairs = append(pairs, portPair{api: api, socks: socks})
 	}
 	if len(pairs) < need {
-		return nil, fmt.Errorf("可用探针端口不足（需要 %d，仅得 %d）", need, len(pairs))
+		return nil, fmt.Errorf("无法为并发节点扫描找到 %d 组空闲 API/SOCKS 端口", need)
 	}
 	return pairs[:need], nil
 }
