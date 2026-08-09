@@ -59,7 +59,7 @@ func (m *Manager) markStartingLocked(name string) (Instance, error) {
 		}
 		switch list[i].Status.State {
 		case "Running", "Starting", "Stopping":
-			return Instance{}, fmt.Errorf("实例 %s 状态冲突（%s）", name, list[i].Status.State)
+			return Instance{}, fmt.Errorf("实例 '%s' 正在忙", name)
 		}
 		list[i].Status = StatusStarting()
 		_ = m.save(list)
@@ -149,7 +149,7 @@ func (m *Manager) StopInstance(runner Runner, name string) error {
 		}
 		switch list[i].Status.State {
 		case "Starting", "Stopping":
-			return fmt.Errorf("实例 %s 状态冲突（%s）", name, list[i].Status.State)
+			return fmt.Errorf("实例 '%s' 正在忙", name)
 		}
 		ocPID, sbPID := pidVal(list[i].PID), pidVal(list[i].SingboxPID)
 		if ocPID > 0 {
@@ -187,7 +187,7 @@ func (m *Manager) RemoveInstanceAlive(runner Runner, name string) error {
 		list = append(list[:i], list[i+1:]...)
 		return m.save(list)
 	}
-	return nil
+	return errors.New("实例不存在: " + name)
 }
 
 // ReconcileStates 校正状态：Running/Starting 但 pid 已不存在 → Stopped。

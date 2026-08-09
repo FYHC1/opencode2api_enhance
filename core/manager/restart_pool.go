@@ -17,8 +17,8 @@ func (m *Manager) RestartPool(runner Runner, gw *Gateway) RestartPoolResult {
 		gw.stop(runner)
 	}
 
-	// 2) 全停实例（含残留 pid 的僵尸进程）
-	res.Stopped = len(m.StopAllInstances(runner))
+	// 2) 全停实例（含残留 pid 的僵尸进程）；stopped 计数仅统计池成员（对齐 Rust pool_names.len()）
+	m.StopAllInstances(runner)
 	time.Sleep(300 * time.Millisecond)
 
 	// 3) 收集池成员端口 + 网关端口，强清占用
@@ -30,6 +30,7 @@ func (m *Manager) RestartPool(runner Runner, gw *Gateway) RestartPoolResult {
 			memberPorts = append(memberPorts, inst.SingboxPort)
 		}
 	}
+	res.Stopped = len(poolNames)
 	allPorts := append(append([]uint16(nil), memberPorts...), managerGatewayPort())
 	for _, p := range allPorts {
 		if !isPortFree(p) {

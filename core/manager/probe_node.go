@@ -88,6 +88,11 @@ func (c *ScanController) probeNode(opts ScanOptions, node ClashNode, pair portPa
 	if probeCompletionSuccess(status, body) {
 		base.OK = true
 		base.Category = "ok"
+		if modelCount >= 0 {
+			base.Message = "可用，models=" + itoa(uint16(modelCount))
+		} else {
+			base.Message = "可用（免费模型最小请求成功）"
+		}
 		return base
 	}
 	if httpErr != nil {

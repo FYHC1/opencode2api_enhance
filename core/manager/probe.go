@@ -123,7 +123,10 @@ func (c *ScanController) Start(opts ScanOptions) (ScanProgress, error) {
 	if opts.SocksPort == 0 {
 		opts.SocksPort = probeSocksPort()
 	}
-	if opts.TimeoutSec < 3 {
+	// 单节点超时预算：未设置默认 25s（对齐 Rust scan_start unwrap_or(25)）；下限 3s 防非法值。
+	if opts.TimeoutSec == 0 {
+		opts.TimeoutSec = 25
+	} else if opts.TimeoutSec < 3 {
 		opts.TimeoutSec = 3
 	}
 	if opts.Concurrency <= 0 || opts.Concurrency > 8 {
@@ -132,7 +135,7 @@ func (c *ScanController) Start(opts ScanOptions) (ScanProgress, error) {
 	c.mu.Lock()
 	if c.progress.Status == ScanRunning {
 		c.mu.Unlock()
-		return c.Snapshot(), fmt.Errorf("扫描已在进行中")
+		return c.Snapshot(), fmt.Errorf("节点扫描已在进行中，请等待结束或先停止")
 	}
 	c.progress = ScanProgress{
 		Status:      ScanRunning,
@@ -156,6 +159,13 @@ func (c *ScanController) Start(opts ScanOptions) (ScanProgress, error) {
 			continue
 		}
 		targets = append(targets, n)
+	}
+	// 对齐 Rust：筛选后无可用节点（全部无凭据）→ 明确报错而非静默空扫
+	if len(targets) == 0 {
+		c.mu.Lock()
+		c.progress.Status = ScanIdle
+		c.mu.Unlock()
+		return c.Snapshot(), fmt.Errorf("没有可扫描的节点（需含 password/uuid 等凭据）")
 	}
 	go c.run(opts, targets)
 	return c.Snapshot(), nil

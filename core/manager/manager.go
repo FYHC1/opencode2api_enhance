@@ -188,7 +188,7 @@ func (m *Manager) RemoveInstance(name string) error {
 			return m.save(list)
 		}
 	}
-	return nil
+	return errors.New("实例不存在: " + name)
 }
 
 // UpdateInstance 就地更新实例并持久化（供状态机流转）。

@@ -202,7 +202,7 @@ func (m *Manager) InstancesTestHandler() http.HandlerFunc {
 		}
 		inst, ok := m.FindInstance(name)
 		if !ok {
-			writeErr(w, http.StatusNotFound, "实例不存在: "+name)
+			writeErr(w, http.StatusNotFound, "实例 '"+name+"' 不存在")
 			return
 		}
 		// 前置校验：未运行（含启动中/停止中/错误态）直接返回友好提示（Rust prepare_test 语义）
@@ -216,7 +216,8 @@ func (m *Manager) InstancesTestHandler() http.HandlerFunc {
 			return
 		}
 		start := time.Now()
-		status, _, modelCount, err := freeCompletion(inst.Port, inst.Password, 15*time.Second)
+		// 对齐 Rust probe_free_completion：超时 10s，成功文案"免费模型最小请求成功"
+		status, body, modelCount, err := freeCompletion(inst.Port, inst.Password, 10*time.Second)
 		res := TestResult{Name: name, Port: inst.Port, LatencyMS: time.Since(start).Milliseconds()}
 		sc := status
 		res.StatusCode = &sc
@@ -225,20 +226,23 @@ func (m *Manager) InstancesTestHandler() http.HandlerFunc {
 			if modelCount >= 0 {
 				res.ModelCount = &modelCount
 			}
-			res.Message = "OK"
+			res.Message = "免费模型最小请求成功"
+		} else if err != nil {
+			res.Message = "免费模型请求失败: " + err.Error()
 		} else {
-			res.Message = errMsg(err, status)
+			res.Message = "免费模型请求 HTTP " + itoa(uint16(status)) + "：" + truncateBody(body, 240)
 		}
 		writeJSON(w, res)
 	}
 }
 
-// errMsg 拼接失败描述。
-func errMsg(err error, status int) string {
-	if err != nil {
-		return err.Error()
+// truncateBody 截断响应体（Rust truncate 移植：超长加省略号）。
+func truncateBody(s []byte, max int) string {
+	runes := []rune(string(s))
+	if len(runes) > max {
+		return string(runes[:max]) + "…"
 	}
-	return "HTTP " + itoa(uint16(status))
+	return string(runes)
 }
 
 // decodeName 读取 {"name":"..."}。
@@ -303,6 +307,10 @@ func (m *Manager) BatchAddHandler() http.HandlerFunc {
 		}
 		if json.NewDecoder(r.Body).Decode(&req) != nil {
 			writeErr(w, http.StatusBadRequest, "bad body")
+			return
+		}
+		if len(req.Nodes) == 0 {
+			writeErr(w, http.StatusBadRequest, "nodes 不能为空")
 			return
 		}
 		basePort := instanceBasePort()
@@ -478,12 +486,12 @@ func (m *Manager) httpBatchAdd(items []BatchAddHTTPItem, basePort uint16, useNod
 	next := 1
 	for _, item := range items {
 		if item.Node == "" {
-			res.Errors = append(res.Errors, BatchAddErr{Node: "", Error: "node 必填"})
+			res.Errors = append(res.Errors, BatchAddErr{Node: "", Error: "空节点名"})
 			res.ErrorCount++
 			continue
 		}
 		if haveNode[item.Node] {
-			res.Errors = append(res.Errors, BatchAddErr{Node: item.Node, Error: "节点已存在"})
+			res.Errors = append(res.Errors, BatchAddErr{Node: item.Node, Error: "该节点已添加为实例"})
 			res.ErrorCount++
 			continue
 		}
@@ -689,7 +697,11 @@ func (m *Manager) GatewayRouteModeHandler() http.HandlerFunc {
 			return
 		}
 		m.Gateway().SetRouteMode(req.Mode)
-		_ = m.Gateway().sync(m.Run()) // 立即按新模式重启生效
+		// 对齐 Rust gateway_set_route_mode：sync 失败应报错（stop+sync 让配置重写并重启进程）
+		if err := m.Gateway().sync(m.Run()); err != nil {
+			writeErr(w, http.StatusInternalServerError, "切换路由模式失败: "+err.Error())
+			return
+		}
 		writeJSON(w, map[string]any{"status": "ok", "mode": req.Mode})
 	}
 }
