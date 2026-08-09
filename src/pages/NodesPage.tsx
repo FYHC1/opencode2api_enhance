@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import clsx from 'clsx'
-import { Radar, RefreshCw, Square } from 'lucide-react'
+import { Loader2, Network, Radar, RefreshCw, Square, User } from 'lucide-react'
 import { api, type NodeView, type ProbeResult, type ScanProgress } from '../lib/api'
 import ResultModal from '../components/ResultModal'
 
@@ -165,11 +165,13 @@ export default function NodesPage({
   }, [scan, instanceNodes])
 
   // 通用批量添加：tag === 'pool' 时额外标记入池（join_gateway）
-  const doCommit = async (tag: 'pool' | 'solo') => {
-    if (okNodes.length === 0) return
+  // nodes 参数：默认用扫描结果（弹窗），工具条按钮传勾选节点
+  const doCommit = async (tag: 'pool' | 'solo', names?: string[]) => {
+    const targets = names ?? okNodes
+    if (targets.length === 0) return
     setActing(true)
     try {
-      const items = okNodes.map((node) => ({ node }))
+      const items = targets.map((node) => ({ node }))
       const r = await api.batchAdd(items, undefined, true)
       if (tag === 'pool' && r.added.length > 0) {
         // 进池：只打 join_gateway 标记（不自动启动，启停由实例池页控制）
@@ -218,6 +220,33 @@ export default function NodesPage({
           >
             <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
             {refreshing ? '刷新中…' : '刷新'}
+          </button>
+          {/* 入池 / 独享：勾选节点后可用，直接对勾选节点批量添加 */}
+          <button
+            onClick={() => void doCommit('pool', [...selected])}
+            disabled={selected.size === 0 || acting}
+            className={clsx(
+              'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] transition-colors',
+              selected.size === 0 || acting
+                ? 'bg-zinc-200 text-zinc-500 cursor-not-allowed'
+                : 'bg-teal-600 text-white hover:bg-teal-700 shadow-sm',
+            )}
+            title={selected.size === 0 ? '请先勾选节点' : `添加勾选的 ${selected.size} 个节点到实例池`}
+          >
+            {acting ? <Loader2 size={14} className="animate-spin" /> : <Network size={14} />} 入池
+          </button>
+          <button
+            onClick={() => void doCommit('solo', [...selected])}
+            disabled={selected.size === 0 || acting}
+            className={clsx(
+              'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] transition-colors',
+              selected.size === 0 || acting
+                ? 'bg-zinc-200 text-zinc-500 cursor-not-allowed'
+                : 'bg-blue-600 text-white hover:bg-blue-700 shadow-sm',
+            )}
+            title={selected.size === 0 ? '请先勾选节点' : `添加勾选的 ${selected.size} 个节点为独享`}
+          >
+            {acting ? <Loader2 size={14} className="animate-spin" /> : <User size={14} />} 独享
           </button>
           {scanning ? (
             <button
