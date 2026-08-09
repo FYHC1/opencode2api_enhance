@@ -463,25 +463,7 @@ func (m *Manager) DataCleanHandler() http.HandlerFunc {
 	}
 }
 
-// AutostartGetHandler GET → {enabled}（core 不承载自启，由壳层实现；Web 返回 off）。
-func (m *Manager) AutostartGetHandler() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if !requireMethodOK(w, r, http.MethodGet) {
-			return
-		}
-		writeJSON(w, map[string]any{"enabled": false, "platform": "core"})
-	}
-}
-
-// AutostartSetHandler POST {enabled} → 明确错误（壳层独占）。
-func (m *Manager) AutostartSetHandler() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if !requireMethodOK(w, r, http.MethodPost) {
-			return
-		}
-		writeErr(w, http.StatusNotImplemented, "开机自启仅由桌面壳提供（Tauri 壳），Web 无法设置")
-	}
-}
+// AutostartGetHandler / AutostartSetHandler 见 autostart.go（core 承载，走 HTTP）。
 
 // opm 批量结果转换。
 var opm = opResult

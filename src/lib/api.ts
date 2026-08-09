@@ -1,13 +1,6 @@
 // API 对接层：桌面(壳)与 Web 共用，统一调用 core 的 /api/admin/* HTTP 接口。
-// 开机自启是桌面壳（Tauri invoke）独占能力，见 autostartGet/autostartSet。
-
-// 静态引入 Tauri invoke（@tauri-apps/api 已在依赖；Web 构建无 Tauri 时 invoke 调用会抛错，
-// 由调用方 catch 降级处理）。动态 import 在 Tauri v2 webview 下可能因模块解析失败导致命令不可用。
-import { invoke } from '@tauri-apps/api/core'
-
-async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  return invoke<T>(cmd, args)
-}
+// 开机自启由 Go core 承载（写 Windows 注册表），经 HTTP 调用，与其它接口一致。
+// 注意：窗口内容由 core 的 HTTP 服务提供（127.0.0.1:<port>），非 Tauri webview 环境，invoke 不可用。
 
 // ─── 类型定义（与 Rust 端 serde 结构一一对应） ───────────────────────
 
@@ -311,17 +304,12 @@ export const api = {
   configGet: () => req<ConfigView>('GET', '/config'),
   configSet: (key: string, value: string) => req<void>('POST', '/config/set', { key, value }),
 
-  // 开机自启：桌面壳（Tauri invoke）独占；Web 环境无此能力，返回 false。
+  // 开机自启：由 Go core 承载（写 Windows 注册表），经 HTTP 调用
   autostartGet: async (): Promise<boolean> => {
-    try {
-      return await tauriInvoke<boolean>('autostart_get')
-    } catch {
-      return false
-    }
+    const r = await req<{ enabled: boolean }>('GET', '/autostart')
+    return r.enabled
   },
-  autostartSet: async (enabled: boolean): Promise<void> => {
-    await tauriInvoke<void>('autostart_set', { enabled })
-  },
+  autostartSet: (enabled: boolean) => req<void>('POST', '/autostart/set', { enabled }),
 
   // 二进制信息
   getBinariesInfo: () => req<BinariesInfo>('GET', '/binaries'),

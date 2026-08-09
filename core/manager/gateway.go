@@ -240,12 +240,18 @@ func (g *Gateway) Status(runner Runner) GatewayStatus {
 			message = "统一网关未启动"
 		}
 	}
-	// 网关未运行（池成员全停）时，探测错误应显示友好提示而非残留的 dial tcp 错误
+	// 没有运行中的池成员（实例全停）时：即使网关进程残留，探测错误也应显示
+	// 友好提示而非 dial tcp 之类底层错误（残留 modelsErr 一并清理）
 	modelsErr := g.modelsErr
-	if !running && modelsErr != "" {
-		modelsErr = "请先启动下方节点实例"
+	var models []string
+	if g.memberCount() == 0 {
+		if modelsErr != "" {
+			modelsErr = "请先启动下方节点实例"
+		}
+		models = []string{}
+	} else {
+		models = append([]string{}, g.models...)
 	}
-	models := append([]string{}, g.models...)
 	updated := g.updatedAt
 	port := g.port
 	routeMode := g.routeMode
