@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/6Kmfi6HP/opencode2api/core/protocol"
 )
 
 func isThinkingEnabled(value any) bool {
@@ -323,7 +325,7 @@ func buildOpenAIResponse(anthropicMsg map[string]any, text string, toolUseBlocks
 		role = "assistant"
 	}
 	finishReason, _ := anthropicMsg["stop_reason"].(string)
-	finishReason = normalizeFinishReason(finishReason)
+	finishReason = protocol.NormalizeFinishReason(finishReason)
 	choice := map[string]any{
 		"index":         0,
 		"message":       map[string]any{"role": role, "content": text},
@@ -356,7 +358,7 @@ func buildOpenAIResponse(anthropicMsg map[string]any, text string, toolUseBlocks
 		"choices": []map[string]any{choice},
 	}
 	if usage, ok := anthropicMsg["usage"].(map[string]any); ok {
-		resp["usage"] = anthropicUsageToChat(usage)
+		resp["usage"] = protocol.AnthropicUsageToChat(usage)
 	}
 	result, _ := json.Marshal(resp)
 	return result
