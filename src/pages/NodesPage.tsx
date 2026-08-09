@@ -309,41 +309,63 @@ export default function NodesPage({
             const checkedCount = list.filter((n) => selected.has(n.name)).length
             return (
               <div key={g}>
-                <div className="flex items-center gap-3 px-4 py-2.5 bg-zinc-50/50">
+                {/* 分组行：点击整行（除全选框）展开/收起 */}
+                <div
+                  onClick={() => toggleGroup(g)}
+                  className="flex items-center gap-3 px-4 py-2.5 bg-zinc-50/50 cursor-pointer select-none"
+                >
                   <input
                     type="checkbox"
                     checked={all}
-                    onChange={() => toggleGroupSel(list)}
+                    onChange={(e) => {
+                      e.stopPropagation()
+                      toggleGroupSel(list)
+                    }}
                     disabled={selectable(list).length === 0}
                     className="accent-teal-600 disabled:opacity-30"
                     title={selectable(list).length === 0 ? '该组节点均已添加实例' : ''}
                   />
-                  <button onClick={() => toggleGroup(g)} className="flex-1 text-left text-[13px] font-semibold text-zinc-700">
+                  <span className="flex-1 text-left text-[13px] font-semibold text-zinc-700">
                     {g} <span className="text-zinc-400 font-normal">（{list.length}，已选 {checkedCount}）</span>
-                  </button>
+                  </span>
                   <span className="text-[11px] text-zinc-400">{isCollapsed ? '展开' : '收起'}</span>
                 </div>
                 {!isCollapsed && (
                   <div className="divide-y divide-zinc-50">
                     {list.map((n) => {
                       const r = resultsMap.get(n.name)
+                      const isInstanced = instanceNodes.has(n.name)
                       return (
                         <div
                           key={n.name}
+                          onClick={() => {
+                            if (!isInstanced) toggleNode(n.name)
+                          }}
                           className={clsx(
                             'flex items-center gap-2 px-4 py-2.5 pl-9 transition-colors',
+                            // 整行可点（未实例化）才显示手型；已实例化禁选
+                            !isInstanced && 'cursor-pointer select-none',
                             // 选中：左侧竖条（inset shadow 不占布局）+ 名称加粗，不做整行大色块（节点挨着时全选会连成一片）
                             selected.has(n.name) && 'shadow-[inset_3px_0_0_0_#0d9488]',
                             // 未选中：hover 浅灰；已实例化（禁选）静息灰底
-                            !selected.has(n.name) && instanceNodes.has(n.name) && 'bg-zinc-50',
-                            !selected.has(n.name) && !instanceNodes.has(n.name) && 'hover:bg-zinc-50',
+                            !selected.has(n.name) && isInstanced && 'bg-zinc-50',
+                            !selected.has(n.name) && !isInstanced && 'hover:bg-zinc-50',
                           )}
                         >
-                          <input type="checkbox" checked={selected.has(n.name)} onChange={() => toggleNode(n.name)} disabled={instanceNodes.has(n.name)} className="accent-teal-600 disabled:opacity-30" />
+                          <input
+                            type="checkbox"
+                            checked={selected.has(n.name)}
+                            onChange={(e) => {
+                              e.stopPropagation()
+                              toggleNode(n.name)
+                            }}
+                            disabled={isInstanced}
+                            className="accent-teal-600 disabled:opacity-30"
+                          />
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2">
                               <span className={clsx('text-[13px] truncate', selected.has(n.name) ? 'font-semibold text-teal-800' : 'text-zinc-800')}>{n.name}</span>
-                              {instanceNodes.has(n.name) && (
+                              {isInstanced && (
                                 <span
                                   className={clsx(
                                     'inline-block px-1.5 py-0.5 rounded-full text-[10px] font-medium border',
