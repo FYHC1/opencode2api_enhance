@@ -34,7 +34,9 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
-	req.Model = resolveModel(req.Model)
+	// opencode 上游恒为无 key 免费档（见 chatViaVendor）→ 模型解析恒优先 -free 变体，
+	// 客户端带任何 key 都不影响落到免费模型。
+	req.Model = resolveModel(req.Model, true)
 	if req.Model == "" {
 		http.Error(w, "model is required", http.StatusBadRequest)
 		return
@@ -77,7 +79,7 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 			callRec.Events = append(callRec.Events, CallEvent{Type: "upstream_error", Node: proxyAddr, Detail: callRec.ErrMsg, At: time.Now()})
 			recordCall(callRec)
 			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(status)
+			w.WriteHeader(httpStatusOr(status))
 			if upResp != nil {
 				errBody, _ := io.ReadAll(upResp)
 				if len(errBody) > 0 {
@@ -128,7 +130,7 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 		callRec.Events = append(callRec.Events, CallEvent{Type: "upstream_error", Node: proxyAddr, Detail: callRec.ErrMsg, At: time.Now()})
 		recordCall(callRec)
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(status)
+		w.WriteHeader(httpStatusOr(status))
 		if len(respBody) > 0 {
 			w.Write(respBody)
 		} else {
@@ -173,15 +175,13 @@ func listModelsHandler(w http.ResponseWriter, r *http.Request) {
 	modelMu.RLock()
 	loaded, models := modelsLoaded, modelsCache
 	modelMu.RUnlock()
+	// 目录未就绪（启动后首请求早于首次聚合刷新）→ 走聚合器路径同步拉取一次。
+	// 聚合器是唯一数据源：不保留直连上游的兜底（双轨已消灭）。
 	if !loaded || len(models) == 0 {
-		fetched, err := fetchModels()
-		if err == nil && len(fetched) > 0 {
-			modelMu.Lock()
-			modelsCache = fetched
-			modelsLoaded = true
-			models = modelsCache
-			modelMu.Unlock()
-		}
+		refreshModelCatalog()
+		modelMu.RLock()
+		loaded, models = modelsLoaded, modelsCache
+		modelMu.RUnlock()
 	}
 	if len(models) == 0 {
 		w.Header().Set("Content-Type", "application/json")
@@ -199,37 +199,22 @@ func listModelsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	configMu.RUnlock()
 
-	auth := extractUpstreamAuth(r)
+	// 仅返回免费可用模型（产品定位：免费模型聚合；付费模型不带 key 调用必 401，不展示）。
+	// 不做按 key 的鉴权分流——任何客户端拿到的都是同一份"免费目录"。
+	modelMu.RLock()
 	var combinedModels []ModelInfo
-	switch {
-	case auth.shouldUseGoCatalog():
-		modelMu.RLock()
-		combinedModels = make([]ModelInfo, 0, len(models)+len(goModelsCache))
-		for _, model := range models {
-			if isFreeModel(model.ID) {
-				combinedModels = append(combinedModels, model)
-			}
+	for _, model := range models {
+		if isFreeModel(model.ID) {
+			combinedModels = append(combinedModels, model)
 		}
-		for _, goModel := range goModelsCache {
-			if !containsModelWithID(combinedModels, goModel.ID) {
-				combinedModels = append(combinedModels, goModel)
-			}
-		}
-		modelMu.RUnlock()
-	case auth.Mode == AuthRoutePublic:
-		combinedModels = models
-		filtered := make([]ModelInfo, 0, len(combinedModels))
-		for _, m := range combinedModels {
-			if isFreeModel(m.ID) {
-				filtered = append(filtered, m)
-			}
-		}
-		if len(filtered) > 0 {
-			combinedModels = filtered
-		}
-	default:
-		combinedModels = models
 	}
+	for _, goModel := range goModelsCache {
+		if isFreeModel(goModel.ID) && !containsModelWithID(combinedModels, goModel.ID) {
+			combinedModels = append(combinedModels, goModel)
+		}
+	}
+	modelMu.RUnlock()
+
 	allModels := replaceModelIDsWithAliases(combinedModels, aliases)
 	// 多厂商聚合：把其它厂商（非 opencode）的免费模型并入列表（同名加厂商前缀）。
 	allModels = appendOtherFreeModels(allModels, globalAgg)

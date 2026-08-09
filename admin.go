@@ -13,30 +13,20 @@ func reloadHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	refreshOCSession()
-	fetched, err := fetchModels()
-	if err == nil && len(fetched) > 0 {
-		modelMu.Lock()
-		modelsCache = fetched
-		modelsLoaded = true
-		modelMu.Unlock()
-		slog.Info("free models refreshed", "count", len(fetched))
-	}
-	goFetched, goErr := fetchGoModels()
-	if goErr == nil && len(goFetched) > 0 {
-		modelMu.Lock()
-		goModelsCache = goFetched
-		modelMu.Unlock()
-		slog.Info("go catalog refreshed", "count", len(goFetched))
-	}
+	// 会话与目录均由厂商/聚合器持有（双轨已消灭）：刷新 opencode 厂商会话 + 聚合器目录。
+	mainCodeVendor().RefreshSession()
+	refreshModelCatalog()
+	modelMu.RLock()
+	free, goCnt := len(modelsCache), len(goModelsCache)
+	modelMu.RUnlock()
+	slog.Info("model catalog reloaded", "free", free, "go", goCnt)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"status":  "ok",
-		"session": ocSessionID,
-		"free":    len(modelsCache),
-		"go":      len(goModelsCache),
+		"session": mainCodeVendor().SessionID(),
+		"free":    free,
+		"go":      goCnt,
 	})
-
 }
 func adminConfigHandler(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {

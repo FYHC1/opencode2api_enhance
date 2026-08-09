@@ -98,6 +98,8 @@ src/                    src-tauri/src/                     main.go 等（根目�
 | 7 | 客户端界面统一（客户新要求，2026-08-08） | **所有客户端（Win exe / mac / Linux / Web）一律复用同一套 `src/` 界面**：独享、实例池、节点池、统计、日志、设置六个页面，外观与交互保持一致；**桌面 exe 不设登录页**（壳启动 core 时 `-password ""` 关闭鉴权，与旧 exe 行为一致）；Web 版沿用密码鉴权 |
 | 8 | 环境数据目录隔离（2026-08-09） | **每个运行环境独立配置空间**（`%APPDATA%\opencode2api-manager*`，经 `OPCODE2API_DATA_DIR` 注入，Go core 侧 `DefaultDataDir()` 读取）：`opencode2api-manager`（正式 release）／`-dev`（tauri dev）／`-test`（便携测试包 portable.txt）／`-web-dev`（web 开发）。实例池/配置/runtime 互不干扰；端口段亦按环境隔离（正式 18000+ / dev 30000+ / 便携 50000+）。新增环境一律按此命名约定追加 |
 | 9 | 内嵌二进制更新（2026-08-09） | 壳释放内嵌 core/sing-box 时按**内容哈希**校验（非仅文件大小），避免不同构建恰好同长导致旧版残留 |
+| 10 | 六页 UI 全平台唯一界面（2026-08-09） | **六页 UI（独享/实例池/节点池/统计/日志/设置）是全平台唯一事实界面**。任何终端（Win exe / Web / 未来 macOS / Linux）与任何技术栈实现的客户端，界面都必须与 exe 一致；复用 `src/` 或按该 UI 对应实现，**禁止另起一套界面**。历史 `feature/web-self-service` 分支的简单页面已废弃。新增页面/菜单须与六页对齐 |
+| 11 | 账号池"非阻塞自动补齐" + opencode 恒无 key（2026-08-09） | **windsurf 池型厂商**：`min_available` 默认 **3**（1 在用 + 备用换号余量）。`EnsureReady` 非阻塞——可用 ≥1 即放行用户请求，差额由**后台 goroutine 并行补齐**（single-flight 防风暴）；仅池空（可用=0）才同步注册 1 个恢复服务，其余后台补。**opencode 上游恒无 key**：客户端任何 key 一律剥离不转发（免费档），模型解析恒优先 `-free` 变体。**windsurf 用账号自带 session token**（厂商自己的"key"）。`/v1/models` **恒返回免费模型**（不分鉴权），付费模型不展示，非 opencode 厂商模型不混入基础缓存（防错误前缀/重复） |
 
 ---
 
@@ -195,20 +197,15 @@ type PoolVendor interface {
 
 > 目标：把 `vendors/windsurf/` 的三个接缝（Chatter / Mailbox / Registrar）+ 用量回写落到实处，打通"池型厂商全链路"。每个子步骤结束 `go test -count=1 ./...` 全绿。
 
-| 子步骤 | 内容 | 对照组（Rust） | 备注 |
+| 子步骤 | 内容 | 对照（Rust） | 状态 / 备注 |
 |---|---|---|---|
-| P3-B1 | Connect-RPC 基础：最小 protobuf 编解码（varint / wire type 0/1/2/5）+ GetUserStatus 用量解析 | ✅ | 2026-08-08 | `vendors/windsurf/connect/proto.go` + golden 单测；commit `4a85882` |
-| P3-B2 | Connect-RPC 客户端：request builders（clientMetadata/completionConfig/modelConfig/指纹）/ 帧解析（gzip/end）/ DoChat + OpenAI-SSE 流 | ✅ | 2026-08-08 | commit `4a85882`；端到端 fake-HTTP 单测（帧解析 / SSE / DONE） |
-| P3-B3 | 工具仿真：客户端 tools → XML `<tool_call>` 注入 system prompt | ⬜ | | YAGNI 可跳过（免费档上游不支持原生 tools） |
-| P3-B4 | Mailbox：TMaily（domains / generate / emails 轮询） | ✅ | 2026-08-08 | `vendors/windsurf/tmaily.go` + httptest 单测；commit `55ff34b` |
-| P3-B5 | Registrar：注册链 connections → email_start → WaitCode → complete → post-auth/bootstrap → windsurf/continue → ExchangeDevinCode 换 session | ✅ | 2026-08-08 | `devin_auth.go` + 全链 httptest；commit `55ff34b` |
-| P3-B6 | 用量回写：GetUserStatus → SetPoolUsage；Chat 成功后异步刷新 + 周期刷新 | ✅ | 2026-08-08 | `usage.go` + 单测；commit `55ff34b` |
-| P3-B7 | 流中无感换号：Chatter 流内错误 → 换号重发（与 core/gateway 断点续写衔接） | ✅ | 2026-08-08 | `vendors/windsurf/midstream.go`；流内 error 事件 / 无 [DONE] 的 EOF → 已吐内容回卷 → 换号续接（与 `buildResumeBody` 同文）；commit `00ae506`。真机冒烟待验收项 13 |
-| P3-B3 | 工具仿真（可选，跟进）：客户端 tools → XML `<tool_call>` 注入 system prompt，输出刮取转回 OpenAI tool_calls | `tool_emulation.rs` | 无则先不接 |
-| P3-B4 | Mailbox：TMaily（domains / generate / emails 轮询） | `tmaily.rs` | 真实 HTTP，可用 `contract.Transport` 注入 |
-| P3-B5 | Registrar：注册链 email_start → email_complete → bootstrap_session（post-auth+set-cookie）→ api-key → `windsurf_continue` → `ExchangeDevinCode` 换 session | `devin_auth.rs` | 入库到 pool（先登邮箱，成功后由上层注册 Start 触发） |
-| P3-B6 | 用量回写：`GetUserStatus`（seat_management）→ 填 `SetPoolUsage`；Chat 成功/周期异步刷新 | `usage.rs` / `windsurf_api.rs` | 挂钩 `preUsageRefresh` |
-| P3-B7 | 流中无感换号：Chatter 流内 capacity/错误事件 → 回卷广播 → 换号重发（与 core/gateway 断点续写衔接） | ✅ 2026-08-08（commit `00ae506`）；原 Rust 仅流前 MAX_HOPS=3 重试 | 验收项 13 的收尾：换号逻辑已在 vendor 内落地 |
+| P3-B1 | Connect-RPC 基础：最小 protobuf 编解码（varint / wire type 0/1/2/5）+ GetUserStatus 用量解析 | `proto_min.rs` | ✅ 2026-08-08：`vendors/windsurf/connect/proto.go` + golden 单测；commit `4a85882` |
+| P3-B2 | Connect-RPC 客户端：request builders（clientMetadata/completionConfig/modelConfig/指纹）/ 帧解析（gzip/end）/ DoChat + OpenAI-SSE 流 | `devin_connect.rs` | ✅ 2026-08-08：commit `4a85882`；端到端 fake-HTTP 单测（帧解析 / SSE / DONE） |
+| P3-B3 | 工具仿真：客户端 tools → XML `<tool_call>` 注入 system prompt，输出刮取转回 OpenAI tool_calls | `tool_emulation.rs` | ⬜ YAGNI 可跳过（免费档上游不支持原生 tools；无则先不接） |
+| P3-B4 | Mailbox：TMaily（domains / generate / emails 轮询） | `tmaily.rs` | ✅ 2026-08-08：`vendors/windsurf/tmaily.go` + httptest 单测；commit `55ff34b` |
+| P3-B5 | Registrar：注册链 connections → email_start → WaitCode → complete → post-auth/bootstrap → windsurf/continue → ExchangeDevinCode 换 session | `devin_auth.rs` | ✅ 2026-08-08：`devin_auth.go` + 全链 httptest；commit `55ff34b` |
+| P3-B6 | 用量回写：GetUserStatus → SetPoolUsage；Chat 成功后异步刷新 + 周期刷新 | `usage.rs` / `windsurf_api.rs` | ✅ 2026-08-08：`usage.go` + 单测；commit `55ff34b` |
+| P3-B7 | 流中无感换号：Chatter 流内错误 → 换号重发（与 core/gateway 断点续写衔接） | `devin_connect.rs`（原 Rust 仅流前 MAX_HOPS=3 重试） | ✅ 2026-08-08：`vendors/windsurf/midstream.go`；流内 error 事件 / 无 [DONE] 的 EOF → 已吐内容回卷 → 换号续接（与 `buildResumeBody` 同文）；commit `00ae506` |
 
 > 完成后顺序验证：单号正常 / 429 自动换号 / 额度≤20% 预注册 / 第二天旧号解冻复用 / 中途断流换号续写。真实环境冒烟由用户提供（需 Devin 站点可达 + 临时邮箱服务可用）。
 
@@ -320,7 +317,7 @@ type PoolVendor interface {
 | 2 | P0 | `go test ./...` 全绿 | ✅ | 2026-08-08 | `go -C <proj> test -count=1 ./...`（全绿）+ `go vet ./...` |
 | 3 | P0 | 行为快照记录（路由表/配置/`/v1/models` 输出） | ✅ | 2026-08-08 | 见「一、现状分析摘要」 |
 | 4 | P1.1 | 文件拆分：main.go(5320行) → 21 个同包领域文件，main.go 仅留入口 | ✅ | 2026-08-08 | commit `dcb217b`；`go test -count=1 ./...` 全绿 |
-| 4b | P1.2 | 包化：contract/aggregator/router/manager/protocol 五包完成；gateway/server 状态收敛未做 | 🔄 | 2026-08-09 | **P1.2a~b 完成**：contract（`de91054`）、protocol（类型+纯转换全下沉 `fe942b2`，含 claude/anthropic/responses 转换 + 类型别名桥）、aggregator/router（P2 期间）、manager（P4 期间）。**P1.2c/f（core/gateway 状态收敛 + core/server handler 依赖注入）待决策**：42 全局变量收敛 + 重写 13 测试约 60 处 save/restore，估 8-14 天，win exe 已交付前提下纯内务收益低；协议层已独立复用，核心目标达成 |
+| 4b | P1.2 | 包化：contract/aggregator/router/manager/protocol 五包完成；gateway/server 状态收敛未做 | 🔄 | 2026-08-09 | **P1.2a~b 完成**：contract（`de91054`）、protocol（类型+纯转换全下沉 `fe942b2`，含 claude/anthropic/responses 转换 + 类型别名桥）、aggregator/router（P2 期间）、manager（P4 期间）。**地基加固（2026-08-09，未提交）：** ① 模型目录双轨消灭——`models.go` 直连拉取（fetchModels/fetchGoModels 硬编码 URL）删除，`/v1/models` 与 reload 全走聚合器+厂商；② 全局 OpenCode 会话（ocSessionID/initOCSession 等 4 个全局）删除，会话收拢进 `vendors/opencode` 实例；③ 适配层复用聚合器已注册实例，消灭双实例双会话；④ 契约净化：`contract.Message.Extra` 厂商私有区，`Options` 保留通用键；⑤ 契约律己：`ErrSemantics().Retryable` 成为 chat 重试唯一状态码来源；⑥ Chat/ChatStream 合并为 `call()`；⑦ 聚合器倒排索引 `ProvidersOf`，路由 O(1)；⑧ convert.go Anthropic 死代码（约 190 行）删除。**P1.2c/f（core/gateway 状态收敛 + core/server handler 依赖注入）仍待决策**：剩余全局约 35 个（config 组/socks 池/超时续写组，均已按组加锁），收敛需重写 handler 与 13 个测试约 60 处 save/restore，估 8-14 天；win exe 已交付前提下纯内务收益低，建议作为独立专项排期 |
 | 5 | P1 | 拆分过程每阶段测试全绿，行为与基线一致 | ⬜ | | 每步 `go test -count=1 ./...`；P4 大量改动后仍全绿 |
 | 6 | P1 | 过时文档清理 + config.example.json 补全 + 版本号口径说明 | ⬜ | | 随 P1.2 收尾处理 |
 | 7 | P2 | `core/contract` 定稿（基础 + PoolVendor + Tier/Transport/Stream/Meta） | ✅ | 2026-08-08 | 见 `core/contract/contract.go`；commit `de91054` |
@@ -335,7 +332,7 @@ type PoolVendor interface {
 | 9e | P2 | P2-C3：适配层经路由器分发 + 厂商级 failover（Switchable/5xx/传输错；非可换即停）+ 单测 | ✅ | 2026-08-08 | `a8ed459`；429→切换通过、403→停 |
 | 9f | P2 | P2-C4：`/v1/models` 多厂商聚合（同名加厂商前缀；单厂商零变化）+ 单测 | ✅ | 2026-08-08 | `b045d94` |
 
-> **P2-B3 续接注记（供后续清理）**：main 侧适配层已稳定；剩余小项——convert.go/chat_protocol.go 中 Anthropic 转换重复代码（死代码，可留可清）。核心链路已全部经 `contract` 与 `vendors/`。
+> **P2-B3 续接注记（已清）**：convert.go 中 Anthropic 转换重复代码（死代码）已于 2026-08-09 删除（约 190 行），核心链路全部经 `contract` 与 `vendors/`。
 | 10 | P3 | `vendors/windsurf/` 池型厂商（池/冷却/健康/自动注册/借号换号 + PoolVendor 契约） | ✅ | 2026-08-08 | 池层+契约 ✅ `edde8b8`；接缝（Chatter/TMaily/Registrar/用量/流中换号）已全部落地 P3-B1~B7 |
 | 10b | P3 | P3-B：Chatter（Connect-RPC 协议移植）/ Mailbox（TMaily）/ Registrar（devin_auth 注册链）真实实现 | ✅ | 2026-08-08 | B1~B6 `4a85882`/`55ff34b`；B7 流中无感换号 `00ae506`；全链路单测绿，待真机冒烟 |
 | 11 | P3 | ★24h 冷却 / ★额度≤20% 预注册 / ★中途无感换号 三能力完成 | ✅ | 2026-08-08 | 冷却+预注册 ✅（池层 `edde8b8`）；流中无感换号 ✅（`00ae506`，回卷续写与网关断点续写同文衔接） |

@@ -1,12 +1,14 @@
 // Part of the P1 (core split) refactor: code moved out of main.go.
 // Same package (main) - do not change package clause manually.
+//
+// 模型目录缓存（唯一数据源：core/aggregator 聚合器）。
+// 旧版 fetchModels/fetchGoModels 直连 opencode.ai 的硬编码拉取已删除——
+// 目录一律由 syncModelsFromAggregator 从聚合器同步（启动、定时、reload 三个入口共用），
+// 上游 URL/鉴权/免费判定等厂商专属逻辑全部收拢在 vendors/opencode。
 package main
 
 import (
-	"encoding/json"
-	"io"
 	"log/slog"
-	"net/http"
 	"sync"
 	"time"
 )
@@ -24,58 +26,6 @@ var (
 	modelMu       sync.RWMutex
 	modelsLoaded  bool
 )
-
-func fetchModels() ([]ModelInfo, error) {
-	req, _ := http.NewRequest("GET", "https://opencode.ai/zen/v1/models", nil)
-	req.Header.Set("Authorization", "Bearer public")
-	req.Header.Set("x-opencode-session", ocSessionID)
-	resp, err := getHTTPClient().Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	var result struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, err
-	}
-	var models []ModelInfo
-	now := time.Now().Unix()
-	for _, m := range result.Data {
-		models = append(models, ModelInfo{ID: m.ID, Object: "model", Created: now, OwnedBy: "opencode"})
-	}
-	return models, nil
-}
-
-func fetchGoModels() ([]ModelInfo, error) {
-	req, _ := http.NewRequest("GET", "https://opencode.ai/zen/go/v1/models", nil)
-	req.Header.Set("Authorization", "Bearer public")
-	req.Header.Set("x-opencode-session", ocSessionID)
-	resp, err := getHTTPClient().Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	var result struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, err
-	}
-	var models []ModelInfo
-	now := time.Now().Unix()
-	for _, m := range result.Data {
-		models = append(models, ModelInfo{ID: m.ID, Object: "model", Created: now, OwnedBy: "opencode"})
-	}
-	return models, nil
-}
 
 func containsModelWithID(models []ModelInfo, modelID string) bool {
 	for _, model := range models {
@@ -156,5 +106,3 @@ func startModelRefresh() {
 		}
 	}()
 }
-
-// ======================== 结构化日志 ========================

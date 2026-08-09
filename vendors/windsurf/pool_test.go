@@ -99,8 +99,16 @@ func TestEnsureReadyRegistersOnDemand(t *testing.T) {
 	if err := v.EnsureReady(context.Background()); err != nil {
 		t.Fatalf("EnsureReady: %v", err)
 	}
-	if got := v.pool.status(time.Now()).Available; got != 2 {
-		t.Fatalf("available = %d, want 2", got)
+	// 池空路径：EnsureReady 同步注册 1 个恢复服务，差额由后台补齐 → 轮询等待满额。
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if v.pool.status(time.Now()).Available >= 2 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := v.pool.status(time.Now()).Available; got < 2 {
+		t.Fatalf("available = %d, want >= 2（后台补齐未生效）", got)
 	}
 }
 

@@ -32,7 +32,8 @@ const (
 	surfaceGo  = "go"
 )
 
-// Options 键：core→厂商传递归一化请求时使用（见 contract.Message.Options）。
+// Extra 键（厂商私有区，见 contract.Message.Extra）：core 只搬运不解释，
+// 通用透传选项（temperature/max_tokens/tools 等）仍走 contract.Message.Options。
 const (
 	// KeyRawBody 存放已由 core/protocol 归一化的 OpenAI Chat 请求体（[]byte），Chat 阶段使用。
 	KeyRawBody = "_oc_raw_body"
@@ -119,6 +120,16 @@ func (v *Vendor) refreshOCSession() {
 	v.ocProjectID = randomHex(40)
 	slog.Info("opencode session refreshed", "version", v.ocClientVer, "session_id", v.ocSessionID)
 	v.ocOnce = sync.Once{}
+}
+
+// RefreshSession 强制刷新会话（管理端 reload 等外部入口调用）。
+func (v *Vendor) RefreshSession() {
+	v.refreshOCSession()
+}
+
+// SessionID 返回当前会话 ID（未初始化则按需初始化）。
+func (v *Vendor) SessionID() string {
+	return v.sessionID()
 }
 
 func (v *Vendor) fetchOCVersion() string {
@@ -216,9 +227,10 @@ func (v *Vendor) isFree(modelID string) bool {
 }
 
 // ErrSemantics 实现 contract.Vendor：opencode 的可重试/可切换/坏账状态码。
+// Retryable 是 chat 重试循环的唯一状态码来源（另附通用 5xx 兜底，见 chat.go isRetryable）。
 func (v *Vendor) ErrSemantics() contract.ErrRules {
 	return contract.ErrRules{
-		Retryable:  []int{http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout},
+		Retryable:  []int{http.StatusUnauthorized, http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout},
 		Switchable: []int{http.StatusUnauthorized, http.StatusPaymentRequired, http.StatusTooManyRequests, http.StatusServiceUnavailable},
 		BadPool:    []int{http.StatusUnauthorized, http.StatusPaymentRequired, http.StatusTooManyRequests, http.StatusServiceUnavailable},
 	}

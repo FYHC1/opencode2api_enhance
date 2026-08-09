@@ -651,7 +651,7 @@ func responsesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respReq.Model = resolveModel(respReq.Model)
+	respReq.Model = resolveModel(respReq.Model, true) // opencode 恒无 key 免费档 → 恒优先 -free
 	previousState, hasPreviousState := StoredResponseState{}, false
 	if respReq.PreviousResponseID != "" {
 		previousState, hasPreviousState = loadResponseState(respReq.PreviousResponseID)
@@ -768,7 +768,7 @@ func responsesHandler(w http.ResponseWriter, r *http.Request) {
 		upResp, status, _, proxyAddr, err := callOpenCodeAPIStream(upstreamBody, chatReq.Model, auth)
 		if err != nil || status < 200 || status >= 300 {
 			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(status)
+			w.WriteHeader(httpStatusOr(status))
 			if upResp != nil {
 				errBody, _ := io.ReadAll(upResp)
 				if len(errBody) > 0 {
@@ -793,7 +793,7 @@ func responsesHandler(w http.ResponseWriter, r *http.Request) {
 	respBody, status, _, proxyAddr, err := callOpenCodeAPI(upstreamBody, chatReq.Model, auth)
 	if err != nil || status < 200 || status >= 300 {
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(status)
+		w.WriteHeader(httpStatusOr(status))
 		if len(respBody) > 0 {
 			w.Write(respBody)
 		} else {

@@ -174,8 +174,10 @@ func refreshModelCatalog() {
 	syncModelsFromAggregator(globalAgg)
 }
 
-// syncModelsFromAggregator 把聚合目录写入既有 modelsCache / goModelsCache（按 surface 分流），
-// 保证单厂商配置下 /v1/models 与路由行为与基线一致。
+// syncModelsFromAggregator 把聚合目录中 opencode 厂商的模型写入 modelsCache / goModelsCache
+// （按 surface 分流），保证单厂商配置下 /v1/models 与路由行为与基线一致。
+// 非 opencode 厂商（如 windsurf）的模型**不写入**缓存——它们由 appendOtherFreeModels
+// 在 /v1/models 响应层单独并入，避免混入基础列表导致同名冲突加错前缀/重复展示。
 func syncModelsFromAggregator(agg *aggregator.Aggregator) {
 	catalog := agg.Catalog()
 	if len(catalog) == 0 {
@@ -184,6 +186,9 @@ func syncModelsFromAggregator(agg *aggregator.Aggregator) {
 	now := time.Now().Unix()
 	var zen, goM []ModelInfo
 	for _, m := range catalog {
+		if m.Provider != "opencode" {
+			continue // 仅 opencode 进入基础缓存；其它厂商模型由响应层并入
+		}
 		info := ModelInfo{ID: m.ID, Object: "model", Created: now, OwnedBy: m.Provider}
 		if m.Meta != nil && m.Meta["surface"] == surfaceGoKey {
 			goM = append(goM, info)

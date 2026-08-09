@@ -70,8 +70,11 @@ func New(cfg Config) *Vendor {
 	if cfg.Name == "" {
 		cfg.Name = "Devin/Windsurf"
 	}
+	// MinAvailable 默认 3：同时支持 1 路在用 + 备用换号余量。
+	// 可用号 < MinAvailable 时由 EnsureReady 后台并行补齐（不阻塞用户请求）。
+	// 可经 providers[].params.min_available 按需调整（流量大时调高）。
 	if cfg.MinAvailable <= 0 {
-		cfg.MinAvailable = 1
+		cfg.MinAvailable = 3
 	}
 	if cfg.QuotaThreshold <= 0 || cfg.QuotaThreshold > 100 {
 		cfg.QuotaThreshold = 20
@@ -142,14 +145,51 @@ func (v *Vendor) Health() contract.VendorHealth {
 // contact.PoolVendor 能力（账号运维）
 // ---------------------------------------------------------------------------
 
-// EnsureReady 保证至少 MinAvailable 个可用账号；不足则自动注册（同步补齐）。
+// EnsureReady 保证最小可用账号数，且尽量不阻塞用户请求：
+//   - 可用 ≥ MinAvailable：直接返回。
+//   - 可用 ≥1 但 < MinAvailable：立即返回（用户请求不受影响），后台并行补齐差额。
+//   - 可用 =0：同步注册 1 个以恢复服务（无号可借只能等待），其余差额交给后台补齐。
 func (v *Vendor) EnsureReady(ctx context.Context) error {
 	now := time.Now()
 	avail := len(v.pool.available(now))
 	if avail >= v.cfg.MinAvailable {
 		return nil
 	}
-	return v.registerNew(ctx, v.cfg.MinAvailable-avail)
+	if avail >= 1 {
+		// 有余量：本次请求直接放行，补齐交给后台（fire-and-forget）。
+		v.topUpAsync(v.cfg.MinAvailable - avail)
+		return nil
+	}
+	// 池空：注册 1 个恢复服务；其余差额交给后台。
+	if err := v.registerNew(ctx, 1); err != nil {
+		return err
+	}
+	if v.cfg.MinAvailable > 1 {
+		v.topUpAsync(v.cfg.MinAvailable - 1)
+	}
+	return nil
+}
+
+// topUpAsync 后台并行补齐 need 个可用账号（fire-and-forget，绝不阻塞用户请求）。
+// 与 registerNew 的 single-flight（registering 标志）配合：
+// 已有注册进行中则本轮跳过（由进行中的那轮补齐覆盖），避免并发注册风暴。
+func (v *Vendor) topUpAsync(need int) {
+	if v.cfg.Registrar == nil || v.cfg.Mailbox == nil || need <= 0 {
+		return
+	}
+	v.mu.Lock()
+	busy := v.registering
+	v.mu.Unlock()
+	if busy {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		if err := v.registerNew(ctx, need); err != nil {
+			slog.Warn("windsurf: 后台补齐账号失败", "error", err)
+		}
+	}()
 }
 
 // registerNew 注册 need 个新账号（串行，防并发重复注册；无 Registrar 时报错）。

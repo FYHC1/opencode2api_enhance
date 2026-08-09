@@ -74,7 +74,9 @@ type Message struct {
 	Model    string         // 厂商内部模型名（已由 core 解析/别名后）
 	Messages []Msg          // 对话消息
 	Stream   bool           // 是否流式 SSE
-	Options  map[string]any // 透传选项：temperature / max_tokens / top_p / tools / thinking / extra_body 等
+	Options  map[string]any // 通用透传选项：temperature / max_tokens / top_p / tools / thinking / extra_body 等（所有厂商共享语义）
+	Extra    map[string]any // 厂商私有区：core 只负责搬运，不解释语义。厂商自定义参数一律放这里，
+	                        // 保持 Options 的通用语义不被厂商键污染（新厂商接入时优先使用本区）。
 }
 
 // Reply 是厂商返回给 core 的统一结果。

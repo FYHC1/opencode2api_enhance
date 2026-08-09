@@ -8,9 +8,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/6Kmfi6HP/opencode2api/core/contract"
 	"github.com/6Kmfi6HP/opencode2api/vendors/opencode"
@@ -26,8 +28,18 @@ var (
 	ocAdapterTarget *opencode.Vendor
 )
 
-// mainCodeVendor 返回全局 OpenCode 厂商（惰性装配，测试与生产共用）。
+// mainCodeVendor 返回全局 OpenCode 厂商。
+// 生产：优先复用聚合器（globalAgg）中已注册的 opencode 实例——目录与聊天共享同一
+// 会话/缓存，杜绝"双实例各自建会话"的历史隐患；未装配聚合器（单元测试）时惰性创建
+// 独立实例（经 rootTransport 桥接 fake httpClient）。
 func mainCodeVendor() *opencode.Vendor {
+	if globalAgg != nil {
+		for _, v := range globalAgg.Vendors() {
+			if oc, ok := v.(*opencode.Vendor); ok && oc.ID() == "opencode" {
+				return oc
+			}
+		}
+	}
 	ocAdapterOnce.Do(func() {
 		ocAdapterTarget = opencode.New(opencode.Config{
 			ID:            "opencode",
@@ -55,13 +67,11 @@ func modeName(mode AuthRouteMode) string {
 	}
 }
 
-// syncVendorState 把 main 侧的会话与会话缓存推给 vendor，保证：
-//   - 测试注入的 ocSession* 与 modelsCache/goModelsCache 直接生效（fake httpClient 桥接不变）；
-//   - 生产经 refreshModelCatalog 刷新的目录同样在 vendor 内可查（go 端点路由判定）。
+// syncVendorState 把 main 侧的模型目录缓存推给 opencode 厂商（SetCatalog），
+// 保证 /v1/models 展示与路由的 go 端点判定一致。
+// 会话由厂商自身持有（vendors/opencode 内 lazy 初始化 / 测试经 SetSession 注入），
+// 本函数不再读写全局会话。
 func syncVendorState(v *opencode.Vendor) {
-	initOCSession()
-	v.SetSession(ocClientVer, ocSessionID, ocProjectID)
-
 	modelMu.RLock()
 	zen, goM := modelsCache, goModelsCache
 	modelMu.RUnlock()
@@ -108,15 +118,26 @@ func seedVendorCatalog(v contract.Vendor) {
 func chatViaVendor(v contract.Vendor, upstreamBody []byte, modelID string, auth UpstreamAuth) (*contract.Reply, error) {
 	if oc, ok := v.(*opencode.Vendor); ok && oc == mainCodeVendor() {
 		syncVendorState(oc)
+		// opencode 上游一律无 key（免费档）：客户端携带的任何 key 都不转发给 opencode，
+		// 避免非 opencode 的 key（如 swe/本地占位密钥）被透传导致上游 401 Invalid API key。
+		auth = UpstreamAuth{Mode: AuthRoutePublic}
 	} else {
 		seedVendorCatalog(v)
+	}
+	// 池型厂商（PoolVendor）：请求前保证可用账号——池空自动注册，用户无感。
+	if pv, ok := v.(contract.PoolVendor); ok {
+		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+		defer cancel()
+		if err := pv.EnsureReady(ctx); err != nil {
+			return nil, fmt.Errorf("%s: 无可用账号且自动注册失败: %w", v.ID(), err)
+		}
 	}
 	msg := &contract.Message{
 		Model: modelID,
 		// 归一化消息：非 opencode 厂商（如 windsurf 账号池）不读 KeyRawBody，
-		// 走 Messages 字段；opencode 仍优先读 Options[KeyRawBody]，此字段对其无副作用。
+		// 走 Messages 字段；opencode 仍优先读 Extra[KeyRawBody]，此字段对其无副作用。
 		Messages: rawBodyToContractMessages(upstreamBody),
-		Options: map[string]any{
+		Extra: map[string]any{
 			opencode.KeyRawBody:    upstreamBody,
 			opencode.KeyAuthMode:   modeName(auth.Mode),
 			opencode.KeyAuthToken:  auth.Token,
@@ -130,14 +151,24 @@ func chatViaVendor(v contract.Vendor, upstreamBody []byte, modelID string, auth 
 func chatViaVendorStream(v contract.Vendor, upstreamBody []byte, modelID string, auth UpstreamAuth) (*contract.Stream, error) {
 	if oc, ok := v.(*opencode.Vendor); ok && oc == mainCodeVendor() {
 		syncVendorState(oc)
+		// opencode 上游一律无 key（免费档）：不转发客户端 key（同 chatViaVendor）。
+		auth = UpstreamAuth{Mode: AuthRoutePublic}
 	} else {
 		seedVendorCatalog(v)
 	}
+	// 池型厂商（PoolVendor）：请求前保证可用账号——池空自动注册，用户无感。
+	if pv, ok := v.(contract.PoolVendor); ok {
+		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+		defer cancel()
+		if err := pv.EnsureReady(ctx); err != nil {
+			return nil, fmt.Errorf("%s: 无可用账号且自动注册失败: %w", v.ID(), err)
+		}
+	}
 	msg := &contract.Message{
 		Model: modelID,
-		// 归一化厂商（windsurf 池型）读 Messages 字段；opencode 仍走 Options[KeyRawBody]。
+		// 归一化厂商（windsurf 池型）读 Messages 字段；opencode 仍走 Extra[KeyRawBody]。
 		Messages: rawBodyToContractMessages(upstreamBody),
-		Options: map[string]any{
+		Extra: map[string]any{
 			opencode.KeyRawBody:    upstreamBody,
 			opencode.KeyAuthMode:   modeName(auth.Mode),
 			opencode.KeyAuthToken:  auth.Token,
@@ -269,4 +300,14 @@ func filterResponseHeaders(h http.Header) http.Header {
 		}
 	}
 	return filtered
+}
+
+// httpStatusOr 上游调用未获得 HTTP 状态码（传输错误 / 厂商未接线等，status==0）时
+// 返回 502 Bad Gateway，避免 handler 侧 WriteHeader(0) 触发
+// Go net/http 的 "invalid WriteHeader code 0" panic。
+func httpStatusOr(status int) int {
+	if status == 0 {
+		return http.StatusBadGateway
+	}
+	return status
 }

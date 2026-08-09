@@ -88,7 +88,6 @@ func main() {
 	initCallLog()
 	callLogEnabled = gatewayMode // 仅网关进程记录全流程日志（对齐 node_stats 语义）
 	slog.Info("config loaded", "path", configPath)
-	initOCSession()
 	globalAgg = newAggregator()
 	chatRouterVar = newChatRouter(globalAgg)
 	refreshModelCatalog()

@@ -4,13 +4,21 @@ package main
 
 import "strings"
 
-func resolveModel(model string) string {
+// resolveModel 解析请求模型名 → 上游真实模型名。
+// preferFree 表示请求处于免费档（public 认证）：此时若缓存中存在 "<名>-free" 变体，
+// 一律优先映射到免费变体——即使上游同时存在同名付费模型（如 deepseek-v4-flash），
+// 避免免费调用被同名付费模型抢走而上游 401 need key。
+func resolveModel(model string, preferFree bool) string {
 	m := strings.TrimSpace(model)
 	configMu.RLock()
 	alias, ok := modelAlias[m]
 	configMu.RUnlock()
 	if ok {
 		return alias
+	}
+	// 免费档：优先 -free 变体（覆盖"同名付费模型已在缓存"的场景）。
+	if preferFree && modelInCaches(m+"-free") {
+		return m + "-free"
 	}
 	// 自动兜底：新 -free 模型无需手动加别名。
 	// 若请求名本身已在缓存（含 -free）则原样使用；否则若「请求名+-free」存在，

@@ -8,6 +8,8 @@ dist/
 bin/
 opencode2api
 opencode2api.exe
+opencode2api_e2e.exe
+opencode2api_e2e.exe~
 
 # Editor and OS files
 .DS_Store

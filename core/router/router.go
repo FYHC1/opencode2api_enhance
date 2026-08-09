@@ -42,7 +42,7 @@ func (r *Router) vendorByID(id string) contract.Vendor {
 
 // candidates 返回按优先级排序的可服务 modelID 的厂商：
 //  1. modelMap[model]（若存在且已注册）
-//  2. 遍历已注册厂商中目录提供该模型的
+//  2. 聚合器倒排索引中提供该模型的厂商（按目录出现顺序）
 //  3. 兜底 defaultID
 //
 // 去重并保持顺序。
@@ -61,10 +61,8 @@ func (r *Router) candidates(modelID string) []contract.Vendor {
 	if p, ok := r.modelMap[modelID]; ok {
 		add(p)
 	}
-	for _, v := range r.agg.Vendors() {
-		if r.agg.HasModel(v.ID(), modelID) {
-			add(v.ID())
-		}
+	for _, pid := range r.agg.ProvidersOf(modelID) {
+		add(pid)
 	}
 	if len(out) == 0 {
 		add(r.defaultID) // 兜底默认厂商（无可选候选时）

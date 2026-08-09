@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -99,9 +98,6 @@ func installFakeOpenCodeClient(t *testing.T, responses []fakeUpstreamResponse) *
 	oldHTTPClient := httpClient
 	oldModelsCache := modelsCache
 	oldGoModelsCache := goModelsCache
-	oldOCClientVer := ocClientVer
-	oldOCSessionID := ocSessionID
-	oldOCProjectID := ocProjectID
 	oldActiveSocks5 := activeSocks5
 	oldSocks5Client := socks5Client
 	oldSocks5ClientAddr := socks5ClientAddr
@@ -123,11 +119,8 @@ func installFakeOpenCodeClient(t *testing.T, responses []fakeUpstreamResponse) *
 	socks5ClientAddr = ""
 	socks5Mu.Unlock()
 
-	ocOnce = sync.Once{}
-	ocOnce.Do(func() {})
-	ocClientVer = "test-version"
-	ocSessionID = "ses_test"
-	ocProjectID = "project_test"
+	// 会话已从 package 全局收拢进 vendors/opencode：直接注入 vendor 实例（跳过版本探测）。
+	mainCodeVendor().SetSession("test-version", "ses_test", "project_test")
 
 	t.Cleanup(func() {
 		httpClient = oldHTTPClient
@@ -140,10 +133,6 @@ func installFakeOpenCodeClient(t *testing.T, responses []fakeUpstreamResponse) *
 		socks5Client = oldSocks5Client
 		socks5ClientAddr = oldSocks5ClientAddr
 		socks5Mu.Unlock()
-		ocOnce = sync.Once{}
-		ocClientVer = oldOCClientVer
-		ocSessionID = oldOCSessionID
-		ocProjectID = oldOCProjectID
 	})
 
 	return transport
@@ -229,7 +218,10 @@ func TestCallOpenCodeAPIRetries4xxAndClosesConnectionBeforeRetry(t *testing.T) {
 	}
 }
 
-func TestCallOpenCodeAPIFallbackKeepsOriginalGoEndpoint(t *testing.T) {
+// TestCallOpenCodeAPIForcesPublicZenEndpoint：opencode 上游一律无 key 走 zen 免费端点。
+// 客户端携带任何 key（此处 AuthRouteAuto+token）都不转发 → 两次重试都在 zen 端点、
+// 且不带客户端 key。（产品定位：免费模型聚合，opencode 不透传客户端密钥。）
+func TestCallOpenCodeAPIForcesPublicZenEndpoint(t *testing.T) {
 	tests := []struct {
 		name   string
 		stream bool
@@ -273,9 +265,9 @@ func TestCallOpenCodeAPIFallbackKeepsOriginalGoEndpoint(t *testing.T) {
 				}
 			}
 
-			wantURL := "https://opencode.ai/zen/go/v1/chat/completions"
+			wantURL := "https://opencode.ai/zen/v1/chat/completions"
 			if !reflect.DeepEqual(transport.requestedURLs, []string{wantURL, wantURL}) {
-				t.Fatalf("requested URLs = %#v, want both requests to %q", transport.requestedURLs, wantURL)
+				t.Fatalf("requested URLs = %#v, want both requests to %q (opencode 一律 zen 免费端点)", transport.requestedURLs, wantURL)
 			}
 		})
 	}
@@ -355,18 +347,18 @@ func TestListModelsHandlerSeparatesPublicZenAndGoCatalogs(t *testing.T) {
 		wantIDs    []string
 	}{
 		{
-			name:    "public only sees free zen models",
+			name:    "public sees free models only",
 			wantIDs: []string{"deepseek-v4-flash"},
 		},
 		{
-			name:       "bare zen key sees zen catalog only",
+			name:       "bare zen key also sees free models only",
 			authHeader: "Bearer sk-auto0123456789abcdef",
-			wantIDs:    []string{"deepseek-v4-flash", "glm-5.2", "gpt-5.5"},
+			wantIDs:    []string{"deepseek-v4-flash"},
 		},
 		{
-			name:       "go prefix sees free and go catalog",
+			name:       "go prefix also sees free models only",
 			authHeader: "Bearer go:sk-go0123456789abcdef",
-			wantIDs:    []string{"deepseek-v4-flash", "glm-5.2", "kimi-k2.7-code"},
+			wantIDs:    []string{"deepseek-v4-flash"},
 		},
 	}
 
@@ -439,9 +431,9 @@ func TestListModelsHandlerReplacesMappedModelIDsWithAliases(t *testing.T) {
 			wantIDs: []string{"deepseek-v4-flash"},
 		},
 		{
-			name:       "authenticated catalog replaces upstream name",
+			name:       "authenticated also sees free models only",
 			authHeader: "Bearer sk-auto0123456789abcdef",
-			wantIDs:    []string{"deepseek-v4-flash", "gpt-5.5"},
+			wantIDs:    []string{"deepseek-v4-flash"},
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -543,10 +535,51 @@ func TestResolveModelAutoSuffixFree(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := resolveModel(tt.input); got != tt.want {
-				t.Fatalf("resolveModel(%q) = %q, want %q", tt.input, got, tt.want)
+			if got := resolveModel(tt.input, true); got != tt.want {
+				t.Fatalf("resolveModel(%q, public) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestResolveModelPrefersFreeTwin：上游同时存在付费 deepseek-v4-flash 与免费
+// deepseek-v4-flash-free 时，免费档（public）调用展示名必须落到 -free 变体；
+// 带真实 key（付费档）则保留原名，允许访问付费模型。
+func TestResolveModelPrefersFreeTwin(t *testing.T) {
+	oldModelsCache := modelsCache
+	oldGoModelsCache := goModelsCache
+	oldModelAlias := modelAlias
+	modelMu.Lock()
+	modelsCache = []ModelInfo{
+		{ID: "deepseek-v4-flash", Object: "model"},      // 付费同名模型（上游真实存在）
+		{ID: "deepseek-v4-flash-free", Object: "model"}, // 免费变体
+	}
+	goModelsCache = nil
+	modelMu.Unlock()
+	configMu.Lock()
+	modelAlias = map[string]string{}
+	configMu.Unlock()
+	t.Cleanup(func() {
+		modelMu.Lock()
+		modelsCache = oldModelsCache
+		goModelsCache = oldGoModelsCache
+		modelMu.Unlock()
+		configMu.Lock()
+		modelAlias = oldModelAlias
+		configMu.Unlock()
+	})
+
+	// 免费档：展示名 → 免费变体（修复 401 need key）
+	if got := resolveModel("deepseek-v4-flash", true); got != "deepseek-v4-flash-free" {
+		t.Fatalf("resolveModel(deepseek-v4-flash, public) = %q, want deepseek-v4-flash-free", got)
+	}
+	// 免费档：直接发 -free 原名 → 原样
+	if got := resolveModel("deepseek-v4-flash-free", true); got != "deepseek-v4-flash-free" {
+		t.Fatalf("resolveModel(deepseek-v4-flash-free, public) = %q, want as-is", got)
+	}
+	// 付费档：带真实 key → 保留原名（可访问付费模型）
+	if got := resolveModel("deepseek-v4-flash", false); got != "deepseek-v4-flash" {
+		t.Fatalf("resolveModel(deepseek-v4-flash, paid) = %q, want deepseek-v4-flash", got)
 	}
 }
 

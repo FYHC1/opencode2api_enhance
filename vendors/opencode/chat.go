@@ -54,10 +54,10 @@ func (a authT) authHeader() string {
 	return "Bearer " + a.token
 }
 
-// parseAuth 从 Message.Options 还原上游认证路由。
+// parseAuth 从 Message.Extra 还原上游认证路由。
 func parseAuth(msg *contract.Message) authT {
 	mode := authAuto
-	switch s, _ := msg.Options[KeyAuthMode].(string); s {
+	switch s, _ := msg.Extra[KeyAuthMode].(string); s {
 	case "public":
 		mode = authPublic
 	case "auto":
@@ -67,7 +67,7 @@ func parseAuth(msg *contract.Message) authT {
 	case "go":
 		mode = authGo
 	}
-	token, _ := msg.Options[KeyAuthToken].(string)
+	token, _ := msg.Extra[KeyAuthToken].(string)
 	if mode == authAuto && token == "" {
 		mode = authPublic
 	}
@@ -75,7 +75,7 @@ func parseAuth(msg *contract.Message) authT {
 }
 
 func maxRetriesOf(msg *contract.Message) int {
-	if n, ok := msg.Options[KeyMaxRetries].(int); ok && n > 0 {
+	if n, ok := msg.Extra[KeyMaxRetries].(int); ok && n > 0 {
 		return n
 	}
 	return maxUpstreamRetries
@@ -150,43 +150,57 @@ func (v *Vendor) buildRequest(modelID string, bodyMap map[string]any, a authT) (
 	return req, nil
 }
 
-func shouldRetryUpstreamStatus(status int) bool {
-	switch status {
-	case http.StatusUnauthorized,
-		http.StatusTooManyRequests,
-		http.StatusBadGateway,
-		http.StatusServiceUnavailable,
-		http.StatusGatewayTimeout:
-		return true
+// isRetryable 判定某状态码是否应在本厂商内重试。
+// 以 ErrSemantics().Retryable 为唯一状态码来源（契约驱动），另附通用 5xx 兜底
+// （历史行为：任意 5xx 一律可重试）。401 走独立计数上限（见 call）。
+func (v *Vendor) isRetryable(status int) bool {
+	for _, s := range v.ErrSemantics().Retryable {
+		if s == status {
+			return true
+		}
 	}
 	return status >= 500 && status < 600
 }
 
 // ---------------------------------------------------------------- 聊天
 
-// Chat 实现 contract.Vendor（非流式）。
-func (v *Vendor) Chat(ctx context.Context, msg *contract.Message) (*contract.Reply, error) {
+// callResult 是一次上游调用的内部结果：非流式成功填 body，流式成功填 stream。
+type callResult struct {
+	body     []byte        // 非流式：完整响应体（成功或最后一次错误体）
+	stream   io.ReadCloser // 流式：SSE 响应流
+	status   int           // 最后一次 HTTP 状态（0 = 未获得响应）
+	headers  http.Header   // 最后一次响应头（仅非流式路径保留）
+	nodeAddr string        // 实际出口节点地址（直连为空）
+}
+
+// call 是 Chat / ChatStream 的公共实现：同一套会话/认证/重试/401/端点语义。
+// 行为与历史逐项对齐（含 401 独立重试上限、可重试时 CloseIdleConnections、
+// 非流式错误带体返回、流式错误体包装为流返回）。
+func (v *Vendor) call(ctx context.Context, msg *contract.Message, streaming bool) (*callResult, error) {
 	v.sessionID()
 
-	raw, ok := msg.Options[KeyRawBody].([]byte)
+	raw, ok := msg.Extra[KeyRawBody].([]byte)
 	if !ok {
-		return nil, fmt.Errorf("opencode: missing %s in message options", KeyRawBody)
+		return nil, fmt.Errorf("opencode: missing %s in message extra", KeyRawBody)
 	}
 	var bodyMap map[string]any
 	if err := json.Unmarshal(raw, &bodyMap); err != nil {
-		return &contract.Reply{Status: http.StatusBadRequest}, nil
+		// 与历史一致：请求体不可解析 → 400 响应，不视为传输失败。
+		if streaming {
+			return &callResult{status: http.StatusBadRequest, stream: io.NopCloser(bytes.NewReader(nil))}, nil
+		}
+		return &callResult{status: http.StatusBadRequest}, nil
 	}
 	a := parseAuth(msg)
 	modelID := msg.Model
 	maxRetries := maxRetriesOf(msg)
 
-	var lastErr error
-	var retryCount int
-	var retry401Count int
 	var lastBody []byte
 	var lastStatus int
 	var lastHeader http.Header
 	var lastProxyAddr string
+	var lastErr error
+	var retryCount, retry401Count int
 
 	for retryCount <= maxRetries {
 		up, err := v.buildRequest(modelID, bodyMap, a)
@@ -195,7 +209,7 @@ func (v *Vendor) Chat(ctx context.Context, msg *contract.Message) (*contract.Rep
 			break
 		}
 		tr := v.transport()
-		client, proxyAddr := tr.Client(a.tier(), false)
+		client, proxyAddr := tr.Client(a.tier(), streaming)
 		resp, err := client.Do(up)
 		if err != nil {
 			tr.Mark(proxyAddr, 0, err)
@@ -205,6 +219,9 @@ func (v *Vendor) Chat(ctx context.Context, msg *contract.Message) (*contract.Rep
 		}
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			tr.Mark(proxyAddr, resp.StatusCode, nil)
+			if streaming {
+				return &callResult{stream: resp.Body, status: resp.StatusCode, nodeAddr: proxyAddr}, nil
+			}
 			b, readErr := io.ReadAll(resp.Body)
 			resp.Body.Close()
 			if readErr != nil {
@@ -213,7 +230,7 @@ func (v *Vendor) Chat(ctx context.Context, msg *contract.Message) (*contract.Rep
 			if isAnthropicFormat(b) {
 				b = convertAnthropicToOpenAI(b, modelID)
 			}
-			return &contract.Reply{Body: b, Status: resp.StatusCode, Headers: resp.Header, NodeAddr: proxyAddr}, nil
+			return &callResult{body: b, status: resp.StatusCode, headers: resp.Header, nodeAddr: proxyAddr}, nil
 		}
 		errBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
@@ -224,7 +241,7 @@ func (v *Vendor) Chat(ctx context.Context, msg *contract.Message) (*contract.Rep
 		lastHeader = resp.Header
 		lastProxyAddr = proxyAddr
 		lastErr = fmt.Errorf("upstream error")
-		if shouldRetryUpstreamStatus(resp.StatusCode) {
+		if v.isRetryable(resp.StatusCode) {
 			client.CloseIdleConnections()
 			if resp.StatusCode == http.StatusUnauthorized {
 				retry401Count++
@@ -238,79 +255,40 @@ func (v *Vendor) Chat(ctx context.Context, msg *contract.Message) (*contract.Rep
 				}
 			}
 			continue
+		}
+		if streaming {
+			// 非可重试状态：把错误体包装成流返回（上游错误透传，不重试）。
+			return &callResult{stream: io.NopCloser(bytes.NewReader(lastBody)), status: lastStatus, nodeAddr: lastProxyAddr}, nil
 		}
 		break
 	}
-	return &contract.Reply{Body: lastBody, Status: lastStatus, Headers: lastHeader, NodeAddr: lastProxyAddr}, lastErr
+	if streaming {
+		if lastStatus != 0 {
+			return &callResult{stream: io.NopCloser(bytes.NewReader(lastBody)), status: lastStatus, nodeAddr: lastProxyAddr}, nil
+		}
+		return nil, fmt.Errorf("all models failed")
+	}
+	return &callResult{body: lastBody, status: lastStatus, headers: lastHeader, nodeAddr: lastProxyAddr}, lastErr
+}
+
+// Chat 实现 contract.Vendor（非流式）。
+// 非 2xx / 传输失败时同时返回（含错误体的 Reply, error），供上层做厂商级 failover。
+func (v *Vendor) Chat(ctx context.Context, msg *contract.Message) (*contract.Reply, error) {
+	res, err := v.call(ctx, msg, false)
+	if res == nil {
+		return nil, err
+	}
+	return &contract.Reply{Body: res.body, Status: res.status, Headers: res.headers, NodeAddr: res.nodeAddr}, err
 }
 
 // ChatStream 实现 contract.Vendor（流式 SSE）。
+// 错误体包装为可读流返回（error=nil，与历史行为一致）；仅完全无响应时返回 error。
 func (v *Vendor) ChatStream(ctx context.Context, msg *contract.Message) (*contract.Stream, error) {
-	v.sessionID()
-
-	raw, ok := msg.Options[KeyRawBody].([]byte)
-	if !ok {
-		return nil, fmt.Errorf("opencode: missing %s in message options", KeyRawBody)
+	res, err := v.call(ctx, msg, true)
+	if res == nil {
+		return nil, err
 	}
-	var bodyMap map[string]any
-	if err := json.Unmarshal(raw, &bodyMap); err != nil {
-		return &contract.Stream{ReadCloser: io.NopCloser(bytes.NewReader(nil))}, nil
-	}
-	a := parseAuth(msg)
-	modelID := msg.Model
-	maxRetries := maxRetriesOf(msg)
-
-	var lastBody []byte
-	var lastStatus int
-	var lastProxyAddr string
-	var retryCount int
-	var retry401Count int
-
-	for retryCount <= maxRetries {
-		up, err := v.buildRequest(modelID, bodyMap, a)
-		if err != nil {
-			break
-		}
-		tr := v.transport()
-		client, proxyAddr := tr.Client(a.tier(), true)
-		resp, err := client.Do(up)
-		if err != nil {
-			tr.Mark(proxyAddr, 0, err)
-			retryCount++
-			continue
-		}
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			tr.Mark(proxyAddr, resp.StatusCode, nil)
-			return &contract.Stream{ReadCloser: resp.Body, Status: resp.StatusCode, NodeAddr: proxyAddr}, nil
-		}
-		errBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		tr.Mark(proxyAddr, resp.StatusCode, nil)
-		slog.Error("opencode upstream error", "model", modelID, "status", resp.StatusCode, "body", string(errBody))
-		lastBody = errBody
-		lastStatus = resp.StatusCode
-		lastProxyAddr = proxyAddr
-		if shouldRetryUpstreamStatus(resp.StatusCode) {
-			client.CloseIdleConnections()
-			if resp.StatusCode == http.StatusUnauthorized {
-				retry401Count++
-				if retry401Count >= max401Retries {
-					break
-				}
-			} else {
-				retryCount++
-				if retryCount >= maxRetries {
-					break
-				}
-			}
-			continue
-		}
-		return &contract.Stream{ReadCloser: io.NopCloser(bytes.NewReader(lastBody)), Status: lastStatus, NodeAddr: lastProxyAddr}, nil
-	}
-	if lastStatus != 0 {
-		return &contract.Stream{ReadCloser: io.NopCloser(bytes.NewReader(lastBody)), Status: lastStatus, NodeAddr: lastProxyAddr}, nil
-	}
-	return nil, fmt.Errorf("all models failed")
+	return &contract.Stream{ReadCloser: res.stream, Status: res.status, NodeAddr: res.nodeAddr}, nil
 }
 
 // ---------------------------------------------------------------- Anthropic 兼容

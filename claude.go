@@ -35,7 +35,7 @@ func claudeMessagesHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"type":"error","error":{"type":"invalid_request_error","message":"Invalid JSON"}}`, http.StatusBadRequest)
 		return
 	}
-	claudeReq.Model = resolveModel(claudeReq.Model)
+	claudeReq.Model = resolveModel(claudeReq.Model, true) // opencode 恒无 key 免费档 → 恒优先 -free
 	if claudeReq.Model == "" {
 		http.Error(w, `{"type":"error","error":{"type":"invalid_request_error","message":"model is required"}}`, http.StatusBadRequest)
 		return
@@ -71,7 +71,7 @@ func claudeMessagesHandler(w http.ResponseWriter, r *http.Request) {
 				"error": map[string]string{"type": "api_error", "message": "upstream error"},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(status)
+			w.WriteHeader(httpStatusOr(status))
 			json.NewEncoder(w).Encode(errResp)
 			return
 		}
@@ -83,7 +83,7 @@ func claudeMessagesHandler(w http.ResponseWriter, r *http.Request) {
 	respBody, status, _, proxyAddr, err := callOpenCodeAPI(upstreamBody, chatReq.Model, auth)
 	if err != nil || status < 200 || status >= 300 {
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(status)
+		w.WriteHeader(httpStatusOr(status))
 		if len(respBody) > 0 {
 			w.Write(respBody)
 		} else {

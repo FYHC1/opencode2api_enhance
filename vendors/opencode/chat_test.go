@@ -87,7 +87,7 @@ func newTestVendor(rt *fakeRT, addr string) *Vendor {
 func msgWith(raw, model, mode, token string) *contract.Message {
 	return &contract.Message{
 		Model: model,
-		Options: map[string]any{
+		Extra: map[string]any{
 			KeyRawBody:   []byte(raw),
 			KeyAuthMode:  mode,
 			KeyAuthToken: token,
@@ -214,6 +214,56 @@ func TestChatRetriesOn429ThenSucceeds(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("marks = %v, want a 429 mark", tr.marks)
+	}
+}
+
+func TestChatStreamRetriesOn429ThenSucceeds(t *testing.T) {
+	rt := &fakeRT{responses: []fakeResp{
+		{status: 429, body: `{"error":"throttled"}`},
+		{status: 200, body: "data: {\"id\":\"c\",\"choices\":[]}\n\n"},
+	}}
+	v := newTestVendor(rt, "n6")
+
+	raw := `{"model":"m-free","messages":[],"stream":true}`
+	st, err := v.ChatStream(context.Background(), msgWith(raw, "m-free", "public", ""))
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	defer st.Close()
+	if st.Status != 200 {
+		t.Fatalf("status = %d, want 200 after retry", st.Status)
+	}
+	b, _ := io.ReadAll(st)
+	if !strings.Contains(string(b), "\"id\":\"c\"") {
+		t.Fatalf("stream body = %q, want SSE chunk", string(b))
+	}
+	if len(rt.urls) != 2 {
+		t.Fatalf("request count = %d, want 2 (stream retry)", len(rt.urls))
+	}
+}
+
+func TestChatStreamErrorBodyWrappedAsStream(t *testing.T) {
+	// 非可重试状态（403）→ 错误体包装为流返回，error=nil（历史行为）。
+	rt := &fakeRT{responses: []fakeResp{
+		{status: 403, body: `{"error":"forbidden"}`},
+	}}
+	v := newTestVendor(rt, "n7")
+
+	raw := `{"model":"m-free","messages":[],"stream":true}`
+	st, err := v.ChatStream(context.Background(), msgWith(raw, "m-free", "public", ""))
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	defer st.Close()
+	if st.Status != 403 {
+		t.Fatalf("status = %d, want 403", st.Status)
+	}
+	b, _ := io.ReadAll(st)
+	if string(b) != `{"error":"forbidden"}` {
+		t.Fatalf("stream body = %q, want error body", string(b))
+	}
+	if len(rt.urls) != 1 {
+		t.Fatalf("request count = %d, want 1 (no retry on 403)", len(rt.urls))
 	}
 }
 
