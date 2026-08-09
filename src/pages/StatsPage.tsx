@@ -1,10 +1,127 @@
 import { Fragment, useCallback, useEffect, useState } from 'react'
 import clsx from 'clsx'
 import { BarChart3, ChevronDown, ChevronRight, RefreshCw, RotateCcw, Inbox, HeartPulse, Download } from 'lucide-react'
-import { api, downloadText, type HealthSummary, type StatsSummary } from '../lib/api'
+import { api, downloadText, type HealthSummary, type InstanceStat, type StatsSummary } from '../lib/api'
 
 /** 千分位格式化 */
 const fmt = (n: number) => n.toLocaleString('en-US')
+
+/** 实例统计行（含模型/节点明细展开），普通实例与池成员共用 */
+function InstanceRows({
+  list,
+  expanded,
+  onToggle,
+}: {
+  list: InstanceStat[]
+  expanded: Set<string>
+  onToggle: (name: string) => void
+}) {
+  return (
+    <>
+      {list.map((ins) => {
+        const open = expanded.has(ins.name)
+        const hasDetail = (ins.models?.length ?? 0) > 0 || (ins.nodes?.length ?? 0) > 0
+        return (
+          <Fragment key={ins.name}>
+            <tr
+              onClick={() => hasDetail && onToggle(ins.name)}
+              className={clsx(
+                'border-b border-zinc-50 hover:bg-zinc-50/60 transition-colors',
+                hasDetail ? 'cursor-pointer' : '',
+              )}
+            >
+              <td className="py-2.5 pr-3 font-medium text-zinc-800 flex items-center gap-1.5">
+                {hasDetail ? (
+                  open ? (
+                    <ChevronDown size={14} className="text-zinc-400" />
+                  ) : (
+                    <ChevronRight size={14} className="text-zinc-400" />
+                  )
+                ) : (
+                  <span className="w-3.5" />
+                )}
+                {ins.name}
+              </td>
+              <td className="py-2.5 pr-3 text-right tabular-nums text-zinc-600">{fmt(ins.requests)}</td>
+              <td className="py-2.5 pr-3 text-right tabular-nums text-zinc-600">{fmt(ins.prompt_tokens)}</td>
+              <td className="py-2.5 pr-3 text-right tabular-nums text-zinc-600">{fmt(ins.completion_tokens)}</td>
+              <td className="py-2.5 pr-3 text-right tabular-nums font-medium text-zinc-900">{fmt(ins.total_tokens)}</td>
+              <td className="py-2.5">
+                {ins.exists ? (
+                  <span className="inline-flex px-2 py-0.5 rounded-md bg-green-50 text-green-700 text-[11px] font-medium">
+                    正常
+                  </span>
+                ) : (
+                  <span className="inline-flex px-2 py-0.5 rounded-md bg-zinc-100 text-zinc-500 text-[11px] font-medium">
+                    已删除
+                  </span>
+                )}
+              </td>
+            </tr>
+            {open && (
+              <tr key={`${ins.name}-detail`} className="bg-zinc-50/50">
+                <td colSpan={6} className="py-2 px-4">
+                  <table className="w-full text-[12px]">
+                    <thead>
+                      <tr className="text-left text-zinc-400">
+                        <th className="py-1.5 pr-3 font-medium">模型</th>
+                        <th className="py-1.5 pr-3 font-medium text-right">请求数</th>
+                        <th className="py-1.5 pr-3 font-medium text-right">输入</th>
+                        <th className="py-1.5 pr-3 font-medium text-right">输出</th>
+                        <th className="py-1.5 font-medium text-right">总计</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {ins.models.map((m) => (
+                        <tr key={m.model} className="border-b border-zinc-100/60">
+                          <td className="py-1.5 pr-3 text-zinc-700">{m.model}</td>
+                          <td className="py-1.5 pr-3 text-right tabular-nums text-zinc-500">{fmt(m.requests)}</td>
+                          <td className="py-1.5 pr-3 text-right tabular-nums text-zinc-500">{fmt(m.prompt_tokens)}</td>
+                          <td className="py-1.5 pr-3 text-right tabular-nums text-zinc-500">{fmt(m.completion_tokens)}</td>
+                          <td className="py-1.5 text-right tabular-nums font-medium text-zinc-700">{fmt(m.total_tokens)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+
+                  {ins.nodes && ins.nodes.length > 0 && (
+                    <>
+                      <div className="mt-3 mb-1 text-[12px] font-medium text-zinc-500">
+                        调用节点明细（经统一网关路由）
+                      </div>
+                      <table className="w-full text-[12px]">
+                        <thead>
+                          <tr className="text-left text-zinc-400">
+                            <th className="py-1.5 pr-3 font-medium">节点</th>
+                            <th className="py-1.5 pr-3 font-medium text-right">请求数</th>
+                            <th className="py-1.5 pr-3 font-medium text-right">输入</th>
+                            <th className="py-1.5 pr-3 font-medium text-right">输出</th>
+                            <th className="py-1.5 font-medium text-right">总计</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {ins.nodes.map((n) => (
+                            <tr key={n.addr} className="border-b border-zinc-100/60">
+                              <td className="py-1.5 pr-3 text-zinc-700">{n.name}</td>
+                              <td className="py-1.5 pr-3 text-right tabular-nums text-zinc-500">{fmt(n.requests)}</td>
+                              <td className="py-1.5 pr-3 text-right tabular-nums text-zinc-500">{fmt(n.prompt_tokens)}</td>
+                              <td className="py-1.5 pr-3 text-right tabular-nums text-zinc-500">{fmt(n.completion_tokens)}</td>
+                              <td className="py-1.5 text-right tabular-nums font-medium text-zinc-700">{fmt(n.total_tokens)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </>
+                  )}
+                </td>
+              </tr>
+            )}
+          </Fragment>
+        )
+      })}
+    </>
+  )
+}
 
 function Card({
   label,
@@ -150,6 +267,11 @@ export default function StatsPage({
 
   const instances = stats?.instances ?? []
   const isEmpty = !stats || instances.length === 0
+  // 池成员（join_gateway）与普通实例分组
+  const poolMembers = instances.filter((i) => i.join_gateway)
+  const regularInstances = instances.filter((i) => !i.join_gateway)
+  const [poolExpanded, setPoolExpanded] = useState(false)
+  const visiblePool = poolExpanded ? poolMembers : poolMembers.slice(0, 4)
   const healthRecords = health
     ? healthExpanded
       ? health.records
@@ -319,121 +441,69 @@ export default function StatsPage({
             <span className="text-[13px]">暂无统计数据，启动实例并产生对话后会自动记录</span>
           </div>
         ) : (
-          <table className="w-full text-[13px]">
-            <thead>
-              <tr className="text-left text-[12px] text-zinc-500 border-b border-zinc-100">
-                <th className="py-2 pr-3 font-medium">实例</th>
-                <th className="py-2 pr-3 font-medium text-right">请求数</th>
-                <th className="py-2 pr-3 font-medium text-right">输入 Token</th>
-                <th className="py-2 pr-3 font-medium text-right">输出 Token</th>
-                <th className="py-2 pr-3 font-medium text-right">总计</th>
-                <th className="py-2 font-medium">状态</th>
-              </tr>
-            </thead>
-            <tbody>
-              {instances.map((ins) => {
-                const open = expanded.has(ins.name)
-                const hasDetail = (ins.models?.length ?? 0) > 0 || (ins.nodes?.length ?? 0) > 0
-                return (
-                  <Fragment key={ins.name}>
-                    <tr
-                      onClick={() => hasDetail && toggleExpand(ins.name)}
-                      className={clsx(
-                        'border-b border-zinc-50 hover:bg-zinc-50/60 transition-colors',
-                        hasDetail ? 'cursor-pointer' : '',
-                      )}
-                    >
-                      <td className="py-2.5 pr-3 font-medium text-zinc-800 flex items-center gap-1.5">
-                        {hasDetail ? (
-                          open ? (
-                            <ChevronDown size={14} className="text-zinc-400" />
-                          ) : (
-                            <ChevronRight size={14} className="text-zinc-400" />
-                          )
-                        ) : (
-                          <span className="w-3.5" />
-                        )}
-                        {ins.name}
-                      </td>
-                      <td className="py-2.5 pr-3 text-right tabular-nums text-zinc-600">{fmt(ins.requests)}</td>
-                      <td className="py-2.5 pr-3 text-right tabular-nums text-zinc-600">{fmt(ins.prompt_tokens)}</td>
-                      <td className="py-2.5 pr-3 text-right tabular-nums text-zinc-600">{fmt(ins.completion_tokens)}</td>
-                      <td className="py-2.5 pr-3 text-right tabular-nums font-medium text-zinc-900">{fmt(ins.total_tokens)}</td>
-                      <td className="py-2.5">
-                        {ins.exists ? (
-                          <span className="inline-flex px-2 py-0.5 rounded-md bg-green-50 text-green-700 text-[11px] font-medium">
-                            正常
-                          </span>
-                        ) : (
-                          <span className="inline-flex px-2 py-0.5 rounded-md bg-zinc-100 text-zinc-500 text-[11px] font-medium">
-                            已删除
-                          </span>
-                        )}
-                      </td>
+          <>
+            {/* 普通实例 */}
+            {regularInstances.length > 0 && (
+              <>
+                <table className="w-full text-[13px]">
+                  <thead>
+                    <tr className="text-left text-[12px] text-zinc-500 border-b border-zinc-100">
+                      <th className="py-2 pr-3 font-medium">实例</th>
+                      <th className="py-2 pr-3 font-medium text-right">请求数</th>
+                      <th className="py-2 pr-3 font-medium text-right">输入 Token</th>
+                      <th className="py-2 pr-3 font-medium text-right">输出 Token</th>
+                      <th className="py-2 pr-3 font-medium text-right">总计</th>
+                      <th className="py-2 font-medium">状态</th>
                     </tr>
-                    {open && (
-                      <tr key={`${ins.name}-detail`} className="bg-zinc-50/50">
-                        <td colSpan={6} className="py-2 px-4">
-                          <table className="w-full text-[12px]">
-                            <thead>
-                              <tr className="text-left text-zinc-400">
-                                <th className="py-1.5 pr-3 font-medium">模型</th>
-                                <th className="py-1.5 pr-3 font-medium text-right">请求数</th>
-                                <th className="py-1.5 pr-3 font-medium text-right">输入</th>
-                                <th className="py-1.5 pr-3 font-medium text-right">输出</th>
-                                <th className="py-1.5 font-medium text-right">总计</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {ins.models.map((m) => (
-                                <tr key={m.model} className="border-b border-zinc-100/60">
-                                  <td className="py-1.5 pr-3 text-zinc-700">{m.model}</td>
-                                  <td className="py-1.5 pr-3 text-right tabular-nums text-zinc-500">{fmt(m.requests)}</td>
-                                  <td className="py-1.5 pr-3 text-right tabular-nums text-zinc-500">{fmt(m.prompt_tokens)}</td>
-                                  <td className="py-1.5 pr-3 text-right tabular-nums text-zinc-500">{fmt(m.completion_tokens)}</td>
-                                  <td className="py-1.5 text-right tabular-nums font-medium text-zinc-700">{fmt(m.total_tokens)}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
+                  </thead>
+                  <tbody>
+                    <InstanceRows list={regularInstances} expanded={expanded} onToggle={toggleExpand} />
+                  </tbody>
+                </table>
+              </>
+            )}
 
-                          {ins.nodes && ins.nodes.length > 0 && (
-                            <>
-                              <div className="mt-3 mb-1 text-[12px] font-medium text-zinc-500">
-                                调用节点明细（经统一网关路由）
-                              </div>
-                              <table className="w-full text-[12px]">
-                                <thead>
-                                  <tr className="text-left text-zinc-400">
-                                    <th className="py-1.5 pr-3 font-medium">节点</th>
-                                    <th className="py-1.5 pr-3 font-medium text-right">请求数</th>
-                                    <th className="py-1.5 pr-3 font-medium text-right">输入</th>
-                                    <th className="py-1.5 pr-3 font-medium text-right">输出</th>
-                                    <th className="py-1.5 font-medium text-right">总计</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {ins.nodes.map((n) => (
-                                    <tr key={n.addr} className="border-b border-zinc-100/60">
-                                      <td className="py-1.5 pr-3 text-zinc-700">{n.name}</td>
-                                      <td className="py-1.5 pr-3 text-right tabular-nums text-zinc-500">{fmt(n.requests)}</td>
-                                      <td className="py-1.5 pr-3 text-right tabular-nums text-zinc-500">{fmt(n.prompt_tokens)}</td>
-                                      <td className="py-1.5 pr-3 text-right tabular-nums text-zinc-500">{fmt(n.completion_tokens)}</td>
-                                      <td className="py-1.5 text-right tabular-nums font-medium text-zinc-700">{fmt(n.total_tokens)}</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </>
-                          )}
-                        </td>
-                      </tr>
+            {/* 池成员测试 */}
+            {poolMembers.length > 0 && (
+              <div className="mt-6">
+                <div className="flex items-center gap-2 mb-2">
+                  <h3 className="text-[13px] font-semibold text-zinc-800">池成员测试</h3>
+                  <span className="text-[11px] text-zinc-400">
+                    {poolMembers.length} 个池成员（统一网关路由）
+                  </span>
+                </div>
+                <table className="w-full text-[13px]">
+                  <thead>
+                    <tr className="text-left text-[12px] text-zinc-500 border-b border-zinc-100">
+                      <th className="py-2 pr-3 font-medium">实例</th>
+                      <th className="py-2 pr-3 font-medium text-right">请求数</th>
+                      <th className="py-2 pr-3 font-medium text-right">输入 Token</th>
+                      <th className="py-2 pr-3 font-medium text-right">输出 Token</th>
+                      <th className="py-2 pr-3 font-medium text-right">总计</th>
+                      <th className="py-2 font-medium">状态</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <InstanceRows list={visiblePool} expanded={expanded} onToggle={toggleExpand} />
+                  </tbody>
+                </table>
+                {poolMembers.length > 4 && (
+                  <div className="mt-2 flex items-center gap-2 text-[11px]">
+                    <button
+                      type="button"
+                      onClick={() => setPoolExpanded((prev) => !prev)}
+                      className="text-zinc-400 hover:text-zinc-600"
+                    >
+                      {poolExpanded ? '收起' : `展开全部 (${poolMembers.length})`}
+                    </button>
+                    {!poolExpanded && (
+                      <span className="text-zinc-400">{poolMembers.length - 4} 个池成员已折叠</span>
                     )}
-                  </Fragment>
-                )
-              })}
-            </tbody>
-          </table>
+                  </div>
+                )}
+              </div>
+            )}
+          </>
         )}
         {!isEmpty && (
           <div className="mt-3 text-[11px] text-zinc-400">

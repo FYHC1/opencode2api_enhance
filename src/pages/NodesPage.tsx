@@ -529,12 +529,12 @@ export default function NodesPage({
                             </span>
                           )}
                           {badgeNode(r)}
-                          {n.group === '订阅' && (
+                          {n.group !== '' && (
                             <button
                               onClick={() => void doDeleteNode(n.name)}
                               disabled={deletingNode === n.name}
                               className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-red-500 bg-red-50 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
-                              title="删除订阅缓存中的此节点"
+                              title="删除此节点（仅订阅缓存中的节点可删）"
                             >
                               {deletingNode === n.name ? <Loader2 size={11} className="animate-spin" /> : <Trash2 size={11} />}
                               删除

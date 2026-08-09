@@ -239,6 +239,8 @@ export type InstanceStat = {
   name: string
   /** 实例目录存在但实例列表中已无（已删除/历史实例）时为 false */
   exists: boolean
+  /** 是否加入统一网关池（池成员测试） */
+  join_gateway?: boolean
   requests: number
   prompt_tokens: number
   completion_tokens: number

@@ -465,6 +465,11 @@ fn run_scan_loop_parallel(
             handles.push(scope.spawn(move || -> Result<()> {
                 let log_dir = worker_dir.join("logs");
                 let oc_cfg_path = worker_dir.join("opencode2api.json");
+                // 错开 worker 启动：避免 N 个 sing-box + opencode2api 同时拉起造成资源尖峰
+                // （低并发/单 worker 时无等待）
+                if worker_index > 0 {
+                    thread::sleep(Duration::from_millis(worker_index as u64 * 300));
+                }
                 for (node_index, node) in nodes.iter().enumerate() {
                     if node_index % worker_count != worker_index {
                         continue;
