@@ -18,8 +18,10 @@ pub fn ensure_binaries(bin_dir: &Path) -> Result<bool> {
 
 fn ensure_file(dir: &Path, name: &str, data: &[u8]) -> Result<bool> {
     let path = dir.join(name);
-    let need_write = match fs::metadata(&path) {
-        Ok(m) => m.len() != data.len() as u64,
+    // 内容级校验：仅比大小可能因不同构建恰好同长而漏更新（导致旧版残留）。
+    // 比较关键区段哈希（取首/中/尾三段的 FNV-1a），避免整文件读取大对象。
+    let need_write = match fs::read(&path) {
+        Ok(existing) => !same_content(&existing, data),
         Err(_) => true,
     };
     if need_write {
@@ -29,4 +31,29 @@ fn ensure_file(dir: &Path, name: &str, data: &[u8]) -> Result<bool> {
     } else {
         Ok(false)
     }
+}
+
+/// 分段 FNV-1a 哈希比较（首 1KB / 中 1KB / 尾 1KB，外加长度）。
+/// 足够区分不同构建产物；不读全量大文件。
+fn same_content(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    hash_sample(a) == hash_sample(b)
+}
+
+fn hash_sample(d: &[u8]) -> u64 {
+    let n = d.len();
+    let mut h: u64 = 0xcbf29ce484222325;
+    for s in [0usize, n / 2, n.saturating_sub(1024)] {
+        let end = (s + 1024).min(n);
+        if s >= n {
+            continue;
+        }
+        for &b in &d[s..end] {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+    }
+    h
 }

@@ -96,6 +96,8 @@ src/                    src-tauri/src/                     main.go 等（根目�
 | 5 | 新分支基线 | **从 `feature/debug-tooling` 分出** `feat/architecture-v2` |
 | 6 | 兼容性红线 | 厂商特有信息（鉴权头、错误码表、会话标识、免费判定规则等）一律进厂商实现或配置，**不写死在 core**；有不确定处先问再定 |
 | 7 | 客户端界面统一（客户新要求，2026-08-08） | **所有客户端（Win exe / mac / Linux / Web）一律复用同一套 `src/` 界面**：独享、实例池、节点池、统计、日志、设置六个页面，外观与交互保持一致；**桌面 exe 不设登录页**（壳启动 core 时 `-password ""` 关闭鉴权，与旧 exe 行为一致）；Web 版沿用密码鉴权 |
+| 8 | 环境数据目录隔离（2026-08-09） | **每个运行环境独立配置空间**（`%APPDATA%\opencode2api-manager*`，经 `OPCODE2API_DATA_DIR` 注入，Go core 侧 `DefaultDataDir()` 读取）：`opencode2api-manager`（正式 release）／`-dev`（tauri dev）／`-test`（便携测试包 portable.txt）／`-web-dev`（web 开发）。实例池/配置/runtime 互不干扰；端口段亦按环境隔离（正式 18000+ / dev 30000+ / 便携 50000+）。新增环境一律按此命名约定追加 |
+| 9 | 内嵌二进制更新（2026-08-09） | 壳释放内嵌 core/sing-box 时按**内容哈希**校验（非仅文件大小），避免不同构建恰好同长导致旧版残留 |
 
 ---
 
