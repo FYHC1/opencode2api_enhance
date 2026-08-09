@@ -340,7 +340,7 @@ type PoolVendor interface {
 | 10b | P3 | P3-B：Chatter（Connect-RPC 协议移植）/ Mailbox（TMaily）/ Registrar（devin_auth 注册链）真实实现 | ✅ | 2026-08-08 | B1~B6 `4a85882`/`55ff34b`；B7 流中无感换号 `00ae506`；全链路单测绿，待真机冒烟 |
 | 11 | P3 | ★24h 冷却 / ★额度≤20% 预注册 / ★中途无感换号 三能力完成 | ✅ | 2026-08-08 | 冷却+预注册 ✅（池层 `edde8b8`）；流中无感换号 ✅（`00ae506`，回卷续写与网关断点续写同文衔接） |
 280→| 12 | P3 | `/v1/models` 双厂商聚合（前缀区分），分发与厂商级 failover 通过 | ✅ | 2026-08-08 | 聚合/前缀/分发/failover 已由 P2-C 落地（待 windsurf 真接） |
-| 13 | P3 | 池型全链路冒烟：无号自动注册→对话→额度低预注册→换号续写 | ⬜ | | 需真实 windsurf 账号/环境；当前无真机验证 |
+| 13 | P3 | 池型全链路冒烟：无号自动注册→对话→额度低预注册→换号续写 | ✅ | 2026-08-09 | **真机通过**：`SMOKE_REAL=1 go test -run TestVendorChat` —— TMaily 真实邮箱 → Devin 真实注册链 → 真实对话 swe-1-6-slow 返回 "OK"（16.6s）；外部服务（tmaily.com/devin.ai/codeium.com）当前可用；冒烟测试门控保留在 `vendors/windsurf/smoke_vendor_test.go` |
 | 14 | P4 | P4 详细子计划制定（P4-1~P4-6） | ✅ | 2026-08-08 | 「四、P4」细化版：核心决策+验收点+决策备注；行为来源 `src-tauri/*.rs` 工读 |
 | 15 | P4 | 管理功能并入 core（HTTP API），浏览器全功能可用 | ✅ | 2026-08-09 | P4-1~P4-5 全落地（commit `2cca241`/`797e2af`/`c7cb80f`/`0e7d958`/`905af85`）；E2E HTTP 21 项 PASS |
 | 16 | P4 | 桌面版功能与现状等价；Tauri 薄壳化 | ✅ | 2026-08-09 | 大步1~3 完成：api.ts 走 HTTP（`e0196c3`）→ 壳薄壳化（`c79312f`）→ exe 交付（`7022b95`）；随后 12 个修复提交收敛到可用 |
@@ -357,7 +357,7 @@ type PoolVendor interface {
 | P1 拆 core | 🔄 部分完成（P1.1 文件拆分 ✅；P1.2 已出 contract/aggregator/router 三包 + P4 期间新增 manager 包；protocol/gateway/server 未拆，根目录 main 包仍含管理域代码） |
 | P2 收厂商（opencode 收拢） | ✅ 完成（契约/聚合/分发/failover 全绿；单厂商行为与基线一致） |
 | P3 池型厂商（windsurf） | ✅ 池层+全接缝完成（P3-A 池层 `edde8b8`；P3-B1~B7 上游协议移植 `4a85882`/`55ff34b`/`00ae506`；三能力：冷却/预注册/流中无感换号全部落地） |
-| P3 加厂商 | ⬜ 未开始（池型全链路真机冒烟 #13 待做） |
+| P3 加厂商 | ✅ **已完成**（池型全链路真机冒烟通过 2026-08-09：无号自动注册→真实对话 swe-1-6-slow；后续额度预注册/流中换号单测覆盖，可随用随验） |
 | P4 统一 UI | ✅ **已完成并可交付**（管理功能并入 core HTTP API → 前端走 HTTP → 壳薄壳化 → exe 打包 → 系统性验收修复；win exe 已能让客户使用） |
 | P5 多平台 | ⬜ 未开始 |
 
