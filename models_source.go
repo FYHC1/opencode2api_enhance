@@ -10,7 +10,9 @@ import (
 	"github.com/6Kmfi6HP/opencode2api/core/contract"
 	chatRouter "github.com/6Kmfi6HP/opencode2api/core/router"
 	"github.com/6Kmfi6HP/opencode2api/vendors/opencode"
-	windVendor "github.com/6Kmfi6HP/opencode2api/vendors/windsurf"
+	// 聚合厂商注册：blank import 触发各厂商 init() 自注册（扩增即生效）。
+	// 新厂商加一行 blank import 即可，无需改装配逻辑。
+	_ "github.com/6Kmfi6HP/opencode2api/vendors/windsurf"
 )
 
 // surfaceGoKey 对应 contract.Model.Meta["surface"] 的 go 目录取值（见 vendors/opencode）。
@@ -42,11 +44,11 @@ func (rootTransport) Mark(proxyAddr string, status int, reqErr error) {
 	markSocks5Result(proxyAddr, status, reqErr)
 }
 
-// newAggregator 按配置装配厂商注册表。
+// newAggregator 装配厂商注册表：默认自动注册全部已编译厂商（扩增即生效），
+// 配置 providers 可选覆盖（enabled=false 禁用 / id、name、params 覆盖）。
 //
-// 缺省（providers 为空/未配置）时注册单 opencode，保持与基线一致；
-// 配置可声明多个厂商（type: "opencode" | 后续 "windsurf"）。
-// 调用方需保证 config 已 applyConfig（providersCfg 就绪）。
+// 兼容基线：历史上单 opencode 且无 providers 配置时，行为与自动注册 opencode 一致。
+// 调用方需保证 config 已 applyConfig（routingCfg 就绪，providersCfg 可选）。
 func newAggregator() *aggregator.Aggregator {
 	agg := aggregator.New()
 
@@ -54,41 +56,56 @@ func newAggregator() *aggregator.Aggregator {
 	cfgs := append([]ProviderCfg(nil), providersCfg...)
 	configMu.RUnlock()
 
-	if len(cfgs) == 0 {
-		cfgs = []ProviderCfg{{ID: "opencode", Type: "opencode", Name: "OpenCode"}}
+	// 有显式配置 → 按配置注册（允许 enabled:false 关闭某厂商）
+	if len(cfgs) > 0 {
+		for _, pc := range cfgs {
+			if pc.Enabled != nil && !*pc.Enabled {
+				continue
+			}
+			name := pc.Name
+			if name == "" {
+				name = pc.ID
+			}
+			if v, err := contract.Create(pc.Type, contract.ProviderSpec{
+				Type:   pc.Type,
+				ID:     pc.ID,
+				Name:   name,
+				Params: vendorParams(pc.Type),
+			}); err == nil {
+				agg.Register(v)
+			} else {
+				slog.Warn("vendor create failed, skipped", "type", pc.Type, "error", err)
+			}
+		}
+		return agg
 	}
-	for _, pc := range cfgs {
-		if pc.Enabled != nil && !*pc.Enabled {
-			continue
-		}
-		name := pc.Name
-		if name == "" {
-			name = pc.ID
-		}
-		switch pc.Type {
-		case "opencode":
-			agg.Register(opencode.New(opencode.Config{
-				ID:            pc.ID,
-				Name:          name,
-				Transport:     rootTransport{},
-				AdminPassword: adminPassword,
-			}))
-		case "windsurf":
-			// 池型厂商：接缝（Mailbox/Registrar/Chatter）由 P3-B 注入；
-			// 当前仍可经契约/路由联通，未接线时 Chat 明确报错。
-			agg.Register(windVendor.New(windVendor.Config{
-				ID:             pc.ID,
-				Name:           name,
-				HTTPClient:     http.DefaultClient,
-				MinAvailable:   1,
-				QuotaThreshold: 20,
-				Cooldown:       24 * time.Hour,
-			}))
-		default:
-			slog.Warn("unknown provider type, skipped", "id", pc.ID, "type", pc.Type)
+
+	// 未配置 → 自动注册所有已编译厂商（扩增供应商零配置）
+	for _, t := range contract.RegisteredTypes() {
+		if v, err := contract.Create(t, contract.ProviderSpec{
+			Type:   t,
+			Params: vendorParams(t),
+		}); err == nil {
+			agg.Register(v)
+		} else {
+			slog.Warn("vendor auto-register failed", "type", t, "error", err)
 		}
 	}
 	return agg
+}
+
+// vendorParams 按厂商类型注入运行时必需的装配参数（Transport/AdminPassword 等）。
+func vendorParams(t string) map[string]any {
+	switch t {
+	case "opencode":
+		return map[string]any{
+			opencode.ParamTransport:      rootTransport{},
+			opencode.ParamAdminPassword: adminPassword,
+		}
+	case "windsurf":
+		return map[string]any{}
+	}
+	return map[string]any{}
 }
 
 // newChatRouter 按配置构造"模型→厂商"路由器（缺省默认 opencode）。
