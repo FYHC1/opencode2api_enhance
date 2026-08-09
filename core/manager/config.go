@@ -30,6 +30,17 @@ type Config struct {
 	CallLogMax          int64  `json:"call_log_max,omitempty"`
 	ShowNodePrefix      bool   `json:"show_node_prefix,omitempty"`
 
+	// SubscribeURL 订阅地址；SubscribeIntervalMin 自动拉取间隔（分钟，<=0 不自动拉）。
+	SubscribeURL        string `json:"subscribe_url,omitempty"`
+	SubscribeIntervalMin int    `json:"subscribe_interval_min,omitempty"`
+
+	// 健康巡检：检查间隔（秒，<=0 不巡检）与自动重启连续失败阈值（<=0 不重启）。
+	HealthCheckIntervalSec  int `json:"health_check_interval_sec,omitempty"`
+	HealthRestartThreshold int `json:"health_restart_threshold,omitempty"`
+
+	// GatewayKey 统一网关鉴权密钥（空 = 回退默认 sk-unified-local；main 功能 M6）。
+	GatewayKey string `json:"gateway_key,omitempty"`
+
 	// Providers 厂商注册表（透传主程序 AppConfig 格式）：实例子进程/网关子进程
 	// 生成的 opencode2api.json 需要带上，才能像核心一样注册多厂商（如 windsurf）。
 	Providers []map[string]any `json:"providers,omitempty"`
@@ -99,6 +110,20 @@ func (m *Manager) ConfigGet(key string) (string, error) {
 		return strconv.FormatInt(cfg.CallLogMax, 10), nil
 	case "show_node_prefix":
 		return strconv.FormatBool(cfg.ShowNodePrefix), nil
+	case "subscribe_url":
+		return cfg.SubscribeURL, nil
+	case "subscribe_interval_min":
+		return strconv.Itoa(cfg.SubscribeIntervalMin), nil
+	case "health_check_interval_sec":
+		return strconv.Itoa(cfg.HealthCheckIntervalSec), nil
+	case "health_restart_threshold":
+		return strconv.Itoa(cfg.HealthRestartThreshold), nil
+	case "gateway_key":
+		// 密钥不回显：设置过返回掩码，未设置返回空（main 语义一致）。
+		if cfg.GatewayKey == "" {
+			return "", nil
+		}
+		return "******", nil
 	default:
 		return "", fmt.Errorf("Unknown config key: %s", key)
 	}
@@ -171,6 +196,35 @@ func (m *Manager) ConfigSet(key, value string) error {
 			return fmt.Errorf("invalid boolean for show_node_prefix: %s", value)
 		}
 		cfg.ShowNodePrefix = b
+	case "subscribe_url":
+		cfg.SubscribeURL = strings.TrimSpace(value)
+	case "subscribe_interval_min":
+		v, err := parseInt()
+		if err != nil {
+			return err
+		}
+		cfg.SubscribeIntervalMin = int(v)
+	case "health_check_interval_sec":
+		v, err := parseInt()
+		if err != nil {
+			return err
+		}
+		cfg.HealthCheckIntervalSec = int(v)
+	case "health_restart_threshold":
+		v, err := parseInt()
+		if err != nil {
+			return err
+		}
+		cfg.HealthRestartThreshold = int(v)
+	case "gateway_key":
+		// 空串 = 重置为默认（gatewayKey() 回退 sk-unified-local）；非空需至少 8 字符（main 校验一致）。
+		if value == "" {
+			cfg.GatewayKey = ""
+		} else if len(value) < 8 {
+			return errors.New("网关密钥至少 8 个字符")
+		} else {
+			cfg.GatewayKey = value
+		}
 	default:
 		return errors.New("Unknown config key: " + key)
 	}
@@ -192,6 +246,12 @@ type ConfigView struct {
 	FailoverProbeMax    int64  `json:"failover_probe_max"`
 	CallLogMax          int64  `json:"call_log_max"`
 	ShowNodePrefix      bool   `json:"show_node_prefix"`
+	SubscribeURL         string `json:"subscribe_url"`
+	SubscribeIntervalMin int    `json:"subscribe_interval_min"`
+	HealthCheckIntervalSec  int `json:"health_check_interval_sec"`
+	HealthRestartThreshold int `json:"health_restart_threshold"`
+	HasGatewayKey           bool `json:"has_gateway_key"`
+	GatewayKey              string `json:"gateway_key"`
 }
 
 // ConfigViewOf 生成前端视图（密码与 clash token 脱敏为掩码）。
@@ -219,7 +279,21 @@ func (m *Manager) ConfigViewOf() ConfigView {
 		FailoverProbeMax:    def(cfg.FailoverProbeMax, 3),
 		CallLogMax:          def(cfg.CallLogMax, 5000),
 		ShowNodePrefix:      cfg.ShowNodePrefix,
+		SubscribeURL:        cfg.SubscribeURL,
+		SubscribeIntervalMin: cfg.SubscribeIntervalMin,
+		HealthCheckIntervalSec:  cfg.HealthCheckIntervalSec,
+		HealthRestartThreshold: cfg.HealthRestartThreshold,
+		HasGatewayKey:           cfg.GatewayKey != "",
+		GatewayKey:              maskSecret(cfg.GatewayKey),
 	}
+}
+
+// effectiveGatewayKey 生效的统一网关密钥：配置未设置/为空时回退默认 "sk-unified-local"。
+func effectiveGatewayKey(cfg Config) string {
+	if cfg.GatewayKey != "" {
+		return cfg.GatewayKey
+	}
+	return unifiedGatewayKey
 }
 
 // maskSecret 非空秘密展示为 ***。

@@ -66,6 +66,8 @@ func main() {
 	flag.BoolVar(&gatewayMode, "gateway", false, "统一网关模式（记录节点级统计）")
 	flag.StringVar(&logLevel, "log-level", "info", "日志级别: debug/info/warn/error")
 	flag.StringVar(&logFile, "log-file", "", "日志文件路径（留空输出到 stdout）")
+	var listenAddr string
+	flag.StringVar(&listenAddr, "listen", "", "监听地址（默认 :<port> 全接口；headless/服务器部署可显式 127.0.0.1 收紧或 0.0.0.0 暴露）")
 	flag.BoolVar(&showVersion, "version", false, "显示版本信息")
 	flag.Parse()
 
@@ -132,6 +134,9 @@ func main() {
 	mux := http.NewServeMux()
 	registerHTTPRoutes(mux, managerInst)
 	addr := ":" + port
+	if listenAddr != "" {
+		addr = listenAddr + ":" + port
+	}
 	slog.Info("listening", "addr", addr)
 	if err := http.ListenAndServe(addr, withRecover(mux)); err != nil {
 		slog.Error("server terminated", "error", err)
@@ -180,12 +185,22 @@ func registerHTTPRoutes(mux *http.ServeMux, managerInst *manager.Manager) {
 	mux.HandleFunc("/api/admin/stats/reset", loggingMiddleware(apiKeyAuthMiddleware(managerInst.ResetStatsHandler())))
 	mux.HandleFunc("/api/admin/call-log", loggingMiddleware(requireAuth(managerInst.CallLogHandler())))
 	mux.HandleFunc("/api/admin/call-log/clear", loggingMiddleware(requireAuth(managerInst.ClearCallLogHandler())))
+	// 调用日志过滤与聚合（main 分支功能迁移 M4）。
+	mux.HandleFunc("/api/admin/call-log/filtered", loggingMiddleware(requireAuth(managerInst.CallLogFilteredHandler())))
+	mux.HandleFunc("/api/admin/call-log/aggregate", loggingMiddleware(requireAuth(managerInst.CallLogAggregateHandler())))
 	mux.HandleFunc("/api/admin/binaries", loggingMiddleware(apiKeyAuthMiddleware(managerInst.BinariesHandler())))
 	mux.HandleFunc("/api/admin/instances", loggingMiddleware(requireAuth(managerInst.InstancesHandler())))
 	// P4-5：装配运行依赖（进程执行器 / 网关 / 扫描），HTTP 管理面用同一份核心。
 	managerInst.SetDeps(manager.NewRealRunner(), manager.NewGateway(managerInst, 0), nil)
+	// M1: 订阅自动拉取后台循环（配置 subscribe_url/interval_min 生效时运行，配置热更新无需重启）。
+	managerInst.StartSubscribeLoop()
+	// M2: 健康巡检后台循环（配置 health_check_interval_sec 生效时运行）。
+	managerInst.StartHealthLoop()
 	// P4-5: 管理域操作面路由（/api/admin/*）。
 	mux.HandleFunc("/api/admin/nodes", loggingMiddleware(requireAuth(managerInst.NodesHandler())))
+	// 节点删除（main 分支功能迁移 M5；仅订阅缓存节点可删）。
+	mux.HandleFunc("/api/admin/nodes/delete", loggingMiddleware(requireAuth(managerInst.NodeDeleteHandler())))
+	mux.HandleFunc("/api/admin/nodes/delete-batch", loggingMiddleware(requireAuth(managerInst.NodeDeleteBatchHandler())))
 	mux.HandleFunc("/api/admin/instances/add", loggingMiddleware(requireAuth(managerInst.InstancesAddHandler())))
 	mux.HandleFunc("/api/admin/instances/remove", loggingMiddleware(requireAuth(managerInst.InstancesRemoveHandler())))
 	mux.HandleFunc("/api/admin/instances/start", loggingMiddleware(requireAuth(managerInst.InstancesStartHandler())))
@@ -204,6 +219,17 @@ func registerHTTPRoutes(mux *http.ServeMux, managerInst *manager.Manager) {
 	mux.HandleFunc("/api/admin/scan/stop", loggingMiddleware(requireAuth(managerInst.ScanStopHandler())))
 	mux.HandleFunc("/api/admin/autostart", loggingMiddleware(requireAuth(managerInst.AutostartGetHandler())))
 	mux.HandleFunc("/api/admin/autostart/set", loggingMiddleware(requireAuth(managerInst.AutostartSetHandler())))
+	// 订阅拉取与批量导入（main 分支功能迁移 M1）。
+	mux.HandleFunc("/api/admin/subscribe/preview", loggingMiddleware(requireAuth(managerInst.SubscribePreviewHandler())))
+	mux.HandleFunc("/api/admin/subscribe/import", loggingMiddleware(requireAuth(managerInst.SubscribeImportHandler())))
+	mux.HandleFunc("/api/admin/subscribe/import-pool", loggingMiddleware(requireAuth(managerInst.SubscribeImportPoolHandler())))
+	// 健康巡检（main 分支功能迁移 M2）。
+	mux.HandleFunc("/api/admin/health/check", loggingMiddleware(requireAuth(managerInst.HealthCheckHandler())))
+	mux.HandleFunc("/api/admin/health/summary", loggingMiddleware(requireAuth(managerInst.HealthSummaryHandler())))
+	// 报表导出（main 分支功能迁移 M3）。
+	mux.HandleFunc("/api/admin/export/call-log.csv", loggingMiddleware(requireAuth(managerInst.ExportCallLogCSVHandler())))
+	mux.HandleFunc("/api/admin/export/instances.json", loggingMiddleware(requireAuth(managerInst.ExportInstancesJSONHandler())))
+	mux.HandleFunc("/api/admin/export/stats.json", loggingMiddleware(requireAuth(managerInst.ExportStatsJSONHandler())))
 	mux.HandleFunc("/api/admin/data/clean", loggingMiddleware(requireAuth(managerInst.DataCleanHandler())))
 	mux.HandleFunc("/api/admin/gateway/status", loggingMiddleware(requireAuth(managerInst.GatewayStatusHandler())))
 	mux.HandleFunc("/api/admin/gateway/route-mode", loggingMiddleware(requireAuth(managerInst.GatewayRouteModeHandler())))

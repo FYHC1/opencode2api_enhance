@@ -36,9 +36,11 @@ func autostartRunName(dataDir string) string {
 }
 
 // autostartStatus 查询自启注册表项是否存在。
+// 非 Windows 平台：返回「未启用」（合理状态）不报错——对齐 main 的修复，
+// 避免 Linux/headless 下设置页因 GET 报错整体加载失败（仅 SET 时明确报错）。
 func autostartStatus(dataDir string) (bool, error) {
 	if runtime.GOOS != "windows" {
-		return false, fmt.Errorf("仅 Windows 支持开机自启")
+		return false, nil
 	}
 	name := autostartRunName(dataDir)
 	out, err := exec.Command("reg", "query", autostartRunKey, "/v", name).CombinedOutput()

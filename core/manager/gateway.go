@@ -70,7 +70,7 @@ func NewGateway(m *Manager, port uint16) *Gateway {
 	if port == 0 {
 		port = managerGatewayPort()
 	}
-	return &Gateway{m: m, port: port, password: unifiedGatewayKey, routeMode: "smart"}
+	return &Gateway{m: m, port: port, password: effectiveGatewayKey(m.loadConfig()), routeMode: "smart"}
 }
 
 // Port 返回网关端口。

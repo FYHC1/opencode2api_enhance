@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useState } from 'react'
 import clsx from 'clsx'
-import { BarChart3, ChevronDown, ChevronRight, RefreshCw, RotateCcw, Inbox } from 'lucide-react'
-import { api, type StatsSummary } from '../lib/api'
+import { BarChart3, ChevronDown, ChevronRight, RefreshCw, RotateCcw, Inbox, HeartPulse } from 'lucide-react'
+import { api, type StatsSummary, type HealthSummary } from '../lib/api'
 
 /** 千分位格式化 */
 const fmt = (n: number) => n.toLocaleString('en-US')
@@ -39,6 +39,9 @@ export default function StatsPage({
   const [showResetConfirm, setShowResetConfirm] = useState(false)
   // 「清除已删除节点」默认勾选
   const [clearDeleted, setClearDeleted] = useState(true)
+  // 健康巡检（main 功能 M2）
+  const [health, setHealth] = useState<HealthSummary | null>(null)
+  const [checking, setChecking] = useState(false)
 
   const load = useCallback(
     async (silent = true) => {
@@ -50,6 +53,10 @@ export default function StatsPage({
         if (!silent) toast(String(e), false)
         else setError(String(e))
       }
+      try {
+        const h = await api.healthSummary()
+        setHealth(h)
+      } catch { /* 巡检未配置时忽略 */ }
     },
     [toast],
   )
@@ -132,6 +139,54 @@ export default function StatsPage({
         <Card label="总输入 Token" value={fmt(stats?.total_prompt_tokens ?? 0)} />
         <Card label="总输出 Token" value={fmt(stats?.total_completion_tokens ?? 0)} />
         <Card label="总 Token" value={fmt(stats?.total_tokens ?? 0)} accent />
+      </div>
+
+      {/* 健康巡检卡片（main 功能 M2） */}
+      <div className="bg-white rounded-[16px] border border-zinc-200 shadow-sm p-5">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-[14px] font-semibold text-zinc-900 flex items-center gap-2">
+            <HeartPulse size={16} className="text-teal-700" />
+            健康巡检
+          </h2>
+          <button
+            type="button"
+            onClick={async () => {
+              setChecking(true)
+              try {
+                const h = await api.healthCheck()
+                setHealth(h)
+                toast('巡检完成', true)
+              } catch (e) {
+                toast(String(e), false)
+              } finally {
+                setChecking(false)
+              }
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-900 text-white text-[12px] font-medium hover:bg-zinc-700 transition-colors disabled:opacity-40"
+            disabled={checking}
+          >
+            <RefreshCw size={13} className={checking ? 'animate-spin' : ''} />
+            {checking ? '巡检中…' : '立即巡检'}
+          </button>
+        </div>
+        {health && health.total > 0 ? (
+          <div className="flex flex-wrap gap-3">
+            <div className="text-[13px] text-zinc-600">
+              运行中 <span className="font-semibold text-zinc-900">{health.total}</span> 个实例，
+              健康 <span className="font-semibold text-green-600">{health.healthy}</span> 个，
+              异常 <span className="font-semibold text-red-600">{health.unhealthy}</span> 个
+            </div>
+            {health.records.map((r) => (
+              <span key={r.name} className={clsx('inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[12px] border', r.healthy ? 'border-green-200 bg-green-50 text-green-700' : 'border-red-200 bg-red-50 text-red-700')}>
+                <span className={clsx('w-1.5 h-1.5 rounded-full', r.healthy ? 'bg-green-500' : 'bg-red-500')} />
+                {r.name}
+                {!r.healthy && r.consecutive_failures > 0 && `（连续失败 ${r.consecutive_failures} 次）`}
+              </span>
+            ))}
+          </div>
+        ) : (
+          <p className="text-[13px] text-zinc-400">暂无可巡检的运行中实例（在设置页配置巡检间隔后自动执行）</p>
+        )}
       </div>
 
       {error && !stats && (
