@@ -184,6 +184,8 @@ func registerHTTPRoutes(mux *http.ServeMux, managerInst *manager.Manager) {
 	mux.HandleFunc("/api/admin/instances", loggingMiddleware(requireAuth(managerInst.InstancesHandler())))
 	// P4-5：装配运行依赖（进程执行器 / 网关 / 扫描），HTTP 管理面用同一份核心。
 	managerInst.SetDeps(manager.NewRealRunner(), manager.NewGateway(managerInst, 0), nil)
+	// M1: 订阅自动拉取后台循环（配置 subscribe_url/interval_min 生效时运行，配置热更新无需重启）。
+	managerInst.StartSubscribeLoop()
 	// P4-5: 管理域操作面路由（/api/admin/*）。
 	mux.HandleFunc("/api/admin/nodes", loggingMiddleware(requireAuth(managerInst.NodesHandler())))
 	mux.HandleFunc("/api/admin/instances/add", loggingMiddleware(requireAuth(managerInst.InstancesAddHandler())))
@@ -204,6 +206,10 @@ func registerHTTPRoutes(mux *http.ServeMux, managerInst *manager.Manager) {
 	mux.HandleFunc("/api/admin/scan/stop", loggingMiddleware(requireAuth(managerInst.ScanStopHandler())))
 	mux.HandleFunc("/api/admin/autostart", loggingMiddleware(requireAuth(managerInst.AutostartGetHandler())))
 	mux.HandleFunc("/api/admin/autostart/set", loggingMiddleware(requireAuth(managerInst.AutostartSetHandler())))
+	// 订阅拉取与批量导入（main 分支功能迁移 M1）。
+	mux.HandleFunc("/api/admin/subscribe/preview", loggingMiddleware(requireAuth(managerInst.SubscribePreviewHandler())))
+	mux.HandleFunc("/api/admin/subscribe/import", loggingMiddleware(requireAuth(managerInst.SubscribeImportHandler())))
+	mux.HandleFunc("/api/admin/subscribe/import-pool", loggingMiddleware(requireAuth(managerInst.SubscribeImportPoolHandler())))
 	mux.HandleFunc("/api/admin/data/clean", loggingMiddleware(requireAuth(managerInst.DataCleanHandler())))
 	mux.HandleFunc("/api/admin/gateway/status", loggingMiddleware(requireAuth(managerInst.GatewayStatusHandler())))
 	mux.HandleFunc("/api/admin/gateway/route-mode", loggingMiddleware(requireAuth(managerInst.GatewayRouteModeHandler())))

@@ -207,7 +207,7 @@ func (m *Manager) listExternalNodes() []ClashNode {
 	return out
 }
 
-// ListNodesWithGroup 汇总节点（外部 API 优先去重，本地 profiles 补）；按 (group, name) 排序。
+// ListNodesWithGroup 汇总节点（外部 API 优先去重，本地 profiles 补，订阅缓存并入）；按 (group, name) 排序。
 func (m *Manager) ListNodesWithGroup() []ClashNode {
 	var out []ClashNode
 	seen := map[string]bool{}
@@ -223,6 +223,17 @@ func (m *Manager) ListNodesWithGroup() []ClashNode {
 			seen[n.Name] = true
 			out = append(out, n)
 		}
+	}
+	// 订阅缓存节点并入（节点池页「从订阅导入」的节点在此展示；去重优先已有来源）。
+	for _, n := range m.listSubscriptionNodes() {
+		if seen[n.Name] {
+			continue
+		}
+		seen[n.Name] = true
+		if n.Group == "" {
+			n.Group = "订阅"
+		}
+		out = append(out, n)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].Group != out[j].Group {

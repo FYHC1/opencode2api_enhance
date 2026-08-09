@@ -30,6 +30,10 @@ type Config struct {
 	CallLogMax          int64  `json:"call_log_max,omitempty"`
 	ShowNodePrefix      bool   `json:"show_node_prefix,omitempty"`
 
+	// SubscribeURL 订阅地址；SubscribeIntervalMin 自动拉取间隔（分钟，<=0 不自动拉）。
+	SubscribeURL        string `json:"subscribe_url,omitempty"`
+	SubscribeIntervalMin int    `json:"subscribe_interval_min,omitempty"`
+
 	// Providers 厂商注册表（透传主程序 AppConfig 格式）：实例子进程/网关子进程
 	// 生成的 opencode2api.json 需要带上，才能像核心一样注册多厂商（如 windsurf）。
 	Providers []map[string]any `json:"providers,omitempty"`
@@ -99,6 +103,10 @@ func (m *Manager) ConfigGet(key string) (string, error) {
 		return strconv.FormatInt(cfg.CallLogMax, 10), nil
 	case "show_node_prefix":
 		return strconv.FormatBool(cfg.ShowNodePrefix), nil
+	case "subscribe_url":
+		return cfg.SubscribeURL, nil
+	case "subscribe_interval_min":
+		return strconv.Itoa(cfg.SubscribeIntervalMin), nil
 	default:
 		return "", fmt.Errorf("Unknown config key: %s", key)
 	}
@@ -171,6 +179,14 @@ func (m *Manager) ConfigSet(key, value string) error {
 			return fmt.Errorf("invalid boolean for show_node_prefix: %s", value)
 		}
 		cfg.ShowNodePrefix = b
+	case "subscribe_url":
+		cfg.SubscribeURL = strings.TrimSpace(value)
+	case "subscribe_interval_min":
+		v, err := parseInt()
+		if err != nil {
+			return err
+		}
+		cfg.SubscribeIntervalMin = int(v)
 	default:
 		return errors.New("Unknown config key: " + key)
 	}
@@ -192,6 +208,8 @@ type ConfigView struct {
 	FailoverProbeMax    int64  `json:"failover_probe_max"`
 	CallLogMax          int64  `json:"call_log_max"`
 	ShowNodePrefix      bool   `json:"show_node_prefix"`
+	SubscribeURL        string `json:"subscribe_url"`
+	SubscribeIntervalMin int    `json:"subscribe_interval_min"`
 }
 
 // ConfigViewOf 生成前端视图（密码与 clash token 脱敏为掩码）。
@@ -219,6 +237,8 @@ func (m *Manager) ConfigViewOf() ConfigView {
 		FailoverProbeMax:    def(cfg.FailoverProbeMax, 3),
 		CallLogMax:          def(cfg.CallLogMax, 5000),
 		ShowNodePrefix:      cfg.ShowNodePrefix,
+		SubscribeURL:        cfg.SubscribeURL,
+		SubscribeIntervalMin: cfg.SubscribeIntervalMin,
 	}
 }
 
