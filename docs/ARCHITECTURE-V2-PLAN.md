@@ -320,7 +320,7 @@ type PoolVendor interface {
 | 2 | P0 | `go test ./...` 全绿 | ✅ | 2026-08-08 | `go -C <proj> test -count=1 ./...`（全绿）+ `go vet ./...` |
 | 3 | P0 | 行为快照记录（路由表/配置/`/v1/models` 输出） | ✅ | 2026-08-08 | 见「一、现状分析摘要」 |
 | 4 | P1.1 | 文件拆分：main.go(5320行) → 21 个同包领域文件，main.go 仅留入口 | ✅ | 2026-08-08 | commit `dcb217b`；`go test -count=1 ./...` 全绿 |
-| 4b | P1.2 | 包化：contract/aggregator/router 三包已出；protocol/gateway/server 未拆（根目录 main 包仍含管理域代码） | 🔄 | 2026-08-08 | 子计划见「四、P1.2」；commit `95bbc82`；**注意：P4 期间新增 core/manager 包承载管理域，P1.2 剩余包化已非当务之急** |
+| 4b | P1.2 | 包化：contract/aggregator/router 三包已出；protocol/gateway/server 未拆 | 🔄 | 2026-08-08 | **决策（2026-08-09）：剩余包化暂缓**——P2/P3/P4 已通过独立包完成，根目录 34 文件均为活跃代码（协议转换被 handler 用、admin 老接口仍注册、legacy 独立 module 不影响构建）；在 win exe 已交付客户的前提下，强行拆包风险大于收益，待有明确需求（如 Web 多端拆分）再动 |
 | 5 | P1 | 拆分过程每阶段测试全绿，行为与基线一致 | ⬜ | | 每步 `go test -count=1 ./...`；P4 大量改动后仍全绿 |
 | 6 | P1 | 过时文档清理 + config.example.json 补全 + 版本号口径说明 | ⬜ | | 随 P1.2 收尾处理 |
 | 7 | P2 | `core/contract` 定稿（基础 + PoolVendor + Tier/Transport/Stream/Meta） | ✅ | 2026-08-08 | 见 `core/contract/contract.go`；commit `de91054` |
