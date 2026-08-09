@@ -66,6 +66,8 @@ func main() {
 	flag.BoolVar(&gatewayMode, "gateway", false, "统一网关模式（记录节点级统计）")
 	flag.StringVar(&logLevel, "log-level", "info", "日志级别: debug/info/warn/error")
 	flag.StringVar(&logFile, "log-file", "", "日志文件路径（留空输出到 stdout）")
+	var listenAddr string
+	flag.StringVar(&listenAddr, "listen", "", "监听地址（默认 :<port> 全接口；headless/服务器部署可显式 127.0.0.1 收紧或 0.0.0.0 暴露）")
 	flag.BoolVar(&showVersion, "version", false, "显示版本信息")
 	flag.Parse()
 
@@ -132,6 +134,9 @@ func main() {
 	mux := http.NewServeMux()
 	registerHTTPRoutes(mux, managerInst)
 	addr := ":" + port
+	if listenAddr != "" {
+		addr = listenAddr + ":" + port
+	}
 	slog.Info("listening", "addr", addr)
 	if err := http.ListenAndServe(addr, withRecover(mux)); err != nil {
 		slog.Error("server terminated", "error", err)

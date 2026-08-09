@@ -96,3 +96,62 @@ sudo systemctl status opencode2api
 - 在反向代理层加限流和访问控制
 - 修改默认管理密码
 - 定期备份 `config.json`，按需保留或清理 `stats.json`
+
+## 管理器（Web UI）headless 部署（main 分支功能迁移 M7）
+
+同一二进制以管理器方式运行即是完整 Web 服务：直接提供六页管理 UI
+（独享 / 实例池 / 节点池 / 统计 / 日志 / 设置）与 `/api/admin/*` API，
+无需桌面壳即可在服务器 / 内网使用（需在可执行文件旁放置 `sing-box.exe`）。
+
+```bash
+./opencode2api -port 19090 -password "change-me" -config config.json
+# 浏览器访问 http://<host>:19090/（需登录）
+```
+
+- 默认监听 `:<port>`（全接口）；服务器部署建议显式 `-listen 0.0.0.0`，
+  或收紧为 `-listen 127.0.0.1` 仅本机访问。
+- 数据目录经 `OPCODE2API_DATA_DIR` 隔离（默认 `<UserConfigDir>/opencode2api-manager`）。
+
+> **安全**：`-password` 非空时 `/api/admin/*` 与前端均要求会话登录；即便如此，
+> 管理 API 与实例创建 / 脚本能力并存，**勿直接暴露公网**——建议仅内网使用，
+> 或前置 nginx 反代 + IP 白名单 + HTTPS。本项目的 Web 定位保持"单用户 / 内网"。
+
+### systemd 服务模板（Linux / headless）
+
+创建运行目录与数据目录：
+
+```bash
+sudo install -d -m 0755 /opt/opencode2api
+sudo install -m 0755 opencode2api /opt/opencode2api/opencode2api
+sudo install -m 0644 config.example.json /opt/opencode2api/config.json
+sudo install -d -m 0755 /var/lib/opencode2api
+```
+
+创建 `/etc/systemd/system/opencode2api-manager.service`：
+
+```ini
+[Unit]
+Description=opencode2api Manager (headless Web UI)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/opencode2api
+# headless 默认全接口监听；内网/公网部署显式 -listen 0.0.0.0 并配合防火墙/反代
+ExecStart=/opt/opencode2api/opencode2api -port 19090 -password CHANGE_ME -config /opt/opencode2api/config.json -listen 127.0.0.1
+Environment=OPCODE2API_DATA_DIR=/var/lib/opencode2api
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now opencode2api-manager
+sudo systemctl status opencode2api-manager
+```
