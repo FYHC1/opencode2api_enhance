@@ -47,6 +47,50 @@ func (m *Manager) NodesHandler() http.HandlerFunc {
 	}
 }
 
+// NodeDeleteHandler POST {name} 删除订阅缓存节点（main 功能 M5；外部 Clash 节点只读跳过）。
+func (m *Manager) NodeDeleteHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !requireMethodOK(w, r, http.MethodPost) {
+			return
+		}
+		var req struct {
+			Name string `json:"name"`
+		}
+		if json.NewDecoder(r.Body).Decode(&req) != nil || req.Name == "" {
+			writeErr(w, http.StatusBadRequest, "name 必填")
+			return
+		}
+		n, err := m.RemoveSubscriptionNode(req.Name)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, map[string]any{"removed": n})
+	}
+}
+
+// NodeDeleteBatchHandler POST {names} 批量删除订阅缓存节点。
+func (m *Manager) NodeDeleteBatchHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !requireMethodOK(w, r, http.MethodPost) {
+			return
+		}
+		var req struct {
+			Names []string `json:"names"`
+		}
+		if json.NewDecoder(r.Body).Decode(&req) != nil || len(req.Names) == 0 {
+			writeErr(w, http.StatusBadRequest, "names 必填")
+			return
+		}
+		n, err := m.RemoveSubscriptionNodes(req.Names)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, map[string]any{"removed": n})
+	}
+}
+
 // ---------------------------------------------------------------- 实例生命周期
 
 // InstancesAddHandler POST {name,port,node,password} → Instance。

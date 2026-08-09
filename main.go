@@ -193,6 +193,9 @@ func registerHTTPRoutes(mux *http.ServeMux, managerInst *manager.Manager) {
 	managerInst.StartHealthLoop()
 	// P4-5: 管理域操作面路由（/api/admin/*）。
 	mux.HandleFunc("/api/admin/nodes", loggingMiddleware(requireAuth(managerInst.NodesHandler())))
+	// 节点删除（main 分支功能迁移 M5；仅订阅缓存节点可删）。
+	mux.HandleFunc("/api/admin/nodes/delete", loggingMiddleware(requireAuth(managerInst.NodeDeleteHandler())))
+	mux.HandleFunc("/api/admin/nodes/delete-batch", loggingMiddleware(requireAuth(managerInst.NodeDeleteBatchHandler())))
 	mux.HandleFunc("/api/admin/instances/add", loggingMiddleware(requireAuth(managerInst.InstancesAddHandler())))
 	mux.HandleFunc("/api/admin/instances/remove", loggingMiddleware(requireAuth(managerInst.InstancesRemoveHandler())))
 	mux.HandleFunc("/api/admin/instances/start", loggingMiddleware(requireAuth(managerInst.InstancesStartHandler())))
