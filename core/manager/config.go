@@ -34,6 +34,10 @@ type Config struct {
 	SubscribeURL        string `json:"subscribe_url,omitempty"`
 	SubscribeIntervalMin int    `json:"subscribe_interval_min,omitempty"`
 
+	// 健康巡检：检查间隔（秒，<=0 不巡检）与自动重启连续失败阈值（<=0 不重启）。
+	HealthCheckIntervalSec  int `json:"health_check_interval_sec,omitempty"`
+	HealthRestartThreshold int `json:"health_restart_threshold,omitempty"`
+
 	// Providers 厂商注册表（透传主程序 AppConfig 格式）：实例子进程/网关子进程
 	// 生成的 opencode2api.json 需要带上，才能像核心一样注册多厂商（如 windsurf）。
 	Providers []map[string]any `json:"providers,omitempty"`
@@ -107,6 +111,10 @@ func (m *Manager) ConfigGet(key string) (string, error) {
 		return cfg.SubscribeURL, nil
 	case "subscribe_interval_min":
 		return strconv.Itoa(cfg.SubscribeIntervalMin), nil
+	case "health_check_interval_sec":
+		return strconv.Itoa(cfg.HealthCheckIntervalSec), nil
+	case "health_restart_threshold":
+		return strconv.Itoa(cfg.HealthRestartThreshold), nil
 	default:
 		return "", fmt.Errorf("Unknown config key: %s", key)
 	}
@@ -187,6 +195,18 @@ func (m *Manager) ConfigSet(key, value string) error {
 			return err
 		}
 		cfg.SubscribeIntervalMin = int(v)
+	case "health_check_interval_sec":
+		v, err := parseInt()
+		if err != nil {
+			return err
+		}
+		cfg.HealthCheckIntervalSec = int(v)
+	case "health_restart_threshold":
+		v, err := parseInt()
+		if err != nil {
+			return err
+		}
+		cfg.HealthRestartThreshold = int(v)
 	default:
 		return errors.New("Unknown config key: " + key)
 	}
@@ -208,8 +228,10 @@ type ConfigView struct {
 	FailoverProbeMax    int64  `json:"failover_probe_max"`
 	CallLogMax          int64  `json:"call_log_max"`
 	ShowNodePrefix      bool   `json:"show_node_prefix"`
-	SubscribeURL        string `json:"subscribe_url"`
+	SubscribeURL         string `json:"subscribe_url"`
 	SubscribeIntervalMin int    `json:"subscribe_interval_min"`
+	HealthCheckIntervalSec  int `json:"health_check_interval_sec"`
+	HealthRestartThreshold int `json:"health_restart_threshold"`
 }
 
 // ConfigViewOf 生成前端视图（密码与 clash token 脱敏为掩码）。
@@ -239,6 +261,8 @@ func (m *Manager) ConfigViewOf() ConfigView {
 		ShowNodePrefix:      cfg.ShowNodePrefix,
 		SubscribeURL:        cfg.SubscribeURL,
 		SubscribeIntervalMin: cfg.SubscribeIntervalMin,
+		HealthCheckIntervalSec:  cfg.HealthCheckIntervalSec,
+		HealthRestartThreshold: cfg.HealthRestartThreshold,
 	}
 }
 

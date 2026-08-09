@@ -186,6 +186,8 @@ func registerHTTPRoutes(mux *http.ServeMux, managerInst *manager.Manager) {
 	managerInst.SetDeps(manager.NewRealRunner(), manager.NewGateway(managerInst, 0), nil)
 	// M1: 订阅自动拉取后台循环（配置 subscribe_url/interval_min 生效时运行，配置热更新无需重启）。
 	managerInst.StartSubscribeLoop()
+	// M2: 健康巡检后台循环（配置 health_check_interval_sec 生效时运行）。
+	managerInst.StartHealthLoop()
 	// P4-5: 管理域操作面路由（/api/admin/*）。
 	mux.HandleFunc("/api/admin/nodes", loggingMiddleware(requireAuth(managerInst.NodesHandler())))
 	mux.HandleFunc("/api/admin/instances/add", loggingMiddleware(requireAuth(managerInst.InstancesAddHandler())))
@@ -210,6 +212,9 @@ func registerHTTPRoutes(mux *http.ServeMux, managerInst *manager.Manager) {
 	mux.HandleFunc("/api/admin/subscribe/preview", loggingMiddleware(requireAuth(managerInst.SubscribePreviewHandler())))
 	mux.HandleFunc("/api/admin/subscribe/import", loggingMiddleware(requireAuth(managerInst.SubscribeImportHandler())))
 	mux.HandleFunc("/api/admin/subscribe/import-pool", loggingMiddleware(requireAuth(managerInst.SubscribeImportPoolHandler())))
+	// 健康巡检（main 分支功能迁移 M2）。
+	mux.HandleFunc("/api/admin/health/check", loggingMiddleware(requireAuth(managerInst.HealthCheckHandler())))
+	mux.HandleFunc("/api/admin/health/summary", loggingMiddleware(requireAuth(managerInst.HealthSummaryHandler())))
 	mux.HandleFunc("/api/admin/data/clean", loggingMiddleware(requireAuth(managerInst.DataCleanHandler())))
 	mux.HandleFunc("/api/admin/gateway/status", loggingMiddleware(requireAuth(managerInst.GatewayStatusHandler())))
 	mux.HandleFunc("/api/admin/gateway/route-mode", loggingMiddleware(requireAuth(managerInst.GatewayRouteModeHandler())))
