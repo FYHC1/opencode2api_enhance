@@ -111,6 +111,12 @@ export type ConfigView = {
   failover_probe_max: number
   call_log_max: number
   show_node_prefix: boolean
+  subscribe_url: string
+  subscribe_interval_min: number
+  health_check_interval_sec: number
+  health_restart_threshold: number
+  has_gateway_key: boolean
+  gateway_key: string
 }
 
 export type BinariesInfo = {
@@ -218,6 +224,66 @@ export type ResetStatsResult = {
   failed: string[]
 }
 
+// ─── 订阅（main 功能迁移 M1） ─────────────────────────────────────────────
+
+export type SubscribeNode = {
+  name: string
+  server: string
+  port: number
+  node_type: string
+  password?: string
+  uuid?: string
+  cipher?: string
+  sni?: string
+  network?: string
+  ws_path?: string
+  flow?: string
+  tls: boolean
+  raw: string
+}
+
+export type SubscribeResult = {
+  nodes: SubscribeNode[]
+  count: number
+}
+
+// ─── 健康巡检（main 功能迁移 M2） ─────────────────────────────────────────────
+
+export type HealthRecord = {
+  name: string
+  healthy: boolean
+  last_check_ts: number
+  consecutive_failures: number
+  last_error?: string
+}
+
+export type HealthSummary = {
+  total: number
+  healthy: number
+  unhealthy: number
+  records: HealthRecord[]
+  last_scan_ts: number
+}
+
+// ─── 日志过滤与聚合（main 功能迁移 M4） ─────────────────────────────────────────────
+
+export type CallLogFilter = {
+  node?: string
+  keyword?: string
+  status?: 'ok' | 'error'
+  limit?: number
+  offset?: number
+  from_ts?: string
+  to_ts?: string
+}
+
+export type CallLogAggregate = {
+  instance: string
+  total: number
+  errors: number
+  last_ts: string
+}
+
 // ─── HTTP 对接层（core /api/admin/*） ─────────────────────────────
 
 /** 后端基础地址：Web 同源为空；桌面壳可经构建注入 VITE_API_BASE。 */
@@ -255,6 +321,9 @@ async function req<T>(method: string, path: string, body?: unknown, qs?: Record<
 export const api = {
   // 节点
   listNodes: () => req<NodeView[]>('GET', '/nodes'),
+  /** 删除订阅缓存节点（外部 Clash 节点只读跳过；main 功能 M5） */
+  deleteNode: (name: string) => req<{ removed: number }>('POST', '/nodes/delete', { name }),
+  deleteNodes: (names: string[]) => req<{ removed: number }>('POST', '/nodes/delete-batch', { names }),
 
   // 实例
   listInstances: () => req<Instance[]>('GET', '/instances'),
@@ -304,6 +373,13 @@ export const api = {
   configGet: () => req<ConfigView>('GET', '/config'),
   configSet: (key: string, value: string) => req<void>('POST', '/config/set', { key, value }),
 
+  // 订阅（main 功能 M1）：preview 拉取解析、import 建实例、import-pool 仅入缓存
+  subscribePreview: (url: string) => req<SubscribeResult>('POST', '/subscribe/preview', { url }),
+  subscribeImport: (url: string, joinGateway?: boolean) =>
+    req<{ status: string; imported: number }>('POST', '/subscribe/import', { url, join_gateway: joinGateway ?? undefined }),
+  subscribeImportPool: (url: string) =>
+    req<{ status: string; imported: number }>('POST', '/subscribe/import-pool', { url }),
+
   // 开机自启：由 Go core 承载（写 Windows 注册表），经 HTTP 调用
   autostartGet: async (): Promise<boolean> => {
     const r = await req<{ enabled: boolean }>('GET', '/autostart')
@@ -325,6 +401,31 @@ export const api = {
     req<CallLogRecord[]>('GET', '/call-log', undefined, { limit: limit ?? undefined }),
   /** 清空全部调用日志 */
   clearCallLog: () => req<void>('POST', '/call-log/clear'),
+  /** 过滤查询日志（main 功能 M4） */
+  callLogFiltered: (filter: CallLogFilter) => req<CallLogRecord[]>('POST', '/call-log/filtered', filter),
+  /** 按节点组合聚合日志（main 功能 M4） */
+  callLogAggregate: () => req<CallLogAggregate[]>('GET', '/call-log/aggregate'),
+
+  // 健康巡检（main 功能 M2）
+  healthCheck: () => req<HealthSummary>('POST', '/health/check'),
+  healthSummary: () => req<HealthSummary>('GET', '/health/summary'),
+
+  // 报表导出（main 功能 M3）
+  exportCallLogCSV: async (limit?: number): Promise<string> => {
+    const res = await fetch(API_BASE + '/api/admin/export/call-log.csv' + (limit ? `?limit=${limit}` : ''))
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return res.text()
+  },
+  exportInstancesJSON: async (): Promise<string> => {
+    const res = await fetch(API_BASE + '/api/admin/export/instances.json')
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return res.text()
+  },
+  exportStatsJSON: async (): Promise<string> => {
+    const res = await fetch(API_BASE + '/api/admin/export/stats.json')
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return res.text()
+  },
 
   // 统一网关（实例池）
   gatewayStatus: () => req<GatewayStatus>('GET', '/gateway/status'),

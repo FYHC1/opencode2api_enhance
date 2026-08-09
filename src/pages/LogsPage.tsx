@@ -4,6 +4,7 @@ import {
   Activity,
   ChevronDown,
   ChevronRight,
+  Download,
   Filter,
   Inbox,
   RefreshCw,
@@ -61,6 +62,8 @@ export default function LogsPage({
   // 视图切换：日志列表 / 时段分析 / 节点分析
   const [view, setView] = useState<'list' | 'hour' | 'node'>('list')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  // 关键词过滤（main 功能 M4：匹配 model/path/err_msg/req_id）
+  const [keyword, setKeyword] = useState('')
 
   const load = useCallback(
     async (silent = true) => {
@@ -113,9 +116,13 @@ export default function LogsPage({
     return logs.filter((l) => {
       if (onlyIssues && !hasIssue(l)) return false
       if (dateFilter && (l.ts || '').slice(0, 10) !== dateFilter) return false
+      if (keyword) {
+        const hay = [l.model || '', l.path || '', l.err_msg || '', l.req_id || ''].join(' ')
+        if (!hay.includes(keyword)) return false
+      }
       return true
     })
-  }, [logs, onlyIssues, dateFilter])
+  }, [logs, onlyIssues, dateFilter, keyword])
 
   const okCount = logs.filter((l) => l.status === 'ok').length
   const failCount = logs.length - okCount
@@ -151,7 +158,39 @@ export default function LogsPage({
             <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
             刷新
           </button>
+          <button
+            onClick={async () => {
+              try {
+                const csv = await api.exportCallLogCSV()
+                const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+                const a = document.createElement('a')
+                a.href = URL.createObjectURL(blob)
+                a.download = 'call-log.csv'
+                a.click()
+                URL.revokeObjectURL(a.href)
+                toast('已导出 CSV', true)
+              } catch (e) {
+                toast(String(e), false)
+              }
+            }}
+            disabled={logs.length === 0}
+            className="flex items-center gap-2 bg-white border border-zinc-200 text-zinc-600 rounded-lg px-4 py-2 text-sm hover:bg-zinc-50 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Download size={14} />
+            导出 CSV
+          </button>
         </div>
+      </div>
+
+      {/* 过滤工具条：只看失败 / 按天 / 关键词（main 功能 M4） */}
+      <div className="flex flex-wrap items-center gap-3 mb-4">
+        <input
+          type="text"
+          placeholder="关键词过滤（模型/路径/错误/请求ID）"
+          value={keyword}
+          onChange={(e) => setKeyword(e.target.value)}
+          className="flex-1 min-w-[200px] px-3 py-2 border rounded-lg text-sm"
+        />
       </div>
 
       {/* 视图切换：日志列表 / 时段分析 / 节点分析 */}

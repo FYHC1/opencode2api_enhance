@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import clsx from 'clsx'
-import { Loader2, Network, Radar, RefreshCw, Square, User } from 'lucide-react'
+import { Loader2, Network, Radar, RefreshCw, Rss, Square, User } from 'lucide-react'
 import { api, type NodeView, type ProbeResult, type ScanProgress } from '../lib/api'
 import ResultModal from '../components/ResultModal'
 
@@ -220,6 +220,30 @@ export default function NodesPage({
           >
             <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
             {refreshing ? '刷新中…' : '刷新'}
+          </button>
+          {/* 订阅导入（main 功能 M1）：URL → preview → 入订阅缓存 → 刷新节点列表 */}
+          <button
+            onClick={async () => {
+              const url = window.prompt('输入订阅地址（Clash YAML / base64 / v2ray 链接）')
+              if (!url || !url.trim()) return
+              try {
+                const p = await api.subscribePreview(url.trim())
+                if (p.count === 0) {
+                  toast('订阅中未解析到任何节点', false)
+                  return
+                }
+                if (!window.confirm(`订阅解析到 ${p.count} 个节点（如 ${p.nodes[0]?.name} 等），导入节点池？`)) return
+                const r = await api.subscribeImportPool(url.trim())
+                toast(`已导入 ${r.imported} 个订阅节点到节点池`, true)
+                await loadNodes()
+              } catch (e) {
+                toast(String(e), false)
+              }
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-zinc-700 bg-white border border-zinc-200 hover:bg-zinc-50"
+          >
+            <Rss size={14} />
+            订阅导入
           </button>
           {/* 入池 / 独享：勾选节点后可用，直接对勾选节点批量添加 */}
           <button

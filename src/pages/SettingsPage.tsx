@@ -24,6 +24,15 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
   // 节点前缀展示开关（默认关闭）
   const [showNodePrefix, setShowNodePrefix] = useState(false)
 
+  // 订阅自动拉取（main 功能 M1）
+  const [subscribeUrl, setSubscribeUrl] = useState('')
+  const [subscribeInterval, setSubscribeInterval] = useState(0)
+  // 统一网关密钥（main 功能 M6）
+  const [gatewayKey, setGatewayKey] = useState('')
+  // 健康巡检（main 功能 M2）
+  const [healthInterval, setHealthInterval] = useState(0)
+  const [healthThreshold, setHealthThreshold] = useState(0)
+
 
   useEffect(() => {
     const loadData = async () => {
@@ -47,6 +56,10 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
           call_log_max: cfg.call_log_max,
         })
         setShowNodePrefix(cfg.show_node_prefix)
+        setSubscribeUrl(cfg.subscribe_url)
+        setSubscribeInterval(cfg.subscribe_interval_min)
+        setHealthInterval(cfg.health_check_interval_sec)
+        setHealthThreshold(cfg.health_restart_threshold)
       } catch (e) {
         console.error('加载设置失败', e)
         toast('加载设置失败', false)
@@ -123,6 +136,49 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
     } catch (e) {
       console.error('设置节点前缀失败', e)
       toast('设置失败', false)
+    }
+  }
+
+  // 订阅自动拉取配置（main 功能 M1）
+  const handleSaveSubscribe = async () => {
+    try {
+      await api.configSet('subscribe_url', subscribeUrl.trim())
+      await api.configSet('subscribe_interval_min', String(subscribeInterval))
+      toast('订阅配置已保存（后台按间隔自动拉取并入实例）', true)
+    } catch (e) {
+      console.error('保存订阅配置失败', e)
+      toast('保存失败', false)
+    }
+  }
+
+  // 统一网关密钥（main 功能 M6）
+  const handleSaveGatewayKey = async () => {
+    const v = gatewayKey.trim()
+    if (v && v.length < 8) {
+      toast('网关密钥至少 8 个字符', false)
+      return
+    }
+    try {
+      await api.configSet('gateway_key', v)
+      setGatewayKey('')
+      const cfg = await api.configGet()
+      setConfig(cfg)
+      toast(v ? '网关密钥已更新（重启网关后生效）' : '网关密钥已重置为默认', true)
+    } catch (e) {
+      console.error('保存网关密钥失败', e)
+      toast('保存失败', false)
+    }
+  }
+
+  // 健康巡检（main 功能 M2）
+  const handleSaveHealth = async () => {
+    try {
+      await api.configSet('health_check_interval_sec', String(healthInterval))
+      await api.configSet('health_restart_threshold', String(healthThreshold))
+      toast('健康巡检配置已保存', true)
+    } catch (e) {
+      console.error('保存健康巡检失败', e)
+      toast('保存失败', false)
     }
   }
 
@@ -307,6 +363,92 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
           className="bg-zinc-900 text-white rounded-lg px-4 py-2 hover:bg-zinc-700"
         >
           保存超时配置
+        </button>
+      </div>
+
+      {/* 订阅自动拉取（main 功能 M1） */}
+      <div className="bg-white rounded-2xl border p-5 space-y-4">
+        <h2 className="text-lg font-medium text-zinc-900">订阅自动拉取</h2>
+        <p className="text-zinc-500 text-xs">配置订阅地址后，后台按间隔自动拉取并导入为实例（重复节点自动跳过）</p>
+
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-zinc-700">订阅 URL</label>
+          <input
+            type="text"
+            placeholder="https://example.com/sub"
+            value={subscribeUrl}
+            onChange={(e) => setSubscribeUrl(e.target.value)}
+            className="w-full px-3 py-2 border rounded-lg"
+          />
+          <p className="text-zinc-500 text-xs">支持 Clash YAML / base64 / v2ray 链接（vmess/vless/trojan/ss/hysteria2）</p>
+        </div>
+
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-zinc-700">拉取间隔（分钟，0 = 不自动拉取）</label>
+          <input
+            type="number"
+            min={0}
+            value={subscribeInterval}
+            onChange={(e) => setSubscribeInterval(Number(e.target.value))}
+            className="w-28 px-3 py-2 border rounded-lg"
+          />
+        </div>
+
+        <button onClick={handleSaveSubscribe} className="bg-zinc-900 text-white rounded-lg px-4 py-2 hover:bg-zinc-700">
+          保存
+        </button>
+      </div>
+
+      {/* 统一网关密钥（main 功能 M6） */}
+      <div className="bg-white rounded-2xl border p-5 space-y-4">
+        <h2 className="text-lg font-medium text-zinc-900">统一网关密钥</h2>
+        <p className="text-zinc-500 text-xs">
+          客户端访问统一网关（实例池地址）时使用的 API 密钥{config.has_gateway_key ? '（当前已设置，留空则不修改）' : '（默认 sk-unified-local）'}
+        </p>
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-zinc-700">新密钥（至少 8 字符，留空 = 重置为默认）</label>
+          <input
+            type="password"
+            placeholder={config.has_gateway_key ? '输入新密钥以更换' : ''}
+            value={gatewayKey}
+            onChange={(e) => setGatewayKey(e.target.value)}
+            className="w-full px-3 py-2 border rounded-lg"
+          />
+        </div>
+        <button onClick={handleSaveGatewayKey} className="bg-zinc-900 text-white rounded-lg px-4 py-2 hover:bg-zinc-700">
+          保存
+        </button>
+      </div>
+
+      {/* 健康巡检（main 功能 M2） */}
+      <div className="bg-white rounded-2xl border p-5 space-y-4">
+        <h2 className="text-lg font-medium text-zinc-900">健康巡检</h2>
+        <p className="text-zinc-500 text-xs">周期探测实例 API 端口，连续失败达阈值自动重启（0 = 不启用）</p>
+
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-zinc-700">检查间隔（秒，0 = 不巡检）</label>
+          <input
+            type="number"
+            min={0}
+            value={healthInterval}
+            onChange={(e) => setHealthInterval(Number(e.target.value))}
+            className="w-28 px-3 py-2 border rounded-lg"
+          />
+        </div>
+
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-zinc-700">连续失败自动重启阈值（0 = 不重启）</label>
+          <input
+            type="number"
+            min={0}
+            value={healthThreshold}
+            onChange={(e) => setHealthThreshold(Number(e.target.value))}
+            className="w-28 px-3 py-2 border rounded-lg"
+          />
+        </div>
+
+        <button onClick={handleSaveHealth} className="bg-zinc-900 text-white rounded-lg px-4 py-2 hover:bg-zinc-700">
+          保存
         </button>
       </div>
 
