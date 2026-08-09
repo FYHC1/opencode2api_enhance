@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/6Kmfi6HP/opencode2api/core/protocol"
 )
 
 func responsesInputToMessages(input any, instructions string) []Message {
@@ -420,18 +422,6 @@ func buildResponseToolCallItem(tc ToolCall, outputType string) map[string]any {
 	}
 }
 
-func cloneJSONValue[T any](value T) T {
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return value
-	}
-	var cloned T
-	if err := json.Unmarshal(encoded, &cloned); err != nil {
-		return value
-	}
-	return cloned
-}
-
 func storeResponseState(response map[string]any, req ResponsesAPIRequest) {
 	if req.Store != nil && !*req.Store {
 		return
@@ -445,9 +435,9 @@ func storeResponseState(response map[string]any, req ResponsesAPIRequest) {
 	storedResponses[responseID] = StoredResponseState{
 		Model:        req.Model,
 		Instructions: req.Instructions,
-		Tools:        cloneJSONValue(req.Tools),
-		ToolChoice:   cloneJSONValue(req.ToolChoice),
-		Output:       cloneJSONValue(output),
+		Tools:        protocol.CloneJSONValue(req.Tools),
+		ToolChoice:   protocol.CloneJSONValue(req.ToolChoice),
+		Output:       protocol.CloneJSONValue(output),
 	}
 	storedResponsesMu.Unlock()
 }
@@ -459,7 +449,7 @@ func loadResponseState(responseID string) (StoredResponseState, bool) {
 	if !ok {
 		return StoredResponseState{}, false
 	}
-	return cloneJSONValue(state), true
+	return protocol.CloneJSONValue(state), true
 }
 
 func extractTextFromContentParts(content any) string {
@@ -815,7 +805,7 @@ func responsesHandler(w http.ResponseWriter, r *http.Request) {
 	responsesBody := convertChatToResponses(respBody, chatReq.Model, wantReasoning, respReq.Tools, respReq.ToolChoice)
 	var responseMap map[string]any
 	if json.Unmarshal(responsesBody, &responseMap) == nil {
-		applyResponsesRequestEcho(responseMap, respReq)
+		protocol.ApplyResponsesRequestEcho(responseMap, respReq)
 		if enriched, marshalErr := json.Marshal(responseMap); marshalErr == nil {
 			responsesBody = enriched
 		}
@@ -870,7 +860,7 @@ func responsesStreamHandler(w http.ResponseWriter, _ *http.Request, resp *http.R
 	toolCalls := map[int]map[string]any{}
 	toolOrder := []int{}
 	toolKinds := responsesToolKindMap(tools)
-	indexAllocator := outputIndexAllocator{}
+	indexAllocator := protocol.OutputIndexAllocator{}
 	reasoningOutputIndex := -1
 	messageIndex := -1
 
@@ -1296,7 +1286,7 @@ func responsesStreamHandler(w http.ResponseWriter, _ *http.Request, resp *http.R
 	if terminalStatus == "incomplete" {
 		completedResponse["incomplete_details"] = map[string]any{"reason": "max_output_tokens"}
 	}
-	applyResponsesRequestEcho(completedResponse, originalReq)
+	protocol.ApplyResponsesRequestEcho(completedResponse, originalReq)
 	if len(tools) > 0 {
 		completedResponse["tools"] = tools
 	}
@@ -1390,7 +1380,7 @@ func convertChatToResponses(chatBody []byte, model string, wantReasoning bool, t
 		finishReason = chat.Choices[0].FinishReason
 	}
 
-	outcome := responsesOutcome(finishReason)
+	outcome := protocol.ResponsesOutcome(finishReason)
 	status := outcome.Status
 	responses := map[string]any{
 		"id":                 chat.ID,

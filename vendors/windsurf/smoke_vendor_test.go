@@ -14,6 +14,14 @@ import (
 	"github.com/6Kmfi6HP/opencode2api/core/contract"
 )
 
+func truncateStr(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
+}
+
+// TestVendorChat 池级全链路冒烟：无号自动注册 → 借号 → 真实对话。
 func TestVendorChat(t *testing.T) {
 	if os.Getenv("SMOKE_REAL") != "1" {
 		t.Skip("设置 SMOKE_REAL=1 才执行真实 Vendor 冒烟")
