@@ -29,6 +29,12 @@ type Config struct {
 	FailoverProbeMax    int64  `json:"failover_probe_max,omitempty"`
 	CallLogMax          int64  `json:"call_log_max,omitempty"`
 	ShowNodePrefix      bool   `json:"show_node_prefix,omitempty"`
+
+	// Providers 厂商注册表（透传主程序 AppConfig 格式）：实例子进程/网关子进程
+	// 生成的 opencode2api.json 需要带上，才能像核心一样注册多厂商（如 windsurf）。
+	Providers []map[string]any `json:"providers,omitempty"`
+	// Routing 模型→厂商路由（透传，供子进程按模型路由到正确厂商）。
+	Routing map[string]any `json:"routing,omitempty"`
 }
 
 // configPath 返回配置文件路径。

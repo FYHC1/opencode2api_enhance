@@ -31,6 +31,7 @@ func reasoningMap() map[string]string {
 
 // buildOpenCodeCfg 单实例配置：本地 sing-box 作为唯一 SOCKS5 出口。
 func (m *Manager) buildOpenCodeCfg(singboxPort uint16) ([]byte, error) {
+	appCfg := m.loadConfig()
 	cfg := map[string]any{
 		"model_alias":            aliasMap(),
 		"reasoning_effort_map":   reasoningMap(),
@@ -39,8 +40,10 @@ func (m *Manager) buildOpenCodeCfg(singboxPort uint16) ([]byte, error) {
 			"name": "singbox", "addr": fmt.Sprintf("127.0.0.1:%d", singboxPort),
 		}},
 		"active_socks5":    fmt.Sprintf("127.0.0.1:%d", singboxPort),
-		"show_node_prefix": m.loadConfig().ShowNodePrefix,
+		"show_node_prefix": appCfg.ShowNodePrefix,
 	}
+	// 透传厂商注册表 + 路由：实例子进程与核心一致，能注册多厂商（如 windsurf）
+	cfg = injectVendorConfig(cfg, appCfg)
 	return json.MarshalIndent(cfg, "", "  ")
 }
 
@@ -87,5 +90,20 @@ func (m *Manager) buildRouterCfg(singboxPorts []uint16, portNames map[uint16]str
 	applyIf("failover_probe_min", appCfg.FailoverProbeMin)
 	applyIf("failover_probe_max", appCfg.FailoverProbeMax)
 	applyIf("call_log_max", appCfg.CallLogMax)
+	// 透传厂商注册表 + 路由：网关子进程与核心一致，能注册多厂商（如 windsurf）
+	cfg = injectVendorConfig(cfg, appCfg)
 	return json.MarshalIndent(cfg, "", "  ")
+}
+
+// injectVendorConfig 把管理器配置里的厂商注册表与路由写入子进程配置。
+// 子进程（实例子进程 / 网关子进程）与核心同二进制，读同一格式的 opencode2api.json，
+// 不带 providers 则只认 opencode —— 多厂商（windsurf 等）在 exe 实例/网关形态下不可用。
+func injectVendorConfig(cfg map[string]any, appCfg Config) map[string]any {
+	if len(appCfg.Providers) > 0 {
+		cfg["providers"] = appCfg.Providers
+	}
+	if len(appCfg.Routing) > 0 {
+		cfg["routing"] = appCfg.Routing
+	}
+	return cfg
 }
