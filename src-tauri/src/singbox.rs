@@ -29,7 +29,11 @@ fn parse_bandwidth_mbps(s: &str) -> Option<u64> {
     Some(mbps as u64)
 }
 
-/// 从 Clash 节点生成 sing-box outbound 配置
+/// 从 Clash 节点生成 sing-box outbound 配置。
+///
+/// anytls / hysteria2 / tuic / hysteria(v1) 协议强制要求 TLS（`tls.enabled` 恒为 true），
+/// 即使 Clash 节点标了 `tls: false` 也不能关——否则 sing-box 启动即报 "TLS required"。
+/// `insecure`（跳过证书校验）单独由 `skip-cert-verify` 控制。
 fn build_outbound(node: &ClashNode) -> Result<serde_json::Value> {
     match node.node_type.as_str() {
         "trojan" => {
@@ -166,7 +170,7 @@ fn build_outbound(node: &ClashNode) -> Result<serde_json::Value> {
                 "server_port": node.port,
                 "password": password,
                 "tls": {
-                    "enabled": node.tls.unwrap_or(true),
+                    "enabled": true,
                     "server_name": node
                         .servername
                         .as_deref()
@@ -197,6 +201,8 @@ fn build_outbound(node: &ClashNode) -> Result<serde_json::Value> {
             if password.is_empty() {
                 bail!("节点 '{}' 缺少 password", node.name);
             }
+            // anytls 协议基于 TLS：enabled 恒为 true（即使 Clash 节点标 tls: false），
+            // insecure 仅由 skip-cert-verify 控制。否则 sing-box 报 "TLS required"。
             Ok(json!({
                 "type": "anytls",
                 "tag": "proxy",
@@ -204,7 +210,84 @@ fn build_outbound(node: &ClashNode) -> Result<serde_json::Value> {
                 "server_port": node.port,
                 "password": password,
                 "tls": {
-                    "enabled": node.tls.unwrap_or(true),
+                    "enabled": true,
+                    "server_name": node
+                        .servername
+                        .as_deref()
+                        .or(node.sni.as_deref())
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or(&node.server),
+                    "insecure": node.skip_cert_verify.unwrap_or(false)
+                }
+            }))
+        }
+        "tuic" => {
+            let uuid = node.uuid.as_deref().unwrap_or_default();
+            let password = node.password.as_deref().unwrap_or_default();
+            if uuid.is_empty() {
+                bail!("节点 '{}' 缺少 uuid", node.name);
+            }
+            Ok(json!({
+                "type": "tuic",
+                "tag": "proxy",
+                "server": node.server,
+                "server_port": node.port,
+                "uuid": uuid,
+                "password": password,
+                "congestion_control": "bbr",
+                "tls": {
+                    "enabled": true,
+                    "server_name": node
+                        .servername
+                        .as_deref()
+                        .or(node.sni.as_deref())
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or(&node.server),
+                    "insecure": node.skip_cert_verify.unwrap_or(false)
+                }
+            }))
+        }
+        "wireguard" => {
+            let private_key = node
+                .private_key
+                .as_deref()
+                .or(node.password.as_deref())
+                .unwrap_or_default();
+            if private_key.is_empty() {
+                bail!("节点 '{}' 缺少 private_key", node.name);
+            }
+            let public_key = node
+                .public_key
+                .as_deref()
+                .or(node.cipher.as_deref())
+                .unwrap_or_default();
+            Ok(json!({
+                "type": "wireguard",
+                "tag": "proxy",
+                "server": node.server,
+                "server_port": node.port,
+                "private_key": private_key,
+                "peers": [{
+                    "server": node.server,
+                    "server_port": node.port,
+                    "public_key": public_key
+                }]
+            }))
+        }
+        "hysteria" => {
+            let password = node
+                .auth_str
+                .as_deref()
+                .or(node.password.as_deref())
+                .unwrap_or_default();
+            Ok(json!({
+                "type": "hysteria",
+                "tag": "proxy",
+                "server": node.server,
+                "server_port": node.port,
+                "auth_str": password,
+                "tls": {
+                    "enabled": true,
                     "server_name": node
                         .servername
                         .as_deref()
@@ -266,6 +349,17 @@ pub fn build_singbox_config(node: &ClashNode, listen_port: u16) -> Result<String
                 "listen_port": listen_port
             }
         ],
+        // 用 DoH 解析目标/节点域名，绕过被劫持的系统 DNS（Clash TUN fake-ip 等）。
+        // 多服务器冗余 + 直连出站（不套代理，避免 DNS 依赖代理先解析的鸡生蛋问题）。
+        "dns": {
+            "servers": [
+                { "type": "https", "tag": "ali-doh", "server": "223.5.5.5", "server_port": 443 },
+                { "type": "https", "tag": "tencent-doh", "server": "119.29.29.29", "server_port": 443 },
+                { "type": "https", "tag": "google-doh", "server": "8.8.8.8", "server_port": 443 }
+            ],
+            "strategy": "ipv4_only",
+            "final": "ali-doh"
+        },
         "outbounds": [
             outbound,
             {
@@ -274,7 +368,11 @@ pub fn build_singbox_config(node: &ClashNode, listen_port: u16) -> Result<String
             }
         ],
         "route": {
-            "final": "proxy"
+            "final": "proxy",
+            // sing-box 1.12+ 要求显式指定默认域名解析器（否则 FATAL）。
+            // 注意：不能加 {outbound:"direct", protocol:"dns", port:443} 这类 rule——
+            // 它会把 443 端口的 DoH/业务流量也路由到 direct，导致探测失败。
+            "default_domain_resolver": "ali-doh"
         }
     });
 
@@ -410,6 +508,7 @@ proxies:
         let ob = &v["outbounds"][0];
         assert_eq!(ob["type"], "hysteria2");
         assert_eq!(ob["password"], "pass123");
+        assert_eq!(ob["tls"]["enabled"], true);
         assert_eq!(ob["tls"]["server_name"], "jp.example.com");
         assert_eq!(ob["tls"]["insecure"], true);
         assert_eq!(ob["up_mbps"], 200);
@@ -427,9 +526,10 @@ proxies:
 
     #[test]
     fn test_build_anytls_config() {
+        // Clash YAML 里 anytls 标 tls: false（常见错误写法）也必须生成 tls.enabled: true
         let yaml = r#"
 proxies:
-  - {name: anytls-hk, server: hklumen.094180.xyz, port: 9999, type: anytls, password: a5b309a5-d952-4fa2-9630-901ffeb1f429, skip-cert-verify: true}
+  - {name: anytls-hk, server: hklumen.094180.xyz, port: 9999, type: anytls, password: a5b309a5-d952-4fa2-9630-901ffeb1f429, tls: false, skip-cert-verify: true}
 "#;
         let nodes = parse_clash_yaml(yaml).unwrap();
         let config = build_singbox_config(&nodes[0], 7899).unwrap();
@@ -439,6 +539,59 @@ proxies:
         assert_eq!(ob["server"], "hklumen.094180.xyz");
         assert_eq!(ob["server_port"], 9999);
         assert_eq!(ob["password"], "a5b309a5-d952-4fa2-9630-901ffeb1f429");
+        // anytls 强制 TLS：即使 YAML 标 tls: false 也恒为 true
+        assert_eq!(ob["tls"]["enabled"], true);
         assert_eq!(ob["tls"]["insecure"], true);
     }
+
+    #[test]
+    fn test_build_tuic_config() {
+        let yaml = r#"
+proxies:
+  - {name: tuic-hk, server: tuic.example.com, port: 443, type: tuic, uuid: 11111111-2222-3333-4444-555555555555, password: pass123, sni: tuic.example.com}
+"#;
+        let nodes = parse_clash_yaml(yaml).unwrap();
+        let config = build_singbox_config(&nodes[0], 7899).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&config).unwrap();
+        let ob = &v["outbounds"][0];
+        assert_eq!(ob["type"], "tuic");
+        assert_eq!(ob["uuid"], "11111111-2222-3333-4444-555555555555");
+        assert_eq!(ob["password"], "pass123");
+        assert_eq!(ob["tls"]["server_name"], "tuic.example.com");
+        assert_eq!(ob["tls"]["enabled"], true);
+    }
+
+    #[test]
+    fn test_build_wireguard_config() {
+        let yaml = r#"
+proxies:
+  - {name: wg-sg, server: wg.example.com, port: 51820, type: wireguard, private-key: PRIVKEY123, public-key: PUBKEY456}
+"#;
+        let nodes = parse_clash_yaml(yaml).unwrap();
+        let config = build_singbox_config(&nodes[0], 7899).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&config).unwrap();
+        let ob = &v["outbounds"][0];
+        assert_eq!(ob["type"], "wireguard");
+        assert_eq!(ob["private_key"], "PRIVKEY123");
+        assert_eq!(ob["peers"][0]["public_key"], "PUBKEY456");
+        assert_eq!(ob["peers"][0]["server"], "wg.example.com");
+    }
+
+    #[test]
+    fn test_build_hysteria_v1_config() {
+        let yaml = r#"
+proxies:
+  - {name: hy1-jp, server: hy1.example.com, port: 36712, type: hysteria, auth-str: secretauth, sni: hy1.example.com}
+"#;
+        let nodes = parse_clash_yaml(yaml).unwrap();
+        let config = build_singbox_config(&nodes[0], 7899).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&config).unwrap();
+        let ob = &v["outbounds"][0];
+        assert_eq!(ob["type"], "hysteria");
+        assert_eq!(ob["auth_str"], "secretauth");
+        assert_eq!(ob["tls"]["server_name"], "hy1.example.com");
+        assert_eq!(ob["tls"]["enabled"], true);
+    }
+
+
 }
