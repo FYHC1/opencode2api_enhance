@@ -28,43 +28,44 @@ pub struct AppState {
 
 /// 桌面入口：释放内嵌二进制 → 构建 AppState → 启动 Tauri（托盘常驻）
 ///
-/// 端口隔离约定（与 gateway.rs 一致）：
-/// - release（正式 exe）：管理器 18100，网关 18080
-/// - debug（tauri dev）：管理器 28100，网关 21080 —— 避免与正式环境同时运行时冲突。
-#[cfg(debug_assertions)]
-const CORE_MANAGER_PORT: u16 = 28100;
-#[cfg(not(debug_assertions))]
-const CORE_MANAGER_PORT: u16 = 18100;
+/// 端口规划（2026-08-10 决策）：每个环境固定一段「槽位」，从 40000 向上、每槽 4100 宽；
+/// sing-box 出口 = 实例 API + 2000（紧挨，不再 +10000 错开）。槽内布局：
+///   base 管理器、+80 网关、+90 探针 API、+100~+2099 实例段（2000 个）、
+///   +2090 探针 SOCKS（= 探针 API + 2000）、+2100~+4099 sing-box 段。
+/// - 槽 0（40000）正式 release；槽 1（44100）dev（tauri dev）；槽 2（48200）便携测试包；
+///   - 槽 3（52300）web-dev / headless（由 Go core 直跑，桌面壳不使用）
+#[derive(Clone, Copy, PartialEq)]
+enum EnvKind {
+    Release,
+    Dev,
+    Portable,
+    WebDev,
+}
 
-#[cfg(debug_assertions)]
-const CORE_GATEWAY_PORT: &str = "21080";
-#[cfg(not(debug_assertions))]
-const CORE_GATEWAY_PORT: &str = "18080";
+fn slot_base(kind: EnvKind) -> u16 {
+    match kind {
+        EnvKind::Release => 40000,
+        EnvKind::Dev => 44100,
+        EnvKind::Portable => 48200,
+        EnvKind::WebDev => 52300,
+    }
+}
 
-// 实例/探针端口随构建环境（与 Rust 正式版语义一致）；便携测试包在 run() 里以 50000+ 段覆盖。
-#[cfg(debug_assertions)]
-const CORE_INSTANCE_BASE_PORT: &str = "30000";
-#[cfg(not(debug_assertions))]
-const CORE_INSTANCE_BASE_PORT: &str = "18100";
+// 槽内偏移（与 Go core core/manager/batch.go singboxPortOffset=2000 对齐）。
+const OFF_GATEWAY: u16 = 80;
+const OFF_PROBE_API: u16 = 90;
+const OFF_INSTANCE_BASE: u16 = 100;
+const OFF_PROBE_SOCKS: u16 = 2090;
 
-#[cfg(debug_assertions)]
-const CORE_PROBE_API_PORT: &str = "39090";
-#[cfg(not(debug_assertions))]
-const CORE_PROBE_API_PORT: &str = "19090";
-
-#[cfg(debug_assertions)]
-const CORE_PROBE_SOCKS_PORT: &str = "49090";
-#[cfg(not(debug_assertions))]
-const CORE_PROBE_SOCKS_PORT: &str = "29090";
-
-/// core 管理器实际端口：优先环境变量 OPCODE2API_MANAGER_PORT（便携测试包覆盖），否则按构建环境。
-fn manager_port() -> u16 {
+/// core 管理器实际端口：优先环境变量 OPCODE2API_MANAGER_PORT（手动覆盖），
+/// 否则槽位基址 + 避让扫描（槽内前 32 个端口在控制区，通常立即可用）。
+fn manager_port(kind: EnvKind) -> u16 {
     if let Ok(s) = std::env::var("OPCODE2API_MANAGER_PORT") {
         if let Ok(n) = s.trim().parse::<u16>() {
             return n;
         }
     }
-    CORE_MANAGER_PORT
+    pick_free_port(slot_base(kind), 32)
 }
 
 /// 从 start 起扫描 budget 个端口，返回第一个当前空闲（无监听）的端口。
@@ -125,31 +126,21 @@ pub fn run() {
         .map(|p| p.to_path_buf())
         .unwrap_or_default();
     // 便携测试包隔离：exe 旁存在 portable.txt → 用独立数据目录，避免与正式版共用实例/配置。
-    // 端口遵循 FAQ 规则（sing-box = 实例 API + 10000）：正式版 API ≤ 39999 → sing-box ≤ 49999，
-    // 因此测试管理器/网关端口取 50000+ 段，天然避开整条 (api, api+10000) 覆盖带，再叠加动态扫描兜底。
     let is_portable = binary_dir
         .parent()
         .map(|p| p.join("portable.txt").exists())
         .unwrap_or(false);
+    let env_kind = if is_portable {
+        EnvKind::Portable
+    } else if cfg!(debug_assertions) {
+        EnvKind::Dev
+    } else {
+        EnvKind::Release
+    };
     if is_portable {
         let base = dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
         data_dir = base.join("opencode2api-manager-test");
-        // 便携版端口段全隔离（50000+），与正式版（18000-29000 段）零重叠：
-        //   - 管理器   50000+ 动态
-        //   - 网关     50100+ 动态
-        //   - 实例 API 51000+ 动态（sing-box 自动 = +10000 → 61000+，FAQ 规则）
-        //   - 探针 API 52000+ 动态
-        //   - 探针 SOCKS 52100+ 动态
-        let gw = pick_free_port(50100, 64).to_string();
-        let inst_base = pick_free_port(51000, 256).to_string();
-        let probe_api = pick_free_port(52000, 64).to_string();
-        let probe_socks = pick_free_port(52100, 64).to_string();
-        unsafe {
-            std::env::set_var("OPCODE2API_GATEWAY_PORT", &gw);
-            std::env::set_var("OPCODE2API_INSTANCE_BASE_PORT", &inst_base);
-            std::env::set_var("OPCODE2API_PROBE_API_PORT", &probe_api);
-            std::env::set_var("OPCODE2API_PROBE_SOCKS_PORT", &probe_socks);
-        }
+        // 端口由槽位表（EnvKind::Portable → 48200 段）处理，见 spawn_core_manager。
     }
     let mut manager = instance::InstanceManager::new(
         instances_path,
@@ -171,13 +162,9 @@ pub fn run() {
     unsafe {
         std::env::set_var("OPCODE2API_DATA_DIR", &data_dir);
     }
-    // 管理器端口：便携测试从 50000 段起步（避开正式实例/sing-box 覆盖带），其余按环境默认 + 动态扫描。
-    let mgr_port = if is_portable {
-        pick_free_port(50000, 64)
-    } else {
-        pick_free_port(manager_port(), 32)
-    };
-    let (core_child, core_job) = match spawn_core_manager(&data_dir, mgr_port) {
+    // 管理器端口：按环境槽位（40000+ 段），槽内避让扫描兜底。
+    let mgr_port = manager_port(env_kind);
+    let (core_child, core_job) = match spawn_core_manager(&data_dir, mgr_port, env_kind) {
         Ok((child, job)) => (Some(child), job),
         Err(e) => {
             eprintln!("启动 core 管理器失败: {e}");
@@ -303,7 +290,12 @@ button: tauri::tray::MouseButton::Left,
 
 /// 拉起 Go core 管理器（bin/opencode2api.exe -port <port> ...），等待 /health 就绪。
 /// 数据目录经 OPCODE2API_DATA_DIR 注入（setup 已设置）。
-fn spawn_core_manager(data_dir: &std::path::Path, port: u16) -> std::io::Result<(std::process::Child, Option<job::JobObject>)> {
+/// 网关/实例/探针端口按环境槽位注入 env（用户显式 OPCODE2API_*_PORT 优先）。
+fn spawn_core_manager(
+    data_dir: &std::path::Path,
+    port: u16,
+    env_kind: EnvKind,
+) -> std::io::Result<(std::process::Child, Option<job::JobObject>)> {
     use std::io::{Read, Write};
     use std::process::Command;
     use std::time::Duration;
@@ -317,25 +309,27 @@ fn spawn_core_manager(data_dir: &std::path::Path, port: u16) -> std::io::Result<
         ));
     }
     let cfg_path = data_dir.join("config.json");
-    // 网关/实例/探针端口随构建环境；便携测试包已在 run() 里覆盖。
+    // 网关/实例/探针端口按环境槽位注入（槽位表：base+偏移）；用户显式环境变量优先。
+    let base = slot_base(env_kind);
+    let slot = |off: u16| (base + off).to_string();
     if std::env::var_os("OPCODE2API_GATEWAY_PORT").is_none() {
         unsafe {
-            std::env::set_var("OPCODE2API_GATEWAY_PORT", CORE_GATEWAY_PORT);
+            std::env::set_var("OPCODE2API_GATEWAY_PORT", slot(OFF_GATEWAY));
         }
     }
     if std::env::var_os("OPCODE2API_INSTANCE_BASE_PORT").is_none() {
         unsafe {
-            std::env::set_var("OPCODE2API_INSTANCE_BASE_PORT", CORE_INSTANCE_BASE_PORT);
+            std::env::set_var("OPCODE2API_INSTANCE_BASE_PORT", slot(OFF_INSTANCE_BASE));
         }
     }
     if std::env::var_os("OPCODE2API_PROBE_API_PORT").is_none() {
         unsafe {
-            std::env::set_var("OPCODE2API_PROBE_API_PORT", CORE_PROBE_API_PORT);
+            std::env::set_var("OPCODE2API_PROBE_API_PORT", slot(OFF_PROBE_API));
         }
     }
     if std::env::var_os("OPCODE2API_PROBE_SOCKS_PORT").is_none() {
         unsafe {
-            std::env::set_var("OPCODE2API_PROBE_SOCKS_PORT", CORE_PROBE_SOCKS_PORT);
+            std::env::set_var("OPCODE2API_PROBE_SOCKS_PORT", slot(OFF_PROBE_SOCKS));
         }
     }
     let port_str = port.to_string();

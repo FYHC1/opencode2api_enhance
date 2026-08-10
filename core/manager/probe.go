@@ -21,21 +21,32 @@ const (
 )
 
 // probeAPIPort 探针 API 端口：优先环境变量 OPCODE2API_PROBE_API_PORT
-// （便携测试/多开隔离用），否则默认 19000（正式版语义，与 Rust 一致）。
-func probeAPIPort() uint16 {
+// （便携测试/多开隔离用），其次 config.probe_api_port，否则默认 19000（正式版语义）。
+func (m *Manager) probeAPIPort() uint16 {
 	if s := os.Getenv("OPCODE2API_PROBE_API_PORT"); s != "" {
 		if n := parsePositiveInt(s); n > 0 && n < 65536 {
 			return uint16(n)
 		}
 	}
+	if m != nil {
+		if p := m.loadConfig().ProbeAPIPort; p > 0 {
+			return p
+		}
+	}
 	return 19000
 }
 
-// probeSocksPort 探针 SOCKS 端口：优先环境变量 OPCODE2API_PROBE_SOCKS_PORT，否则 29000。
-func probeSocksPort() uint16 {
+// probeSocksPort 探针 SOCKS 端口：优先环境变量 OPCODE2API_PROBE_SOCKS_PORT，
+// 其次 config.probe_socks_port，否则默认 29000。
+func (m *Manager) probeSocksPort() uint16 {
 	if s := os.Getenv("OPCODE2API_PROBE_SOCKS_PORT"); s != "" {
 		if n := parsePositiveInt(s); n > 0 && n < 65536 {
 			return uint16(n)
+		}
+	}
+	if m != nil {
+		if p := m.loadConfig().ProbeSocksPort; p > 0 {
+			return p
 		}
 	}
 	return 29000
@@ -118,10 +129,10 @@ func (c *ScanController) RequestStop() ScanProgress {
 // Start 启动扫描（已运行则报错）。
 func (c *ScanController) Start(opts ScanOptions) (ScanProgress, error) {
 	if opts.APIPort == 0 {
-		opts.APIPort = probeAPIPort()
+		opts.APIPort = c.m.probeAPIPort()
 	}
 	if opts.SocksPort == 0 {
-		opts.SocksPort = probeSocksPort()
+		opts.SocksPort = c.m.probeSocksPort()
 	}
 	// 单节点超时预算：未设置默认 25s（对齐 Rust scan_start unwrap_or(25)）；下限 3s 防非法值。
 	if opts.TimeoutSec == 0 {

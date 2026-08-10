@@ -96,10 +96,11 @@ src/                    src-tauri/src/                     main.go 等（根目�
 | 5 | 新分支基线 | **从 `feature/debug-tooling` 分出** `feat/architecture-v2` |
 | 6 | 兼容性红线 | 厂商特有信息（鉴权头、错误码表、会话标识、免费判定规则等）一律进厂商实现或配置，**不写死在 core**；有不确定处先问再定 |
 | 7 | 客户端界面统一（客户新要求，2026-08-08） | **所有客户端（Win exe / mac / Linux / Web）一律复用同一套 `src/` 界面**：独享、实例池、节点池、统计、日志、设置六个页面，外观与交互保持一致；**桌面 exe 不设登录页**（壳启动 core 时 `-password ""` 关闭鉴权，与旧 exe 行为一致）；Web 版沿用密码鉴权 |
-| 8 | 环境数据目录隔离（2026-08-09） | **每个运行环境独立配置空间**（`%APPDATA%\opencode2api-manager*`，经 `OPCODE2API_DATA_DIR` 注入，Go core 侧 `DefaultDataDir()` 读取）：`opencode2api-manager`（正式 release）／`-dev`（tauri dev）／`-test`（便携测试包 portable.txt）／`-web-dev`（web 开发）。实例池/配置/runtime 互不干扰；端口段亦按环境隔离（正式 18000+ / dev 30000+ / 便携 50000+）。新增环境一律按此命名约定追加 |
+| 8 | 环境数据目录隔离（2026-08-09） | **每个运行环境独立配置空间**（`%APPDATA%\opencode2api-manager*`，经 `OPCODE2API_DATA_DIR` 注入，Go core 侧 `DefaultDataDir()` 读取）：`opencode2api-manager`（正式 release）／`-dev`（tauri dev）／`-test`（便携测试包 portable.txt）／`-web-dev`（web 开发）。实例池/配置/runtime 互不干扰；端口段按「决策 #12 槽位表」隔离。新增环境一律按此命名约定追加 |
 | 9 | 内嵌二进制更新（2026-08-09） | 壳释放内嵌 core/sing-box 时按**内容哈希**校验（非仅文件大小），避免不同构建恰好同长导致旧版残留 |
 | 10 | 六页 UI 全平台唯一界面（2026-08-09） | **六页 UI（独享/实例池/节点池/统计/日志/设置）是全平台唯一事实界面**。任何终端（Win exe / Web / 未来 macOS / Linux）与任何技术栈实现的客户端，界面都必须与 exe 一致；复用 `src/` 或按该 UI 对应实现，**禁止另起一套界面**。历史 `feature/web-self-service` 分支的简单页面已废弃。新增页面/菜单须与六页对齐 |
 | 11 | 账号池"非阻塞自动补齐" + opencode 恒无 key（2026-08-09） | **windsurf 池型厂商**：`min_available` 默认 **3**（1 在用 + 备用换号余量）。`EnsureReady` 非阻塞——可用 ≥1 即放行用户请求，差额由**后台 goroutine 并行补齐**（single-flight 防风暴）；仅池空（可用=0）才同步注册 1 个恢复服务，其余后台补。**opencode 上游恒无 key**：客户端任何 key 一律剥离不转发（免费档），模型解析恒优先 `-free` 变体。**windsurf 用账号自带 session token**（厂商自己的"key"）。`/v1/models` **恒返回免费模型**（不分鉴权），付费模型不展示，非 opencode 厂商模型不混入基础缓存（防错误前缀/重复） |
+| 12 | 端口槽位表 + sing-box +2000（2026-08-10） | **每个环境固定一段「槽位」端口，从 40000 向上、每槽 4100 宽**；槽内：`base` 管理器、`+80` 网关、`+90` 探针 API、`+100~+2099` 实例段（2000 个）、`+2090` 探针 SOCKS、`+2100~+4099` sing-box 段。**sing-box = 实例 API + 2000**（紧挨，废弃旧 +10000 错开）；槽 0~4 = 正式 release(40000) / dev(44100) / 便携(48200) / web-dev(52300) / 预留(56400)。端口来源优先级 **env > config.json（gateway_port/instance_base_port/probe_*_port 新增配置项）> 编译默认**。壳层按数据目录环境（正式/dev/便携）自动注入槽位；headless/Web 直跑经 env 或 config 配置。解决「新开分支/环境必撞端口」的根因（正式版 exe 本次不动，未来重新构建切新规则） |
 
 ---
 

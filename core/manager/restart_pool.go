@@ -31,7 +31,7 @@ func (m *Manager) RestartPool(runner Runner, gw *Gateway) RestartPoolResult {
 		}
 	}
 	res.Stopped = len(poolNames)
-	allPorts := append(append([]uint16(nil), memberPorts...), managerGatewayPort())
+	allPorts := append(append([]uint16(nil), memberPorts...), m.managerGatewayPort())
 	for _, p := range allPorts {
 		if !isPortFree(p) {
 			if freed := m.ForceFreePort(runner, p); len(freed) > 0 {

@@ -9,26 +9,34 @@
 
 ## 1. 端口总清单（代码事实来源）
 
-| 端口 | 用途 | 默认值 | 覆盖方式 | 代码位置 |
-|---|---|---|---|---|
-| **8000** | core HTTP（管理面板 + SPA 托管） | 8000 | `-port` 启动参数 | `main.go` |
-| **18080** | 统一网关（-gateway 子进程） | 18080 | `OPCODE2API_GATEWAY_PORT` | `core/manager/tcp.go`、`gateway.go` |
-| **18100+** | 实例 API 端口段（批量添加起始） | 18100 | `OPCODE2API_INSTANCE_BASE_PORT` | `core/manager/batch.go` |
-| **实例端口+10000** | 每个实例的 sing-box SOCKS5 出口 | 随实例 | 随实例端口 | `core/manager/admin_ops.go`、`batch.go` |
-| **19000** | 探针 API（节点扫描时） | 19000 | `OPCODE2API_PROBE_API_PORT` | `core/manager/probe.go` |
-| **29000** | 探针 SOCKS（节点扫描时） | 29000 | `OPCODE2API_PROBE_SOCKS_PORT` | `core/manager/probe.go` |
-| **10000–39999** | `PortSuggest` 端口建议区间 | — | `OPCODE2API_INSTANCE_BASE_PORT` | `core/manager/port.go` |
-| **9097** | Clash 外部控制（拉取节点，用户自己配的 Clash Verge） | 9097 | 设置页 | 用户环境 |
+**端口规划（2026-08-10 决策）**：每个环境固定一段「槽位」，从 **40000 向上、每槽 4100 宽**；
+**sing-box 出口 = 实例 API + 2000**（紧挨，不再 +10000 错开）。槽内布局：
+`base` 管理器、`+80` 网关、`+90` 探针 API、`+100~+2099` 实例段（2000 个）、
+`+2090` 探针 SOCKS、`+2100~+4099` sing-box 段。
 
-> ⚠️ **重点**：实例 sing-box 端口 = 实例端口 + 10000。例如实例占 18107，则 **28107 也同时被占**。
-> 检查端口时两者都要查。
+| 槽 | 环境 | 管理器 | 网关 | 探针 API/SOCKS | 实例 API 段 | sing-box 段（实例+2000） |
+|---|---|---|---|---|---|---|
+| 0 | **正式 release** | 40000 | 40080 | 40090 / 42090 | 40100~42099 | 42100~44099 |
+| 1 | **dev（tauri dev）** | 44100 | 44180 | 44190 / 46190 | 44200~46199 | 46200~48199 |
+| 2 | **便携测试包** | 48200 | 48280 | 48290 / 50290 | 48300~50299 | 50300~52299 |
+| 3 | web-dev / headless | 52300 | 52380 | 52390 / 54390 | 52400~54399 | 54400~56399 |
+| 4 | 预留 | 56400 | 56480 | 56490 / 58490 | 56500~58499 | 58500~60499 |
+
+- 端口来源优先级：**环境变量 > config.json（gateway_port/instance_base_port/probe_*_port）> 编译默认**。
+- 桌面壳按数据目录环境（正式/dev/便携）自动注入槽位端口，新开环境默认隔离，无需手动设置。
+- headless/Web 直跑管理端口：`-port`（默认 8000），`-listen` 可收紧到 127.0.0.1；实例/网关/探针端口可经
+  环境变量或 config.json 覆盖。
+- **9097** Clash 外部控制（用户自行配置的 Clash Verge，拉取节点用）。
+
+> ⚠️ **重点**：实例 sing-box 端口 = 实例端口 + 2000。例如实例占 44200，则 **46200 也同时被占**。
+> 检查端口时两者都要查（段内成对）。
 
 ### 1.1 测试自身使用的固定端口（`go test` 会真实 bind，任何运行中的服务占了都会导致测试失败）
 
 | 端口 | 测试 |
 |---|---|
 | **19904 / 29904** | 探针相关测试（probe_test.go 等） |
-| **27901 / 27902 / 37901 / 37902** | `TestRestartPoolStartsMembersThenGateway`（模拟运行中实例） |
+| **27901 / 27902 / 29901 / 29902** | `TestRestartPoolStartsMembersThenGateway`（模拟运行中实例，sing-box=实例+2000） |
 | **21080** | 网关测试 |
 
 > ⚠️ **运行 `go test ./...` 前**，确认没有**节点扫描正在跑**——扫描探针会占用探针端口
@@ -41,10 +49,10 @@
 
 | 环境 | 数据目录（`OPCODE2API_DATA_DIR`） | 实例端口段（`OPCODE2API_INSTANCE_BASE_PORT`） | 网关（`OPCODE2API_GATEWAY_PORT`） |
 |---|---|---|---|
-| **正式 release** | `%APPDATA%\opencode2api-manager`（默认） | 18100 | 18080 |
-| **dev**（tauri dev） | `%APPDATA%\opencode2api-manager-dev` | 30000 | 需显式覆盖 |
-| **便携测试包** | `%APPDATA%\opencode2api-manager-test` | 50000 | 需显式覆盖 |
-| **web-dev** | `%APPDATA%\opencode2api-manager-web-dev` | 需显式覆盖 | 需显式覆盖 |
+| **正式 release** | `%APPDATA%\opencode2api-manager`（默认） | 40100（槽0） | 40080 |
+| **dev**（tauri dev） | `%APPDATA%\opencode2api-manager-dev` | 44200（槽1） | 44180 |
+| **便携测试包** | `%APPDATA%\opencode2api-manager-test` | 48300（槽2） | 48280 |
+| **web-dev** | `%APPDATA%\opencode2api-manager-web-dev` | 52400（槽3） | 52380 |
 
 数据目录经 `OPCODE2API_DATA_DIR` 注入，`core/manager/paths.go` 的 `DefaultDataDir()` 读取。
 **实例池 / 配置 / runtime 互不干扰**——这是隔离测试的根基。
@@ -61,7 +69,7 @@ Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'opencode2api|sing
   Select-Object ProcessId, Name, CreationDate, @{N='Cmd';E={$_.CommandLine.Substring(0, [Math]::Min(160, $_.CommandLine.Length))}}
 
 # 关键端口监听情况
-netstat -ano -p tcp | Select-String 'LISTENING' | Select-String ':8000|:9097|:18080|:1810|:2810|:19000|:29000|:3000|:5000'
+netstat -ano -p tcp | Select-String 'LISTENING' | Select-String ':8000|:9097|:40080|:44180|:4420|:4620|:48280|:4830|:40000|:44100|:48200|:42090|:46190'
 ```
 
 ### 3.2 判断哪些是"别人的环境"（禁止触碰）
@@ -85,32 +93,33 @@ netstat -ano -p tcp | Select-String 'LISTENING' | Select-String ':8000|:9097|:18
 5. **测试结束后清理自己启动的进程**（Ctrl+C / Stop-Process 你自己启动的 PID），并复查 §3.1 的
    进程列表确认没有残留。
 6. 检查端口用 `netstat -ano | Select-String 'LISTENING'`，**不要只检查目标端口本身**，还要检查
-   `实例端口+10000`（sing-box）和探针端口。
+   `实例端口+2000`（sing-box）和探针端口。
 
 ---
 
 ## 5. 安全启动模板（真实服务走查 / 手工冒烟）
 
-以下端口块 **24000/24080/24100/24900/25900** 避开全部已知占用段（正式 8000/9097/18080/18100+、
-探针默认 19000/29000、**测试固定端口 19904/27901/27902/29904/37901/37902/21080**），可作为模板：
+桌面壳（tauri dev/正式/便携）已按环境槽位自动注入端口（§1 表），**无需手动设置即可隔离**。
+仅当你想用独立数据目录/自定义端口时，覆盖环境变量（槽 1 dev 为基准示例）：
 
 ```powershell
 cd D:\ai_projects\opencode2api_enhance_main
 go build -o opencode2api_e2e.exe .
 
-# ── 三件套隔离：数据目录 / 网关 / 实例端口段 ──
+# ── 隔离：数据目录 + 槽 1（dev 段）端口（也可完全省略端口变量直接用默认槽位）──
 $env:OPCODE2API_DATA_DIR           = "C:\Users\ASUS\Desktop\opencode2api-e2e-ai"  # 独立目录
-$env:OPCODE2API_GATEWAY_PORT       = "24080"   # 避开 18080（正式网关）
-$env:OPCODE2API_INSTANCE_BASE_PORT = "24100"   # 实例 24100+，sing-box 34100+
-# 探针端口（如要做节点扫描；避开 19000/29000 默认与 19904/29904 测试端口）
-$env:OPCODE2API_PROBE_API_PORT     = "24900"   # worker 24901+，不撞测试端口
-$env:OPCODE2API_PROBE_SOCKS_PORT   = "25900"   # worker 25901+，不撞 27901/27902
+$env:OPCODE2API_MANAGER_PORT       = "44100"   # 管理器（槽1 基址）
+$env:OPCODE2API_GATEWAY_PORT       = "44180"   # 网关（槽1 +80）
+$env:OPCODE2API_INSTANCE_BASE_PORT = "44200"   # 实例 44200+，sing-box 46200+（+2000 紧挨）
+# 探针端口（节点扫描时；槽1 +90/+2090）
+$env:OPCODE2API_PROBE_API_PORT     = "44190"   # worker 44191+，不撞实例段
+$env:OPCODE2API_PROBE_SOCKS_PORT   = "46190"   # worker 46191+，不撞 sing-box 段
 
-# 管理端口避开 8000
-.\opencode2api_e2e.exe -port 24000 -password=123456
+# 管理端口 -port 用 44100（与 OPCODE2API_MANAGER_PORT 一致）
+.\opencode2api_e2e.exe -port 44100 -password=123456
 ```
 
-浏览器访问 `http://127.0.0.1:24000`。**测试完删除 `opencode2api_e2e.exe` 与
+浏览器访问 `http://127.0.0.1:44100`。**测试完删除 `opencode2api_e2e.exe` 与
 `C:\Users\ASUS\Desktop\opencode2api-e2e-ai` 目录，并清掉你启动的进程。**
 
 > ⚠️ `-password=`（等号空值）在 PowerShell 里才是"关闭登录页"；`-password ""` 的空字符串会被
@@ -122,8 +131,8 @@ $env:OPCODE2API_PROBE_SOCKS_PORT   = "25900"   # worker 25901+，不撞 27901/27
 
 | 坑 | 说明 |
 |---|---|
-| sing-box 端口是隐藏的 | 实例 18107 占用时，**28107 也占着**，检查要成对 |
-| 探针端口不显眼 | 节点扫描瞬间占 19000 + 29000，可能撞你的测试实例 |
-| PortSuggest 会避开已占端口 | 它自动跳开，但若你的测试端口与正式版段重叠，建议/批处理会互相让位造成混乱 |
+| sing-box 端口是隐藏的 | 实例 44200 占用时，**46200（+2000）也占着**，检查要成对 |
+| 探针端口不显眼 | 节点扫描瞬间占 槽位探针端口（如 dev 44190 + 46190），可能撞你的测试实例 |
+| PortSuggest 会避开已占端口 | 它只在**当前环境槽内**建议，自动跳开已占与实例表占用，跨环境天然不重叠 |
 | 数据目录决定一切 | 不设 `OPCODE2API_DATA_DIR` = 读写**正式版**的配置和实例池 → 必须设 |
 | 残留进程 | dev 会话崩溃后 sing-box 可能残留，检查进程列表（§3.1）而非只看端口 |

@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// TestPortIsolationE2E 验证便携端口段隔离：实例 51000+ / sing-box 61000+ / 探针 52000+。
+// TestPortIsolationE2E 验证便携端口段隔离：实例 51000+ / sing-box +2000（既定规则）。
 func TestPortIsolationE2E(t *testing.T) {
 	// 模拟便携版环境变量（壳层 run() 注入）
 	os.Setenv("OPCODE2API_INSTANCE_BASE_PORT", "51000")
@@ -42,11 +42,11 @@ func TestPortIsolationE2E(t *testing.T) {
 	if inst.Port < 51000 || inst.Port >= 52000 {
 		t.Errorf("instance port %d not in 51000 segment", inst.Port)
 	}
-	if inst.SingboxPort != inst.Port+10000 {
-		t.Errorf("singbox %d != port+10000 (%d)", inst.SingboxPort, inst.Port+10000)
+	if inst.SingboxPort != inst.Port+singboxPortOffset {
+		t.Errorf("singbox %d != port+%d (%d)", inst.SingboxPort, singboxPortOffset, inst.Port+singboxPortOffset)
 	}
-	if inst.SingboxPort < 61000 {
-		t.Errorf("singbox %d not in 61000 segment (would collide with production 28100)", inst.SingboxPort)
+	if inst.SingboxPort < 51000+singboxPortOffset || inst.SingboxPort >= 52000+singboxPortOffset {
+		t.Errorf("singbox %d not in +%d segment (would collide with other env)", inst.SingboxPort, singboxPortOffset)
 	}
 
 	// 端口建议应落在实例段附近（非正式版 18100 段）
@@ -55,12 +55,15 @@ func TestPortIsolationE2E(t *testing.T) {
 		t.Fatalf("PortSuggest: %v", err)
 	}
 	fmt.Printf("port suggest=%d\n", suggest)
+	if suggest < 51000+100 || suggest >= 51000+100+2000 {
+		t.Errorf("suggest %d not in env instance segment", suggest)
+	}
 
 	// 探针端口
-	if got := probeAPIPort(); got != 52000 {
+	if got := m.probeAPIPort(); got != 52000 {
 		t.Errorf("probe api=%d want 52000", got)
 	}
-	if got := probeSocksPort(); got != 52100 {
+	if got := m.probeSocksPort(); got != 52100 {
 		t.Errorf("probe socks=%d want 52100", got)
 	}
 

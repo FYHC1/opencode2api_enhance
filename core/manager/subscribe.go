@@ -583,8 +583,8 @@ func (m *Manager) importSubscription(url string, joinGateway bool) (int, error) 
 		}
 		// 实例端口是本地 opencode2api 监听端口，与节点服务器端口无关：
 		// 从 basePort 段分配空闲（443 等节点端口留给远端，不占用本地监听）。
-		port := instanceBasePort()
-		for usedPorts[port] || usedPorts[port+10000] || !isPortFree(port) || !isPortFree(port+10000) {
+		port := m.instanceBasePort()
+		for usedPorts[port] || usedPorts[port+singboxPortOffset] || !isPortFree(port) || !isPortFree(port+singboxPortOffset) {
 			port++
 		}
 		ip := fmt.Sprintf("%s:%d", node.Server, node.Port)
@@ -594,7 +594,7 @@ func (m *Manager) importSubscription(url string, joinGateway bool) (int, error) 
 			Node:        node.Name,
 			Password:    genSkKey(),
 			IP:          ip,
-			SingboxPort: port + 10000,
+			SingboxPort: port + singboxPortOffset,
 			JoinGateway: joinGateway,
 			Status:      StatusStopped(),
 		}

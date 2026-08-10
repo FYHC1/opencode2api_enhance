@@ -11,11 +11,21 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-/// 统一网关端口：debug 构建（tauri dev）用 21080 段（与 main 18080、web 22080 隔离），release 构建用生产 18080
+/// 统一网关端口：壳层按环境槽位注入 OPCODE2API_GATEWAY_PORT（Go core 实际使用）；
+/// Rust 侧实现为影子代码（大步3后网关由 Go core 管理），此处动态读取保持与 core 一致，
+/// 仅旧版无壳直跑场景回退编译默认（槽位表：release 40080 / dev 44180）。
 #[cfg(debug_assertions)]
-pub const UNIFIED_GATEWAY_PORT: u16 = 21080;
+const UNIFIED_GATEWAY_PORT_DEFAULT: u16 = 44180;
 #[cfg(not(debug_assertions))]
-pub const UNIFIED_GATEWAY_PORT: u16 = 18080;
+const UNIFIED_GATEWAY_PORT_DEFAULT: u16 = 40080;
+pub fn unified_gateway_port() -> u16 {
+    if let Ok(s) = std::env::var("OPCODE2API_GATEWAY_PORT") {
+        if let Ok(n) = s.trim().parse::<u16>() {
+            return n;
+        }
+    }
+    UNIFIED_GATEWAY_PORT_DEFAULT
+}
 pub(crate) const UNIFIED_GATEWAY_KEY: &str = "sk-unified-local";
 
 #[derive(Debug, Clone, Serialize)]
@@ -137,7 +147,7 @@ impl GatewayManager {
             // 不设置则落到应用 exe 目录，统计界面（只扫 runtime/）读不到。
             .current_dir(self.gateway_dir())
             .arg("-port")
-            .arg(UNIFIED_GATEWAY_PORT.to_string())
+            .arg(unified_gateway_port().to_string())
             .arg("-config")
             .arg(&self.config_path)
             .arg("-password")
@@ -175,7 +185,7 @@ impl GatewayManager {
         let target = Arc::clone(&self.model_catalog);
         let password = self.password.clone();
         thread::spawn(move || {
-            let result = fetch_gateway_models(UNIFIED_GATEWAY_PORT, &password);
+            let result = fetch_gateway_models(unified_gateway_port(), &password);
             if let Ok(mut catalog) = target.lock() {
                 catalog.loading = false;
                 match result {
@@ -289,8 +299,8 @@ impl GatewayManager {
         };
         GatewayStatus {
             running,
-            address: format!("http://127.0.0.1:{}/v1", UNIFIED_GATEWAY_PORT),
-            port: UNIFIED_GATEWAY_PORT,
+            address: format!("http://127.0.0.1:{}/v1", unified_gateway_port()),
+            port: unified_gateway_port(),
             api_key: self.password.clone(),
             running_instances: self.ports.len(),
             total_instances,
@@ -368,8 +378,8 @@ mod tests {
     #[test]
     fn gateway_port_isolated_by_build() {
         #[cfg(debug_assertions)]
-        assert_eq!(UNIFIED_GATEWAY_PORT, 21080);
+        assert_eq!(unified_gateway_port(), 44180);
         #[cfg(not(debug_assertions))]
-        assert_eq!(UNIFIED_GATEWAY_PORT, 18080);
+        assert_eq!(unified_gateway_port(), 40080);
     }
 }

@@ -11,17 +11,27 @@ import (
 )
 
 const (
-	batchStartWorkers = 4
-	batchStopWorkers  = 8
-	defaultBasePort   = 18100
+	batchStartWorkers    = 4
+	batchStopWorkers     = 8
+	defaultBasePort      = 18100
+	// singboxPortOffset 实例 sing-box 出口端口相对实例 API 端口的偏移。
+	// 新端口规则（2026-08-10 决策）：紧挨实例段 +2000，不再用旧 +10000 错开——
+	// 使"环境槽位表"（实例段 + sing-box 段 4000 连续）可落在 40000+ 保留段且零重叠。
+	// 旧正式版 exe（+10000）不受影响，未来重新构建即切换新规则。
+	singboxPortOffset = 2000
 )
 
 // instanceBasePort 实例 API 端口起始：优先环境变量 OPCODE2API_INSTANCE_BASE_PORT
-// （便携测试/多开隔离用），否则默认 18100（正式版语义，与 Rust 一致）。
-func instanceBasePort() uint16 {
+// （便携测试/多开隔离用），其次 config.instance_base_port，否则默认 18100（正式版语义）。
+func (m *Manager) instanceBasePort() uint16 {
 	if s := os.Getenv("OPCODE2API_INSTANCE_BASE_PORT"); s != "" {
 		if n := parsePositiveInt(s); n > 0 && n < 65536 {
 			return uint16(n)
+		}
+	}
+	if m != nil {
+		if p := m.loadConfig().InstanceBasePort; p > 0 {
+			return p
 		}
 	}
 	return defaultBasePort
@@ -46,7 +56,7 @@ func genSkKey() string {
 //   - 名称：useNodeName 用节点名，否则「实例N」（N 从 1 起递增到不冲突）。
 func (m *Manager) BatchAdd(nodes []ClashNode, basePort uint16, useNodeName bool, namePrefix string) BatchAddResult {
 	if basePort == 0 {
-		basePort = instanceBasePort()
+		basePort = m.instanceBasePort()
 	}
 	result := BatchAddResult{Added: []string{}, Skipped: []string{}}
 	existing := m.ListInstances()
@@ -80,7 +90,7 @@ func (m *Manager) BatchAdd(nodes []ClashNode, basePort uint16, useNodeName bool,
 
 		// 找空闲端口（实例端口 + 对应 sing-box 端口双重判断）
 		port := basePort
-		for m.isPortUsedByInstance(port) || m.isPortUsedByInstance(port+10000) || !isPortFree(port) {
+		for m.isPortUsedByInstance(port) || m.isPortUsedByInstance(port+singboxPortOffset) || !isPortFree(port) {
 			port++
 		}
 		inst := Instance{
@@ -89,7 +99,7 @@ func (m *Manager) BatchAdd(nodes []ClashNode, basePort uint16, useNodeName bool,
 			Node:        node.Name,
 			Password:    genSkKey(),
 			IP:          node.Server + ":" + itoa(node.Port),
-			SingboxPort: port + 10000,
+			SingboxPort: port + singboxPortOffset,
 			JoinGateway: false,
 		}
 		if err := m.AddInstance(inst); err != nil {

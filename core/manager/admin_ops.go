@@ -136,7 +136,7 @@ func (m *Manager) InstancesAddHandler() http.HandlerFunc {
 		}
 		inst := Instance{
 			Name: name, Port: req.Port, Node: req.Node, Password: password,
-			SingboxPort: req.Port + 10000, JoinGateway: false,
+			SingboxPort: req.Port + singboxPortOffset, JoinGateway: false,
 		}
 		if err := m.AddInstance(inst); err != nil {
 			writeErr(w, http.StatusBadRequest, err.Error())
@@ -367,7 +367,7 @@ func (m *Manager) BatchAddHandler() http.HandlerFunc {
 			writeErr(w, http.StatusBadRequest, "nodes 不能为空")
 			return
 		}
-		basePort := instanceBasePort()
+		basePort := m.instanceBasePort()
 		if req.BasePort != nil {
 			basePort = *req.BasePort
 		}
@@ -553,18 +553,18 @@ func (m *Manager) httpBatchAdd(items []BatchAddHTTPItem, basePort uint16, useNod
 		}
 		name = finalName
 		if basePort == 0 {
-			basePort = instanceBasePort()
+			basePort = m.instanceBasePort()
 		}
 		port := basePort
 		if item.Port != nil {
 			port = *item.Port
 		}
-		for m.isPortUsedByInstance(port) || m.isPortUsedByInstance(port+10000) || !isPortFree(port) {
+		for m.isPortUsedByInstance(port) || m.isPortUsedByInstance(port+singboxPortOffset) || !isPortFree(port) {
 			port++
 		}
 		inst := Instance{
 			Name: name, Port: port, Node: item.Node, Password: genSkKey(),
-			SingboxPort: port + 10000, JoinGateway: false,
+			SingboxPort: port + singboxPortOffset, JoinGateway: false,
 		}
 		if err := m.AddInstance(inst); err != nil {
 			res.Errors = append(res.Errors, BatchAddErr{Node: item.Node, Error: err.Error()})

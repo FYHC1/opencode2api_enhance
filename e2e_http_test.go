@@ -116,7 +116,7 @@ func TestE2EAdminHTTP(t *testing.T) {
 	_, body = get("/api/admin/port/suggest", nil)
 	var sug int
 	_ = json.Unmarshal([]byte(body), &sug)
-	check("port suggest", sug >= 10000 && sug < 40000, "suggest=%d", sug)
+	check("port suggest", sug >= 18100+100 && sug < 18100+100+2000, "suggest=%d", sug)
 	code, body = get("/api/admin/port/check?port=30123", nil)
 	var pc map[string]any
 	_ = json.Unmarshal([]byte(body), &pc)

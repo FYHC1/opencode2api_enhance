@@ -3,7 +3,6 @@ package manager
 
 import (
 	"errors"
-	"os"
 	"time"
 )
 
@@ -28,34 +27,18 @@ func (m *Manager) isPortUsedByInstance(port uint16) bool {
 	return false
 }
 
-// PortSuggest 建议一个可用端口（LCG 在 10000–39999 区间内，200 次尝试）。
+// PortSuggest 建议一个可用端口（在环境实例段 [base+100, base+2100) 内 LCG 取 2000 次尝试）。
+// 与批量添加/订阅导入同段，端口和建议永远落在当前环境槽内（跨环境零重叠）。
 func (m *Manager) PortSuggest() (uint16, error) {
 	seed := randSeed()
-	start, err := m.basePortForSuggest()
-	if err != nil {
-		return 0, err
-	}
-	for i := 0; i < 200; i++ {
-		candidate := (start + 1 + uint16(lcgNext(&seed)%200)) % 30000
-		if candidate < 10000 {
-			candidate += 10000
-		}
+	base := m.instanceBasePort()
+	for i := 0; i < 2000; i++ {
+		candidate := base + 100 + uint16(lcgNext(&seed)%2000)
 		if !m.isPortUsedByInstance(candidate) && isPortFree(candidate) {
 			return candidate, nil
 		}
 	}
 	return 0, errors.New("未找到可用端口")
-}
-
-// basePortForSuggest 端口建议基址：优先环境变量 OPCODE2API_INSTANCE_BASE_PORT
-// （与批量添加同段，便携测试隔离），否则默认 10000（Rust 正式版语义）。
-func (m *Manager) basePortForSuggest() (uint16, error) {
-	if s := os.Getenv("OPCODE2API_INSTANCE_BASE_PORT"); s != "" {
-		if n := parsePositiveInt(s); n > 0 && n < 65536 {
-			return uint16(n), nil
-		}
-	}
-	return 10000, nil
 }
 
 // PortCheckResult 端口检查结果（前端契约）。

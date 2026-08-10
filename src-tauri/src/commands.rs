@@ -1141,7 +1141,7 @@ pub async fn restart_pool(state: tauri::State<'_, AppState>) -> Result<RestartPo
 
         let mut freed_ports: Vec<u16> = Vec::new();
         let mut all_ports = member_ports.clone();
-        all_ports.push(crate::gateway::UNIFIED_GATEWAY_PORT);
+        all_ports.push(crate::gateway::unified_gateway_port());
         for port in all_ports {
             // 端口仍被占则强清
             if !crate::instance::is_port_free(port) {
@@ -1743,7 +1743,7 @@ pub async fn reset_stats(
         // 2) 统一网关：先尝试 HTTP；失败（未运行 / 旧二进制无该端点）则覆写磁盘文件
         let gw_dir = runtime_dir.join("_unified-gateway");
         let gw_reset_ok = crate::instance::http_delete_json(
-            crate::gateway::UNIFIED_GATEWAY_PORT,
+            crate::gateway::unified_gateway_port(),
             "/api/reset-stats",
             std::time::Duration::from_secs(6),
             Some(crate::gateway::UNIFIED_GATEWAY_KEY),

@@ -11,7 +11,7 @@ import (
 // runningInstance 添加并启动一个实例（占口使 waitForPort 立即成功）。
 func runningInstance(t *testing.T, m *Manager, run *fakeRunner, name string, port uint16, join bool) {
 	t.Helper()
-	ln1, ln2 := occupyPort(t, port), occupyPort(t, port+10000)
+	ln1, ln2 := occupyPort(t, port), occupyPort(t, port+singboxPortOffset)
 	defer ln1.Close()
 	defer ln2.Close()
 	runningInstanceHeld(t, m, run, name, port, join, ln1, ln2)
@@ -21,7 +21,7 @@ func runningInstance(t *testing.T, m *Manager, run *fakeRunner, name string, por
 func runningInstanceHeld(t *testing.T, m *Manager, run *fakeRunner, name string, port uint16, join bool, ln1, ln2 net.Listener) {
 	t.Helper()
 	joinSeams(m)
-	_ = m.AddInstance(Instance{Name: name, Port: port, Node: "node-a", Password: "sk-x", SingboxPort: port + 10000})
+	_ = m.AddInstance(Instance{Name: name, Port: port, Node: "node-a", Password: "sk-x", SingboxPort: port + singboxPortOffset})
 	if err := m.StartInstance(run, name); err != nil {
 		t.Fatalf("start %s: %v", name, err)
 	}
@@ -161,8 +161,8 @@ func TestRestartPoolStartsMembersThenGateway(t *testing.T) {
 	m := newTestManager(t)
 	run := &fakeRunner{}
 	// 占口监听在整个重启期间保持打开（否则 waitForPort 超时）
-	ln1, ln2 := occupyPort(t, 27901), occupyPort(t, 37901)
-	ln3, ln4 := occupyPort(t, 27902), occupyPort(t, 37902)
+	ln1, ln2 := occupyPort(t, 27901), occupyPort(t, 27901+singboxPortOffset)
+	ln3, ln4 := occupyPort(t, 27902), occupyPort(t, 27902+singboxPortOffset)
 	defer ln1.Close()
 	defer ln2.Close()
 	defer ln3.Close()

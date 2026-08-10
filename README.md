@@ -116,7 +116,9 @@ npm run tauri:dev
 - **Tauri 壳**：只做窗口/托盘/内嵌二进制释放/拉起 core 管理器（`src-tauri/src/lib.rs`），管理职责全部在 Go core
 - **Go core**：一份实现服务所有端（桌面 exe / Web 浏览器），经 `/api/admin/*` HTTP 暴露；协议转换（OpenAI/Anthropic/Responses）与厂商契约在 main 包 + `core/contract`
 - **多厂商**：`vendors/opencode`（第一厂商）、`vendors/windsurf`（账号池型：无号自动注册/额度预注册/24h 冷却/无感换号）
-- **环境隔离**：正式版 / dev（tauri dev）/ 便携测试（portable.txt）各自独立数据目录与端口段，互不干扰
+- **环境隔离**：正式版 / dev（tauri dev）/ 便携测试（portable.txt）各自独立数据目录与**端口槽位**
+  （40000 起每环境一段；sing-box = 实例端口 +2000 紧挨），互不干扰，新开环境无需手动配端口
+- **端口配置化**：来源优先级 环境变量 > config.json（gateway_port/instance_base_port/probe_*_port）> 编译默认
 
 ## 目录结构
 

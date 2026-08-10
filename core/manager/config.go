@@ -41,6 +41,13 @@ type Config struct {
 	// GatewayKey 统一网关鉴权密钥（空 = 回退默认 sk-unified-local；main 功能 M6）。
 	GatewayKey string `json:"gateway_key,omitempty"`
 
+	// 端口配置（0 = 未设置，按 env > config > 编译默认 三源读取）：
+	// 供 headless/Web 直跑与自定义部署使用；桌面壳经环境变量按槽位表注入（优先于 config）。
+	GatewayPort      uint16 `json:"gateway_port,omitempty"`
+	InstanceBasePort uint16 `json:"instance_base_port,omitempty"`
+	ProbeAPIPort     uint16 `json:"probe_api_port,omitempty"`
+	ProbeSocksPort   uint16 `json:"probe_socks_port,omitempty"`
+
 	// Providers 厂商注册表（透传主程序 AppConfig 格式）：实例子进程/网关子进程
 	// 生成的 opencode2api.json 需要带上，才能像核心一样注册多厂商（如 windsurf）。
 	Providers []map[string]any `json:"providers,omitempty"`
@@ -124,6 +131,14 @@ func (m *Manager) ConfigGet(key string) (string, error) {
 			return "", nil
 		}
 		return "******", nil
+	case "gateway_port":
+		return strconv.FormatUint(uint64(cfg.GatewayPort), 10), nil
+	case "instance_base_port":
+		return strconv.FormatUint(uint64(cfg.InstanceBasePort), 10), nil
+	case "probe_api_port":
+		return strconv.FormatUint(uint64(cfg.ProbeAPIPort), 10), nil
+	case "probe_socks_port":
+		return strconv.FormatUint(uint64(cfg.ProbeSocksPort), 10), nil
 	default:
 		return "", fmt.Errorf("Unknown config key: %s", key)
 	}
@@ -138,6 +153,17 @@ func (m *Manager) ConfigSet(key, value string) error {
 			return 0, fmt.Errorf("invalid integer for %s: %s", key, value)
 		}
 		return v, nil
+	}
+	// parsePort 解析端口（空/"0"=未设置=0；合法 1-65535）。
+	parsePort := func() (uint16, error) {
+		if value == "" || value == "0" {
+			return 0, nil
+		}
+		v, err := strconv.ParseUint(value, 10, 16)
+		if err != nil || v == 0 || v > 65535 {
+			return 0, fmt.Errorf("invalid port for %s: %s", key, value)
+		}
+		return uint16(v), nil
 	}
 	switch key {
 	case "base_url":
@@ -225,6 +251,30 @@ func (m *Manager) ConfigSet(key, value string) error {
 		} else {
 			cfg.GatewayKey = value
 		}
+	case "gateway_port":
+		port, err := parsePort()
+		if err != nil {
+			return err
+		}
+		cfg.GatewayPort = port
+	case "instance_base_port":
+		port, err := parsePort()
+		if err != nil {
+			return err
+		}
+		cfg.InstanceBasePort = port
+	case "probe_api_port":
+		port, err := parsePort()
+		if err != nil {
+			return err
+		}
+		cfg.ProbeAPIPort = port
+	case "probe_socks_port":
+		port, err := parsePort()
+		if err != nil {
+			return err
+		}
+		cfg.ProbeSocksPort = port
 	default:
 		return errors.New("Unknown config key: " + key)
 	}
