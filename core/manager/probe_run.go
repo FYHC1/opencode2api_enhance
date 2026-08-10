@@ -49,6 +49,9 @@ func (c *ScanController) run(opts ScanOptions, nodes []ClashNode) {
 		wg.Add(1)
 		go func(w int) {
 			defer wg.Done()
+			// worker 错开启动（300ms/worker）：避免多进程同时拉起的资源尖峰
+			// （对齐 main 修复——并发 8 个 sing-box/opencode2api 同时 spawn 易超时）。
+			time.Sleep(time.Duration(w) * 300 * time.Millisecond)
 			pair := ports[w]
 			workerDir := filepath.Join(c.m.paths.RuntimeDir, fmt.Sprintf("_probe/worker-%02d", w+1))
 			for i := w; i < n; i += workers {

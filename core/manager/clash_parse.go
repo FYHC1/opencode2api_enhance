@@ -75,6 +75,9 @@ func nodeFromYAML(n *yamlNode) ClashNode {
 		ObfsPassword:      n.string("obfs-password"),
 		ClientFingerprint: n.string("client-fingerprint"),
 		Flow:              n.string("flow"),
+		PrivateKey:        n.string("private-key"), // wireguard 客户端私钥
+		PublicKey:         n.string("public-key"),  // wireguard 对端公钥
+		AuthStr:           n.string("auth-str"),    // hysteria v1 认证串
 	}
 	c.Port = uint16(n.intVal("port"))
 	if ws := n.mapOf("ws-opts"); ws != nil {
