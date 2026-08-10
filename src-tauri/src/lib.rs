@@ -39,6 +39,8 @@ enum EnvKind {
     Release,
     Dev,
     Portable,
+    /// web-dev/headless 由 Go core 直跑，桌面壳不构造该变体（保留为槽位文档/未来使用）。
+    #[allow(dead_code)]
     WebDev,
 }
 
