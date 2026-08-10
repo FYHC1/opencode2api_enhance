@@ -38,6 +38,15 @@ pub struct ClashNode {
     /// REALITY 参数（public-key / short-id），缺失会导致 TLS 握手失败。
     #[serde(rename = "reality-opts")]
     pub reality_opts: Option<RealityOpts>,
+    /// wireguard 私钥（Clash wireguard 节点）
+    #[serde(rename = "private-key")]
+    pub private_key: Option<String>,
+    /// wireguard 对端公钥（Clash wireguard 节点）
+    #[serde(rename = "public-key")]
+    pub public_key: Option<String>,
+    /// hysteria v1 认证串
+    #[serde(rename = "auth-str")]
+    pub auth_str: Option<String>,
     #[allow(dead_code)]
     pub alpn: Option<Vec<String>>,
     #[serde(skip)]
@@ -355,8 +364,8 @@ pub fn list_nodes_with_group() -> Result<Vec<ClashNode>> {
         }
 
     // 订阅缓存节点（subscribe.rs 持久化的 Clash YAML / base64 订阅节点），
-    // group 统一标记为「订阅」；实例启动同样经本函数查找节点配置，因此
-    // 订阅导入的实例在启动时能正常找到节点生成 sing-box 配置。
+    // group 用订阅名（无名称时导入方已填 "订阅N"）；实例启动同样经本函数
+    // 查找节点配置，因此订阅导入的实例在启动时能正常找到节点生成 sing-box 配置。
     for mut node in crate::subscribe::load_subscription_cache()
         .into_iter()
         .map(|n| crate::subscribe::to_clash_node(&n))
@@ -364,7 +373,9 @@ pub fn list_nodes_with_group() -> Result<Vec<ClashNode>> {
         if is_junk_node(&node.name) {
             continue;
         }
-        node.group = "订阅".to_string();
+        if node.group.trim().is_empty() {
+            node.group = "订阅".to_string();
+        }
         if seen.insert(node.name.clone()) {
             nodes.push(node);
         }

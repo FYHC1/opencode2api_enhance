@@ -1871,6 +1871,9 @@ pub struct InstanceStat {
     pub name: String,
     /// 目录存在但实例列表中没有（已删除/历史实例）时为 false
     pub exists: bool,
+    /// 是否加入统一网关池（池成员测试）
+    #[serde(default)]
+    pub join_gateway: bool,
     pub requests: i64,
     pub prompt_tokens: i64,
     pub completion_tokens: i64,
@@ -1949,8 +1952,20 @@ pub fn get_stats_core() -> Result<StatsSummary, String> {
         .iter()
         .map(|i| (i.singbox_port, i.name.clone()))
         .collect();
+    // 池成员（join_gateway=true）实例名集合，供统计页分组展示
+    let pool_members: std::collections::HashSet<String> = manager
+        .list_instances()
+        .iter()
+        .filter(|i| i.join_gateway)
+        .map(|i| i.name.clone())
+        .collect();
 
-    Ok(aggregate_stats(&runtime_dir, &known_names, &port_to_name))
+    Ok(aggregate_stats(
+        &runtime_dir,
+        &known_names,
+        &port_to_name,
+        &pool_members,
+    ))
 }
 
 #[tauri::command]
@@ -2173,6 +2188,7 @@ fn aggregate_stats(
     runtime_dir: &std::path::Path,
     known_names: &[String],
     port_to_name: &std::collections::HashMap<u16, String>,
+    pool_members: &std::collections::HashSet<String>,
 ) -> StatsSummary {
     let mut instances: Vec<InstanceStat> = Vec::new();
     let entries = match std::fs::read_dir(runtime_dir) {
@@ -2265,6 +2281,7 @@ fn aggregate_stats(
         instances.push(InstanceStat {
             name: display_name,
             exists,
+            join_gateway: pool_members.contains(&name),
             requests,
             prompt_tokens,
             completion_tokens,
@@ -2369,7 +2386,7 @@ mod stats_tests {
         );
 
         let known = vec!["user1".to_string(), "user2".to_string()];
-        let s = aggregate_stats(&root, &known, &std::collections::HashMap::new());
+        let s = aggregate_stats(&root, &known, &std::collections::HashMap::new(), &std::collections::HashSet::new());
 
         assert_eq!(s.total_requests, 3);
         assert_eq!(s.total_prompt_tokens, 500);
@@ -2400,7 +2417,7 @@ mod stats_tests {
         );
 
         let known = vec!["user_live".to_string()];
-        let s = aggregate_stats(&root, &known, &std::collections::HashMap::new());
+        let s = aggregate_stats(&root, &known, &std::collections::HashMap::new(), &std::collections::HashSet::new());
 
         assert_eq!(s.instances.len(), 2);
         let old = s.instances.iter().find(|i| i.name == "user_old").unwrap();
@@ -2428,6 +2445,7 @@ mod stats_tests {
             &root,
             &["good".to_string()],
             &std::collections::HashMap::new(),
+            &std::collections::HashSet::new(),
         );
         assert_eq!(s.instances.len(), 1);
         assert_eq!(s.instances[0].name, "good");
@@ -2444,7 +2462,7 @@ mod stats_tests {
             r#"{"total_requests":2,"models":{"small":{"request_count":1,"prompt_tokens":1,"completion_tokens":1,"total_tokens":2},"big":{"request_count":1,"prompt_tokens":100,"completion_tokens":50,"total_tokens":150}}}"#,
         );
 
-        let s = aggregate_stats(&root, &["u".to_string()], &std::collections::HashMap::new());
+        let s = aggregate_stats(&root, &["u".to_string()], &std::collections::HashMap::new(), &std::collections::HashSet::new());
         assert_eq!(s.instances[0].models[0].model, "big");
         assert_eq!(s.instances[0].models[1].model, "small");
         let _ = fs::remove_dir_all(&root);
@@ -2467,7 +2485,7 @@ mod stats_tests {
         let mut port_to_name = std::collections::HashMap::new();
         port_to_name.insert(28100u16, "荷兰①".to_string());
         port_to_name.insert(28112u16, "美国R1".to_string());
-        let s = aggregate_stats(&root, &[], &port_to_name);
+        let s = aggregate_stats(&root, &[], &port_to_name, &std::collections::HashSet::new());
 
         assert_eq!(s.instances.len(), 1);
         let gw = &s.instances[0];
@@ -2498,7 +2516,7 @@ mod stats_tests {
         )
         .unwrap();
 
-        let s = aggregate_stats(&root, &[], &std::collections::HashMap::new());
+        let s = aggregate_stats(&root, &[], &std::collections::HashMap::new(), &std::collections::HashSet::new());
         let gw = &s.instances[0];
         assert_eq!(gw.nodes.len(), 1);
         assert_eq!(gw.nodes[0].name, "127.0.0.1:28999");
