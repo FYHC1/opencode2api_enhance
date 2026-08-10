@@ -97,14 +97,15 @@ func TestProbeNodeConfigFail(t *testing.T) {
 func TestAllocatePorts(t *testing.T) {
 	m := newTestManager(t)
 	ctrl := NewScanController(m, &fakeRunner{})
-	pairs, err := ctrl.allocatePorts(ScanOptions{APIPort: 19500, SocksPort: 29500}, 3)
+	// 25100/26100 避开默认实例段（18200-20200）与 sing-box 段（20200-22200）
+	pairs, err := ctrl.allocatePorts(ScanOptions{APIPort: 25100, SocksPort: 26100}, 3)
 	if err != nil {
 		t.Fatalf("allocate: %v", err)
 	}
 	if len(pairs) != 3 {
 		t.Fatalf("pairs = %d", len(pairs))
 	}
-	if pairs[0].api != 19500 || pairs[0].socks != 29500 {
+	if pairs[0].api != 25100 || pairs[0].socks != 26100 {
 		t.Fatalf("first pair = %+v", pairs[0])
 	}
 	if pairs[1].api == pairs[0].socks || pairs[1].socks == pairs[0].api {

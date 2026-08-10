@@ -82,13 +82,26 @@ func (c *ScanController) stoppingLocked() bool {
 }
 
 // allocatePorts 按序分配端口对（api+socks 均 ≥1024、互不重复、当前空闲）。
+// 关键：**显式避开当前环境的实例段与 sing-box 段**——探针 worker 端口不能与
+// 实例/实例 sing-box 端口重叠（否则扫描后添加的实例会因端口被探针占用而
+// 启动失败/测试 401；实测 worker 跳号曾占 44201/46201）。
 func (c *ScanController) allocatePorts(opts ScanOptions, need int) ([]portPair, error) {
+	instBase := uint16(0)
+	if c.m != nil {
+		instBase = c.m.instanceBasePort()
+	}
+	instLo, instHi := instBase+100, instBase+2100  // 实例 API 段 [instLo, instHi)
+	sbLo, sbHi := instBase+2100, instBase+4100     // 实例 sing-box 段 [sbLo, sbHi)（singbox = api+2000）
 	var pairs []portPair
 	used := map[uint16]bool{}
-	for offset := 0; offset < 512 && len(pairs) < need; offset++ {
+	for offset := 0; offset < 4096 && len(pairs) < need; offset++ {
 		api := opts.APIPort + uint16(offset)
 		socks := opts.SocksPort + uint16(offset)
 		if api < 1024 || socks < 1024 || used[api] || used[socks] || api == socks {
+			continue
+		}
+		// 探针端口不得落入实例段 / sing-box 段（跨环境槽同理，instBase=0 时跳过）。
+		if (instBase > 0) && ((api >= instLo && api < instHi) || (socks >= sbLo && socks < sbHi)) {
 			continue
 		}
 		if !isPortFree(api) || !isPortFree(socks) {

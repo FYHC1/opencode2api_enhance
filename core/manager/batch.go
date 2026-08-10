@@ -88,9 +88,9 @@ func (m *Manager) BatchAdd(nodes []ClashNode, basePort uint16, useNodeName bool,
 		}
 		haveName[name] = true
 
-		// 找空闲端口（实例端口 + 对应 sing-box 端口双重判断）
+		// 找空闲端口（实例端口 + 对应 sing-box 端口双重判断：实例表 + 本机 OS 监听都要空闲）
 		port := basePort
-		for m.isPortUsedByInstance(port) || m.isPortUsedByInstance(port+singboxPortOffset) || !isPortFree(port) {
+		for m.isPortUsedByInstance(port) || m.isPortUsedByInstance(port+singboxPortOffset) || !isPortFree(port) || !isPortFree(port+singboxPortOffset) {
 			port++
 		}
 		inst := Instance{

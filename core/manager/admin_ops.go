@@ -559,7 +559,7 @@ func (m *Manager) httpBatchAdd(items []BatchAddHTTPItem, basePort uint16, useNod
 		if item.Port != nil {
 			port = *item.Port
 		}
-		for m.isPortUsedByInstance(port) || m.isPortUsedByInstance(port+singboxPortOffset) || !isPortFree(port) {
+		for m.isPortUsedByInstance(port) || m.isPortUsedByInstance(port+singboxPortOffset) || !isPortFree(port) || !isPortFree(port+singboxPortOffset) {
 			port++
 		}
 		inst := Instance{
