@@ -22,7 +22,24 @@ func buildSingboxConfig(node ClashNode, listenPort uint16) ([]byte, error) {
 			outbound,
 			map[string]any{"type": "direct", "tag": "direct"},
 		},
-		"route": map[string]any{"final": "proxy"},
+		// DoH 解析目标/节点域名，绕过被劫持的系统 DNS（Clash TUN fake-ip 等）。
+		// 多服务器冗余 + 直连出站（不套代理，避免 DNS 依赖代理先解析的鸡生蛋问题）。
+		"dns": map[string]any{
+			"servers": []any{
+				map[string]any{"type": "https", "tag": "ali-doh", "server": "223.5.5.5", "server_port": 443},
+				map[string]any{"type": "https", "tag": "tencent-doh", "server": "119.29.29.29", "server_port": 443},
+				map[string]any{"type": "https", "tag": "google-doh", "server": "8.8.8.8", "server_port": 443},
+			},
+			"strategy": "ipv4_only",
+			"final":     "ali-doh",
+		},
+		"route": map[string]any{
+			"final": "proxy",
+			// sing-box 1.12+ 要求显式指定默认域名解析器（否则 FATAL）。
+			// 注意：不能加 {outbound:"direct", protocol:"dns", port:443} 这类 rule——它会把 443 端口的
+			// DoH/业务流量也路由到 direct，导致探测失败。
+			"default_domain_resolver": "ali-doh",
+		},
 	}
 	return json.MarshalIndent(cfg, "", "  ")
 }
@@ -159,7 +176,8 @@ func singboxOutbound(n ClashNode) (map[string]any, error) {
 			"server_port": n.Port,
 			"password":    n.Password,
 			"tls": map[string]any{
-				"enabled":     tlsOn(true),
+				// hysteria2 协议强制 TLS：即使 Clash 节点标 tls:false 也恒 true，否则 sing-box 报 TLS required。
+				"enabled":     true,
 				"server_name": serverName(n.Server),
 				"insecure":    insecure(false),
 			},
@@ -189,7 +207,68 @@ func singboxOutbound(n ClashNode) (map[string]any, error) {
 			"server_port": n.Port,
 			"password":    n.Password,
 			"tls": map[string]any{
-				"enabled":     tlsOn(true),
+				// anytls 基于 TLS：enabled 恒 true（即使 Clash YAML 写 tls:false）；
+				// insecure 仅由 skip-cert-verify 控制，否则 sing-box 报 "TLS required"。
+				"enabled":     true,
+				"server_name": serverName(n.Server),
+				"insecure":    insecure(false),
+			},
+		}, nil
+	case "tuic":
+		if n.UUID == "" {
+			return nil, errors.New("缺少 uuid")
+		}
+		return map[string]any{
+			"type":               "tuic",
+			"tag":                "proxy",
+			"server":             n.Server,
+			"server_port":        n.Port,
+			"uuid":               n.UUID,
+			"password":           n.Password,
+			"congestion_control": "bbr",
+			"tls": map[string]any{
+				"enabled":     true,
+				"server_name": serverName(n.Server),
+				"insecure":    insecure(false),
+			},
+		}, nil
+	case "wireguard", "wg":
+		privateKey := n.PrivateKey
+		if privateKey == "" {
+			privateKey = n.Password
+		}
+		if privateKey == "" {
+			return nil, errors.New("缺少 private_key")
+		}
+		publicKey := n.PublicKey
+		if publicKey == "" {
+			publicKey = n.Cipher
+		}
+		return map[string]any{
+			"type":        "wireguard",
+			"tag":         "proxy",
+			"server":      n.Server,
+			"server_port": n.Port,
+			"private_key": privateKey,
+			"peers": []any{map[string]any{
+				"server":      n.Server,
+				"server_port": n.Port,
+				"public_key":  publicKey,
+			}},
+		}, nil
+	case "hysteria", "hy1":
+		password := n.AuthStr
+		if password == "" {
+			password = n.Password
+		}
+		return map[string]any{
+			"type":        "hysteria",
+			"tag":         "proxy",
+			"server":      n.Server,
+			"server_port": n.Port,
+			"auth_str":    password,
+			"tls": map[string]any{
+				"enabled":     true,
 				"server_name": serverName(n.Server),
 				"insecure":    insecure(false),
 			},

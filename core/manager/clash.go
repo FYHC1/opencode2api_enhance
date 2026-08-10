@@ -25,6 +25,9 @@ type ClashNode struct {
 	Flow              string `json:"flow,omitempty"`
 	RealityPublicKey  string `json:"reality-opts.public-key,omitempty"`
 	RealityShortID    string `json:"reality-opts.short-id,omitempty"`
+	PrivateKey        string `json:"private-key,omitempty"`   // wireguard 客户端私钥
+	PublicKey         string `json:"public-key,omitempty"`    // wireguard 对端公钥
+	AuthStr           string `json:"auth-str,omitempty"`      // hysteria v1 认证串
 	Group             string `json:"group,omitempty"`
 }
 

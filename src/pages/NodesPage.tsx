@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import clsx from 'clsx'
-import { Loader2, Network, Radar, RefreshCw, Rss, Square, User } from 'lucide-react'
+import { Loader2, Network, Radar, RefreshCw, Rss, Square, Trash2, User } from 'lucide-react'
 import { api, type NodeView, type ProbeResult, type ScanProgress } from '../lib/api'
 import ResultModal from '../components/ResultModal'
 
@@ -244,6 +244,32 @@ export default function NodesPage({
           >
             <Rss size={14} />
             订阅导入
+          </button>
+          {/* 删除勾选节点（仅订阅缓存节点可删；外部 Clash 节点只读跳过） */}
+          <button
+            onClick={async () => {
+              if (selected.size === 0) return
+              if (!window.confirm(`删除勾选的 ${selected.size} 个节点？（仅订阅导入的节点可删，外部 Clash 节点只读）`)) return
+              try {
+                const r = await api.deleteNodes([...selected])
+                toast(`已删除 ${r.removed} 个订阅节点` + (r.removed < selected.size ? '（其余为外部节点，只读跳过）' : ''), true)
+                setSelected(new Set())
+                await loadNodes()
+              } catch (e) {
+                toast(String(e), false)
+              }
+            }}
+            disabled={selected.size === 0}
+            className={clsx(
+              'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] transition-colors',
+              selected.size === 0
+                ? 'bg-zinc-200 text-zinc-500 cursor-not-allowed'
+                : 'bg-white border border-red-200 text-red-600 hover:bg-red-50',
+            )}
+            title={selected.size === 0 ? '请先勾选节点' : '删除勾选的订阅节点'}
+          >
+            <Trash2 size={14} />
+            删除
           </button>
           {/* 入池 / 独享：勾选节点后可用，直接对勾选节点批量添加 */}
           <button
