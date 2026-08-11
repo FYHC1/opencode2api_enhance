@@ -271,6 +271,28 @@ export default function NodesPage({
             <Trash2 size={14} />
             删除
           </button>
+          {scanning ? (
+            <button
+              onClick={() => void stopScan()}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-white bg-red-600 hover:bg-red-700"
+            >
+              <Square size={14} /> 停止扫描
+            </button>
+          ) : (
+            <button
+              onClick={() => void startScan()}
+              disabled={scanBtnDisabled}
+              className={clsx(
+                'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-white transition-colors',
+                scanBtnDisabled
+                  ? 'bg-zinc-200 text-zinc-500 cursor-not-allowed'
+                  : 'bg-green-600 hover:bg-green-700 shadow-sm',
+              )}
+              title={selected.size === 0 ? '请先勾选节点' : '扫描选中节点'}
+            >
+              <Radar size={14} /> 扫描选中节点（{selected.size}）
+            </button>
+          )}
           {/* 入池 / 独享：勾选节点后可用，直接对勾选节点批量添加 */}
           <button
             onClick={() => void doCommit('pool', [...selected])}
@@ -298,28 +320,6 @@ export default function NodesPage({
           >
             {acting ? <Loader2 size={14} className="animate-spin" /> : <User size={14} />} 独享
           </button>
-          {scanning ? (
-            <button
-              onClick={() => void stopScan()}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-white bg-red-600 hover:bg-red-700"
-            >
-              <Square size={14} /> 停止扫描
-            </button>
-          ) : (
-            <button
-              onClick={() => void startScan()}
-              disabled={scanBtnDisabled}
-              className={clsx(
-                'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-white transition-colors',
-                scanBtnDisabled
-                  ? 'bg-zinc-200 text-zinc-500 cursor-not-allowed'
-                  : 'bg-green-600 hover:bg-green-700 shadow-sm',
-              )}
-              title={selected.size === 0 ? '请先勾选节点' : '扫描选中节点'}
-            >
-              <Radar size={14} /> 扫描选中节点（{selected.size}）
-            </button>
-          )}
         </div>
       </div>
 
@@ -359,18 +359,20 @@ export default function NodesPage({
             const checkedCount = list.filter((n) => selected.has(n.name)).length
             return (
               <div key={g}>
-                {/* 分组行：点击整行（除全选框）展开/收起 */}
+                {/* 分组行：点击整行（除全选框）展开/收起；全选框 click 冒泡阻止，避免勾选即折叠 */}
                 <div
-                  onClick={() => toggleGroup(g)}
+                  onClick={(e) => {
+                    // 点击复选框区域不触发折叠（仅全选）
+                    if ((e.target as HTMLElement).closest('input[type="checkbox"]')) return
+                    toggleGroup(g)
+                  }}
                   className="flex items-center gap-3 px-4 py-2.5 bg-zinc-50/50 cursor-pointer select-none"
                 >
                   <input
                     type="checkbox"
                     checked={all}
-                    onChange={(e) => {
-                      e.stopPropagation()
-                      toggleGroupSel(list)
-                    }}
+                    onChange={() => toggleGroupSel(list)}
+                    onClick={(e) => e.stopPropagation()}
                     disabled={selectable(list).length === 0}
                     className="accent-teal-600 disabled:opacity-30"
                     title={selectable(list).length === 0 ? '该组节点均已添加实例' : ''}
@@ -405,10 +407,8 @@ export default function NodesPage({
                           <input
                             type="checkbox"
                             checked={selected.has(n.name)}
-                            onChange={(e) => {
-                              e.stopPropagation()
-                              toggleNode(n.name)
-                            }}
+                            onChange={() => toggleNode(n.name)}
+                            onClick={(e) => e.stopPropagation()}
                             disabled={isInstanced}
                             className="accent-teal-600 disabled:opacity-30"
                           />

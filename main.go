@@ -240,10 +240,6 @@ func registerHTTPRoutes(mux *http.ServeMux, managerInst *manager.Manager) {
 	// 健康巡检（main 分支功能迁移 M2）。
 	mux.HandleFunc("/api/admin/health/check", loggingMiddleware(requireAuth(managerInst.HealthCheckHandler())))
 	mux.HandleFunc("/api/admin/health/summary", loggingMiddleware(requireAuth(managerInst.HealthSummaryHandler())))
-	// 报表导出（main 分支功能迁移 M3）。
-	mux.HandleFunc("/api/admin/export/call-log.csv", loggingMiddleware(requireAuth(managerInst.ExportCallLogCSVHandler())))
-	mux.HandleFunc("/api/admin/export/instances.json", loggingMiddleware(requireAuth(managerInst.ExportInstancesJSONHandler())))
-	mux.HandleFunc("/api/admin/export/stats.json", loggingMiddleware(requireAuth(managerInst.ExportStatsJSONHandler())))
 	mux.HandleFunc("/api/admin/data/clean", loggingMiddleware(requireAuth(managerInst.DataCleanHandler())))
 	mux.HandleFunc("/api/admin/gateway/status", loggingMiddleware(requireAuth(managerInst.GatewayStatusHandler())))
 	mux.HandleFunc("/api/admin/gateway/route-mode", loggingMiddleware(requireAuth(managerInst.GatewayRouteModeHandler())))

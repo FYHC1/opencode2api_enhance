@@ -4,7 +4,6 @@ import {
   Activity,
   ChevronDown,
   ChevronRight,
-  Download,
   Filter,
   Inbox,
   RefreshCw,
@@ -157,27 +156,6 @@ export default function LogsPage({
           >
             <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
             刷新
-          </button>
-          <button
-            onClick={async () => {
-              try {
-                const csv = await api.exportCallLogCSV()
-                const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
-                const a = document.createElement('a')
-                a.href = URL.createObjectURL(blob)
-                a.download = 'call-log.csv'
-                a.click()
-                URL.revokeObjectURL(a.href)
-                toast('已导出 CSV', true)
-              } catch (e) {
-                toast(String(e), false)
-              }
-            }}
-            disabled={logs.length === 0}
-            className="flex items-center gap-2 bg-white border border-zinc-200 text-zinc-600 rounded-lg px-4 py-2 text-sm hover:bg-zinc-50 disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            <Download size={14} />
-            导出 CSV
           </button>
         </div>
       </div>

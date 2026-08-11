@@ -13,6 +13,7 @@ import (
 const (
 	batchStartWorkers    = 4
 	batchStopWorkers     = 8
+	batchDeleteWorkers   = 4
 	defaultBasePort      = 18100
 	// singboxPortOffset 实例 sing-box 出口端口相对实例 API 端口的偏移。
 	// 新端口规则（2026-08-10 决策）：紧挨实例段 +2000，不再用旧 +10000 错开——
@@ -158,12 +159,26 @@ func (m *Manager) BatchStop(runner Runner, names []string) map[string]error {
 	return out
 }
 
-// BatchDelete 批量删除（先停后删，全部成员参与）。
+// BatchDelete 批量删除（先停后删，4 worker 并发，避免进程风暴）。
 func (m *Manager) BatchDelete(runner Runner, names []string) map[string]error {
 	out := make(map[string]error)
+	var mu sync.Mutex
+	sem := make(chan struct{}, batchDeleteWorkers)
+	var wg sync.WaitGroup
 	for _, n := range names {
-		out[n] = m.RemoveInstanceAlive(runner, n)
+		n := n
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			err := m.RemoveInstanceAlive(runner, n)
+			<-sem
+			mu.Lock()
+			out[n] = err
+			mu.Unlock()
+		}()
 	}
+	wg.Wait()
 	return out
 }
 

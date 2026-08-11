@@ -2,9 +2,24 @@ package manager
 
 import (
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// writeCallLogFile 写测试日志文件（runtime/_unified-gateway/call_log.jsonl）。
+func writeCallLogFile(t *testing.T, m *Manager, lines []string) {
+	t.Helper()
+	dir := filepath.Join(m.paths.RuntimeDir, "_unified-gateway")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := strings.Join(lines, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "call_log.jsonl"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
 
 // calllogFilterFixture 构造 3 条日志（与 main call_log.rs test_path 同构）：
 // r1 ok(n1)、r2 fail/switch(n1,n2)、r3 ok(n3)。

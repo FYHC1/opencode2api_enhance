@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useState } from 'react'
 import clsx from 'clsx'
-import { BarChart3, ChevronDown, ChevronRight, RefreshCw, RotateCcw, Inbox, HeartPulse, Download } from 'lucide-react'
-import { api, downloadText, type StatsSummary, type HealthSummary } from '../lib/api'
+import { BarChart3, ChevronDown, ChevronRight, RefreshCw, RotateCcw, Inbox, HeartPulse } from 'lucide-react'
+import { api, type StatsSummary, type HealthSummary } from '../lib/api'
 
 /** 千分位格式化 */
 const fmt = (n: number) => n.toLocaleString('en-US')
@@ -101,27 +101,7 @@ export default function StatsPage({
     })
   }
 
-  // 报表导出（main 功能 M3）
-  const doExportCsv = async () => {
-    try {
-      const text = await api.exportCallLogCSV()
-      downloadText(`call-log-${Date.now()}.csv`, text)
-      toast('日志 CSV 已导出', true)
-    } catch (e) {
-      toast(String(e), false)
-    }
-  }
-
-  const doExportJson = async () => {
-    try {
-      const text = await api.exportStatsJSON()
-      downloadText(`stats-${Date.now()}.json`, text)
-      toast('统计 JSON 已导出', true)
-    } catch (e) {
-      toast(String(e), false)
-    }
-  }
-
+  // 报表导出（已移除：无使用场景）
   const instances = stats?.instances ?? []
   const isEmpty = !stats || instances.length === 0
 
@@ -134,22 +114,6 @@ export default function StatsPage({
           Token 统计
         </h1>
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => void doExportCsv()}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-zinc-200 text-zinc-700 text-[12px] font-medium hover:bg-zinc-50 transition-colors"
-          >
-            <Download size={13} />
-            导出 CSV
-          </button>
-          <button
-            type="button"
-            onClick={() => void doExportJson()}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-zinc-200 text-zinc-700 text-[12px] font-medium hover:bg-zinc-50 transition-colors"
-          >
-            <Download size={13} />
-            导出 JSON
-          </button>
           <button
             type="button"
             onClick={() => setShowResetConfirm(true)}

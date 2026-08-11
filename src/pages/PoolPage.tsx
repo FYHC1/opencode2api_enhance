@@ -13,8 +13,10 @@ function statusBadge(st: Instance['status']): [string, string] {
 
 export default function PoolPage({
   toast,
+  onRelease,
 }: {
   toast: (msg: string, ok?: boolean) => void
+  onRelease: (r: { active: boolean; done: number; total: number }) => void
 }) {
   const [gw, setGw] = useState<GatewayStatus | null>(null)
   const [instances, setInstances] = useState<Instance[]>([])
@@ -153,7 +155,7 @@ export default function PoolPage({
     }
   }
 
-  // 一键释放全部池成员：批量删除实例 + 同步网关
+  // 一键释放全部池成员：分块并发删除实例 + 实时上报进度（全局悬浮面板显示，跨页面常驻）
   const doReleaseAll = async () => {
     const names = members.map((i) => i.name)
     if (names.length === 0) {
@@ -162,14 +164,29 @@ export default function PoolPage({
     }
     if (!confirm(`确定一键释放全部 ${names.length} 个池成员？将关闭并删除这些实例。`)) return
     setReleaseAllBusy(true)
+    onRelease({ active: true, done: 0, total: names.length })
     try {
-      const r = await api.batchDelete(names)
-      toast(`已释放 ${r.success_count} 个成员${r.error_count ? `，失败 ${r.error_count}` : ''}`, r.error_count === 0)
+      let done = 0
+      let fail = 0
+      const batchSize = 4 // 与后端 BatchDelete 并发一致，避免进程风暴
+      for (let i = 0; i < names.length; i += batchSize) {
+        const chunk = names.slice(i, i + batchSize)
+        const results = await Promise.allSettled(chunk.map((n) => api.removeInstance(n)))
+        results.forEach((r) => {
+          if (r.status === 'fulfilled') done++
+          else fail++
+        })
+        onRelease({ active: true, done, total: names.length })
+      }
+      onRelease({ active: true, done: names.length, total: names.length })
+      toast(`已释放 ${done} 个成员${fail ? `，失败 ${fail}` : ''}`, fail === 0)
       await load()
     } catch (e) {
       toast(String(e), false)
     } finally {
       setReleaseAllBusy(false)
+      // 面板短暂显示"已完成"后自动消失
+      setTimeout(() => onRelease({ active: false, done: 0, total: 0 }), 1200)
     }
   }
 

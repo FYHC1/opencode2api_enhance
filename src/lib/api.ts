@@ -410,23 +410,6 @@ export const api = {
   healthCheck: () => req<HealthSummary>('POST', '/health/check'),
   healthSummary: () => req<HealthSummary>('GET', '/health/summary'),
 
-  // 报表导出（main 功能 M3）
-  exportCallLogCSV: async (limit?: number): Promise<string> => {
-    const res = await fetch(API_BASE + '/api/admin/export/call-log.csv' + (limit ? `?limit=${limit}` : ''))
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    return res.text()
-  },
-  exportInstancesJSON: async (): Promise<string> => {
-    const res = await fetch(API_BASE + '/api/admin/export/instances.json')
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    return res.text()
-  },
-  exportStatsJSON: async (): Promise<string> => {
-    const res = await fetch(API_BASE + '/api/admin/export/stats.json')
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    return res.text()
-  },
-
   // 统一网关（实例池）
   gatewayStatus: () => req<GatewayStatus>('GET', '/gateway/status'),
   gatewaySetRouteMode: (mode: 'smart' | 'failover' | 'round_robin') =>
@@ -440,15 +423,4 @@ export const api = {
 
   // 清除数据（1=运行数据, 2=+实例记录, 3=全部重置）
   dataClean: (level: 1 | 2 | 3) => req<void>('POST', '/data/clean', { level }),
-}
-
-/** 触发浏览器下载文本文件（main 功能 M3 报表导出共用）。 */
-export function downloadText(filename: string, text: string) {
-  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  a.click()
-  URL.revokeObjectURL(url)
 }

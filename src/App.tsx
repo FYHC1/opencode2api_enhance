@@ -23,6 +23,12 @@ const NAV: { id: Tab; label: string; icon: typeof Server }[] = [
 export default function App() {
   const [tab, setTab] = useState<Tab>('instances')
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null)
+  // 全局释放进度（实例池一键释放全部时跨页面常驻显示）
+  const [release, setRelease] = useState<{ active: boolean; done: number; total: number }>({
+    active: false,
+    done: 0,
+    total: 0,
+  })
 
   const showToast = (msg: string, ok = true) => {
     setToast({ msg, ok })
@@ -57,7 +63,7 @@ export default function App() {
         {/* 内容区 */}
         <main className="flex-1 min-w-0 overflow-y-auto">
           {tab === 'instances' && <InstancesPage toast={showToast} />}
-          {tab === 'pool' && <PoolPage toast={showToast} />}
+          {tab === 'pool' && <PoolPage toast={showToast} onRelease={setRelease} />}
           {tab === 'nodes' && <NodesPage toast={showToast} />}
           {tab === 'stats' && <StatsPage toast={showToast} />}
           {tab === 'logs' && <LogsPage toast={showToast} />}
@@ -75,6 +81,27 @@ export default function App() {
           )}
         >
           {toast.msg}
+        </div>
+      )}
+
+      {/* 全局释放进度悬浮面板（跨页面常驻，释放完成自动消失） */}
+      {release.active && (
+        <div className="fixed bottom-5 right-5 z-50 w-64 bg-white rounded-xl border border-zinc-200 shadow-xl p-3.5">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[13px] font-semibold text-zinc-900">释放实例中</span>
+            <span className="text-[12px] text-zinc-500 tabular-nums">
+              {release.done}/{release.total}
+            </span>
+          </div>
+          <div className="h-1.5 bg-zinc-100 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-red-500 rounded-full transition-all duration-300"
+              style={{ width: release.total > 0 ? `${(release.done / release.total) * 100}%` : '0%' }}
+            />
+          </div>
+          <div className="mt-1.5 text-[11px] text-zinc-400">
+            {release.done >= release.total ? '已完成' : '正在释放，不影响你继续操作…'}
+          </div>
         </div>
       )}
     </div>
