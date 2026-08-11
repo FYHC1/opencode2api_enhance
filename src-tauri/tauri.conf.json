@@ -50,7 +50,8 @@
     },
     "resources": {
       "../dist/index.html": "bin/dist/index.html",
-      "../dist/assets/": "bin/dist/assets/"
+      "../dist/assets/": "bin/dist/assets/",
+      "target/release/WebView2Loader.dll": "WebView2Loader.dll"
     }
   }
 }
