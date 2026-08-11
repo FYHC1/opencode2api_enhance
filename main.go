@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/6Kmfi6HP/opencode2api/core/manager"
@@ -36,6 +37,19 @@ func frontendDistDir() string {
 		}
 	}
 	return ""
+}
+
+// isTopLevelStatic 判断路径是否为 dist 根目录下的顶层静态文件（如 app-icon.png）。
+// 仅放行单层、无目录穿越的文件名，其余路径不通过（SPA 路由由前端处理）。
+func isTopLevelStatic(p string) bool {
+	if len(p) < 2 || p[0] != '/' {
+		return false
+	}
+	name := p[1:]
+	if name == "" || strings.ContainsAny(name, "/\\") || strings.Contains(name, "..") {
+		return false
+	}
+	return true
 }
 
 var httpClient = &http.Client{
@@ -242,10 +256,14 @@ func registerHTTPRoutes(mux *http.ServeMux, managerInst *manager.Manager) {
 	// P4-5: 前端静态托管。仓库构建产物 dist/「存在」时托管 SPA（Web 版），否则退回内嵌管理面板。
 	if distDir := frontendDistDir(); distDir != "" {
 		mux.Handle("/assets/", http.StripPrefix("/assets/", http.FileServer(http.Dir(filepath.Join(distDir, "assets")))))
+		// 顶层静态资源（app-icon.png 等 public 产物）：按文件名精确放行，其余回退 SPA。
+		fileServer := http.FileServer(http.Dir(distDir))
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			switch r.URL.Path {
-			case "/", "/index.html":
+			switch {
+			case r.URL.Path == "/" || r.URL.Path == "/index.html":
 				http.ServeFile(w, r, filepath.Join(distDir, "index.html"))
+			case isTopLevelStatic(r.URL.Path):
+				fileServer.ServeHTTP(w, r)
 			default:
 				http.NotFound(w, r)
 			}
