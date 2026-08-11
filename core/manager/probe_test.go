@@ -71,7 +71,8 @@ func TestProbeNodeOK(t *testing.T) {
 	defer socksLn.Close()
 	socksPort := uint16(socksLn.Addr().(*net.TCPAddr).Port)
 
-	ctrl := NewScanController(m, &fakeRunner{})
+	run := &fakeRunner{}
+	ctrl := NewScanController(m, run)
 	pair := portPair{api: apiPort, socks: socksPort}
 	node := ClashNode{Name: "ok-node", NodeType: "trojan", Server: "1.2.3.4", Port: 443, Password: "p"}
 	res := ctrl.probeNode(ScanOptions{TimeoutSec: 8}, node, pair, t.TempDir())
@@ -81,6 +82,26 @@ func TestProbeNodeOK(t *testing.T) {
 	}
 	if res.ModelCount == nil || *res.ModelCount != 2 {
 		t.Fatalf("model_count = %v", res.ModelCount)
+	}
+	// 防泄漏：成功路径也必须清理两个探针进程（sing-box pid=101、opencode pid=102）。
+	// 曾出现每次扫描每个节点残留一对进程，任务管理器堆积数十个 opencode2api/sing-box。
+	if len(run.starts) != 2 {
+		t.Fatalf("starts = %d, want 2 (sing-box + opencode)", len(run.starts))
+	}
+	if len(run.killed) != 2 {
+		t.Fatalf("killed = %v, want both probe pids cleaned after success", run.killed)
+	}
+	for _, pid := range []int{101, 102} {
+		found := false
+		for _, k := range run.killed {
+			if k == pid {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("pid %d not killed: %v", pid, run.killed)
+		}
 	}
 }
 

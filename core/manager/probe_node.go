@@ -59,6 +59,13 @@ func (c *ScanController) probeNode(opts ScanOptions, node ClashNode, pair portPa
 		base.Message = err.Error()
 		return base
 	}
+	// 探针进程清理（防泄漏）：spawn 成功后，无论后续探测成败、任何返回路径，
+	// 退出前必杀 sing-box + opencode2api 探针进程——否则每次扫描每个节点
+	// 都会残留一对进程（任务管理器可见数十个 opencode2api/sing-box 堆积）。
+	defer func() {
+		_ = c.runner.Kill(ocPID)
+		_ = c.runner.Kill(sbPID)
+	}()
 	apiWait := time.Until(deadline)
 	if apiWait > 20*time.Second {
 		apiWait = 20 * time.Second
