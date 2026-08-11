@@ -68,6 +68,64 @@ SOCKS5 代理列表。
 - 某个 `addr`：固定使用该代理
 - `__round_robin__`：在多个代理之间轮询
 
+### `providers`（厂商注册）
+
+每个厂商一个条目：`type`（对应厂商类型）、`id`、`name`、`enabled`、`params`（厂商自定义参数）。
+**未配置 `providers` 时自动注册全部已编译厂商**（扩增即生效）；配置后按配置注册（`enabled: false` 可关闭某厂商）。
+
+```json
+{
+  "providers": [
+    {
+      "id": "opencode",
+      "type": "opencode",
+      "name": "OpenCode",
+      "enabled": true
+    },
+    {
+      "id": "windsurf",
+      "type": "windsurf",
+      "name": "Devin/Windsurf",
+      "enabled": true,
+      "params": {
+        "min_available": 3,
+        "quota_threshold": 20,
+        "cooldown_seconds": 86400,
+        "store_file": ""
+      }
+    }
+  ]
+}
+```
+
+#### windsurf 池型厂商参数（`params`）
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `min_available` | **3** | 账号池保持的最小可用号数。**不足时由后台并行补齐（不阻塞用户请求）**：请求前快速检查，可用 ≥1 立即放行，差额由一个后台注册 goroutine 补齐（single-flight 防并发风暴）。配高一些（如 5-10）可支撑更大并发/更多无感换号余量 |
+| `quota_threshold` | 20 | 全池最低剩余额度（%）≤ 此值时触发后台预注册新号 |
+| `cooldown_seconds` | 86400（24h） | 换号/耗尽后的账号冷却时长，到期自动回池复用 |
+| `store_file` | 数据目录下 `windsurf_accounts.json` | 账号库持久化路径（跨重启复用账号，不重复注册） |
+
+**账号池行为**：请求 swe 时——有可用号立即用（绝不等待注册）；池空时同步注册 1 个恢复服务，其余后台补齐；流中报错自动无感换号（需要备用号，由 `min_available` 保证）；失败账号标记 Dry+冷却，冷却结束自动回池。
+
+### `routing`（模型路由）
+
+```json
+{
+  "routing": {
+    "model_provider_map": {
+      "swe-1-6-slow": "windsurf"
+    },
+    "default_provider": "opencode"
+  }
+}
+```
+
+- `model_provider_map`：强制指定某模型走某厂商（同名多厂商时的优先选择）
+- `default_provider`：兜底厂商
+- 未命中映射时，按聚合器倒排索引找"提供该模型的厂商"，再无则走默认厂商
+
 ## 管理面板
 
 打开 `http://127.0.0.1:8000/` 可进入管理面板。面板可以修改配置、刷新模型和查看 token 统计。

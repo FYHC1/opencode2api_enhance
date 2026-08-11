@@ -15,7 +15,7 @@
 
 本地**多实例代理管理器**桌面应用（Windows exe）。每个"实例" = 一个 opencode2api 代理进程 + 一个 sing-box 出口，绑定不同代理节点，把 OpenAI / Anthropic / Responses 风格的请求转发到 OpenCode 上游，并可通过多实例 × 多节点分散请求、绕过按 IP 的频率限制。
 
-UI 参照 Windsurf Account Manager 的浅色官网风格：Tauri 2 无边框窗口 + 自定义标题栏 + 侧边栏三页（实例 / 节点扫描 / 设置），关闭窗口最小化到托盘、实例继续运行。
+UI 参照 Windsurf Account Manager 的浅色官网风格：Tauri 2 无边框窗口 + 自定义标题栏 + 侧边栏六页（独享 / 实例池 / 节点池 / 统计 / 日志 / 设置），关闭窗口最小化到托盘、实例继续运行。
 
 > 本项目不是 OpenAI、Anthropic 或 OpenCode 的官方项目。请遵守上游服务条款，并只在你有权限的环境中使用。
 
@@ -25,20 +25,23 @@ UI 参照 Windsurf Account Manager 的浅色官网风格：Tauri 2 无边框窗�
 
 ## 功能
 
-- **实例管理**：增/删/启/停/测试，批量操作；API 地址一键复制
-- **节点扫描**：一键扫描全部节点（经 Clash 外部控制 + 本地 Verge profiles），按分组展示，结果分类（ok / config / socks / tls / upstream / timeout / other）与延迟；勾选可用节点批量添加为实例
+- **独享实例**：增/删/启/停/测试，批量操作；API 地址一键复制
+- **实例池**：入池实例聚合到统一网关（一键启停 / 一键重启 / 路由模式 smart·failover·round_robin），网关地址与密钥一键复制
+- **节点池**：一键扫描全部节点（经 Clash 外部控制 + 本地 Verge profiles），按分组展示，结果分类（ok / config / socks / tls / upstream / timeout / other）与延迟；勾选节点可直接【入池】或【设为独享】批量添加（节点行点击选中、分组行点击展开收起）
 - **多代理节点**：每实例自动生成 sing-box 配置走所选节点（trojan / vless / vmess / shadowsocks / ws），opencode2api 的 SOCKS5 指向 sing-box
 - **Clash 集成**：配置 Clash 外部控制地址与密钥即可拉取节点；也可读取 Clash Verge 本地 profiles 目录
 - **订阅导入**：节点池支持「从订阅导入」——自动识别 Clash YAML / V2Ray base64 / 明文链接三种格式，容错解码（URL-safe 变体/缺 padding/含换行均可）、节点名 percent-decode（中文/emoji）、公告伪节点过滤、重名去重、IPv6 主机，解析能力对齐 mihomo/v2rayN 等主流客户端（详见 [订阅解析调研](docs/SUBSCRIPTION-RESEARCH.md)）
+- **Token 统计**：按实例聚合用量，支持按节点下钻明细；重置统计（可清除已删除节点历史）
+- **调用日志**：全流程日志（成功/失败/切换/超时），按天筛选、时段/节点分析、一键清空
 - **触摸保活**：系统托盘常驻，关闭窗口实例继续代理
-- **设置**：Clash 外部控制、实例默认密码、开机自启、二进制状态
+- **设置**：Clash 外部控制、网关超时切换区间、节点前缀展示、开机自启、清除数据、二进制状态
 
 ## 用法
 
 1. 启动 `opencode2api-manager.exe`（首次运行自动在 exe 旁生成 `bin/` 目录，内含 opencode2api 与 sing-box 子程序）
 2. **设置**页填 Clash 外部控制地址（默认 `http://127.0.0.1:9097`）与密钥
-3. **节点扫描**页 →「一键扫描全部」→ 勾选可用 →「添加选中为实例」
-4. **实例**页 →「启动」→ 用 `http://127.0.0.1:{实例端口}/v1` 作为 API 地址
+3. **节点池**页 →「扫描选中节点」或全选 → 勾选可用 →【入池】聚合到统一网关 或【设为独享】
+4. **独享 / 实例池**页 →「启动」→ 用 `http://127.0.0.1:{实例端口}/v1`（独享）或统一网关地址（入池）作为 API 地址
 
 ## Linux / Headless 部署
 
@@ -104,13 +107,13 @@ npm run tauri:dev
 ```
 ┌─────────────────────────────────────────────┐
 │  Tauri 2 前端（React + Tailwind）            │
-│  实例 / 节点扫描 / 设置（invoke → command）    │
+│  独享/实例池/节点池/统计/日志/设置（HTTP fetch）│
 └──────────────────┬──────────────────────────┘
-                   │ #[tauri::command]
+                   │ http://127.0.0.1:<port>/api/admin/*
 ┌──────────────────▼──────────────────────────┐
-│  Rust 管理器（src-tauri/src）                 │
-│  clash_yaml·singbox·opencode_cfg·instance·   │
-│  probe·embed·commands                        │
+│  Go core 管理器（core/manager + main 包）     │
+│  实例/网关/节点/扫描/统计/日志/配置 + 协议转换   │
+│  vendors/opencode · vendors/windsurf（多厂商）│
 └──────────────────┬──────────────────────────┘
                    │ 子进程管理
 ┌──────────────────▼──────────────────────────┐
@@ -119,25 +122,30 @@ npm run tauri:dev
 └─────────────────────────────────────────────┘
 ```
 
-- Rust 侧采用 Windsurf Account Manager 的架构：`main.rs` 薄壳 + `lib.rs`（AppState / command 注册 / 托盘）+ 功能域模块
-- Go 代理核心（OpenAI/Anthropic/Responses 协议转换）与 sing-box 均为独立子进程，由 Rust 拉起管理
-- 内嵌二进制经 `embed.rs` 的 `include_bytes!` 打包，运行时释放到 exe 旁 `bin/` 目录
+- **Tauri 壳**：只做窗口/托盘/内嵌二进制释放/拉起 core 管理器（`src-tauri/src/lib.rs`），管理职责全部在 Go core
+- **Go core**：一份实现服务所有端（桌面 exe / Web 浏览器），经 `/api/admin/*` HTTP 暴露；协议转换（OpenAI/Anthropic/Responses）与厂商契约在 main 包 + `core/contract`
+- **多厂商**：`vendors/opencode`（第一厂商）、`vendors/windsurf`（账号池型：无号自动注册/额度预注册/24h 冷却/无感换号）
+- **环境隔离**：正式版 / dev（tauri dev）/ 便携测试（portable.txt）各自独立数据目录与**端口槽位**
+  （40000 起每环境一段；sing-box = 实例端口 +2000 紧挨），互不干扰，新开环境无需手动配端口
+- **端口配置化**：来源优先级 环境变量 > config.json（gateway_port/instance_base_port/probe_*_port）> 编译默认
 
 ## 目录结构
 
 ```
-src/                      # React 前端（TitleBar + 侧边栏 + 三页）
-src-tauri/src/            # Rust 后端
-  clash_yaml.rs           # Clash 配置/外部控制节点解析
-  singbox.rs              # sing-box 配置生成
-  opencode_cfg.rs         # opencode2api 子进程配置生成
-  instance.rs             # 实例生命周期（子进程启停/探测）
-  probe.rs                # 节点扫描探针
-  subscribe.rs            # 订阅拉取与解析（Clash YAML/base64/明文，容错解码）
-  config.rs               # 应用配置（%APPDATA%）
-  commands.rs             # Tauri command 层
-  embed.rs                # 内嵌二进制释放
-  lib.rs / main.rs        # Tauri 入口与状态
+src/                      # React 前端（TitleBar + 侧边栏 + 六页）
+src/lib/api.ts            # 统一 HTTP 对接层（/api/admin/*）
+src-tauri/src/            # Tauri 薄壳（窗口/托盘/自启/内嵌释放）
+  embed.rs                # 内嵌二进制释放（按内容哈希校验）
+  job.rs                  # Windows Job Object（防孤儿进程）
+  lib.rs                  # 入口 + 端口注入 + 拉起 core
+core/                     # Go 核心层
+  contract/               # 厂商契约
+  aggregator/             # 多厂商模型聚合
+  router/                 # 模型到厂商分发 + failover
+  manager/                # 管理域（实例/网关/节点/扫描/统计/日志/配置）
+vendors/                  # 厂商层（一厂商 = 一文件夹）
+  opencode/               # 第一厂商
+  windsurf/               # 第二厂商（账号池型）
 bin/                      # 内嵌子程序源（opencode2api.exe / sing-box.exe）
-portable/                 # 便携包使用说明
-scripts/                  # make-portable.sh 打包脚本
+docs/                     # ARCHITECTURE-V2-PLAN.md（唯一事实来源）、FAQ 等
+```

@@ -1,0 +1,311 @@
+// 极简 YAML 解析器（仅覆盖 clash 订阅 profiles 所需子集）：
+// 顶层 map 的数组字段 proxies（每项为 map），支持嵌套 map、标量、行注释、引号。
+// 不足以解析任意 YAML —— 只服务 clash 节点列表场景（保持零依赖）。
+package manager
+
+import (
+	"errors"
+	"strconv"
+	"strings"
+)
+
+const (
+	kindPending = -1
+	kindScalar  = 0
+	kindMap     = 1
+	kindSlice   = 2
+)
+
+// yamlNode 解析后的节点。
+type yamlNode struct {
+	kind   int
+	scalar string
+	vs     map[string]*yamlNode
+	list   []*yamlNode
+}
+
+// frame 栈帧：节点 + 行缩进。
+type frame struct {
+	node   *yamlNode
+	indent int
+}
+
+// yamlParse 解析 clash 场景的 YAML → 顶层 map。
+func yamlParse(text string) (*yamlNode, error) {
+	root := &yamlNode{kind: kindMap, vs: map[string]*yamlNode{}}
+	stack := []frame{{node: root, indent: -1}}
+	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	for _, raw := range lines {
+		trimmed := strings.TrimRight(stripYAMLComment(raw), " \t")
+		content := strings.TrimSpace(trimmed)
+		if content == "" {
+			continue
+		}
+		ind := indentOf(trimmed)
+		// 回退：弹出缩进 ≥ 当前行的帧
+		for len(stack) > 1 && stack[len(stack)-1].indent >= ind {
+			stack = stack[:len(stack)-1]
+		}
+		// 解析 pending 容器（前一行 `key:` 空值）
+		if stack[len(stack)-1].node.kind == kindPending {
+			pv := stack[len(stack)-1]
+			if strings.HasPrefix(content, "- ") {
+				pv.node.kind = kindSlice
+			} else {
+				pv.node.kind = kindMap
+				pv.node.vs = map[string]*yamlNode{}
+			}
+		}
+		cur := stack[len(stack)-1].node
+
+		if strings.HasPrefix(content, "- ") || content == "-" {
+			item := &yamlNode{kind: kindMap, vs: map[string]*yamlNode{}}
+			if cur.kind == kindSlice {
+				cur.list = append(cur.list, item)
+			} else if cur.kind == kindPending || cur.kind == kindScalar {
+				// 不该出现
+				return nil, errors.New("yaml: 列表项父级无效")
+			} else {
+				return nil, errors.New("yaml: 列表项父级是 map")
+			}
+			stack = append(stack, frame{node: item, indent: ind})
+			rest := strings.TrimSpace(strings.TrimPrefix(content, "-"))
+			if rest != "" {
+				if strings.HasPrefix(rest, "{") {
+					// flow-style map 列表项：- {k: v, ...} → 填进 item.vs
+					if fm, ok := parseFlowMap(rest); ok {
+						item.vs = fm.vs
+					} else {
+						item.kind = kindSlice
+					}
+				} else if k, v, ok := splitYAML(rest); ok {
+					yamlSetKey(&stack, ind, k, strings.TrimSpace(v))
+				} else {
+					item.kind = kindSlice
+				}
+			}
+			continue
+		}
+
+		key, val, ok := splitYAML(content)
+		if !ok {
+			return nil, errors.New("yaml: 无法解析行: " + content)
+		}
+		yamlSetKey(&stack, ind, key, strings.TrimSpace(val))
+	}
+	return root, nil
+}
+
+// yamlSetKey 把 key:val 写入当前 map（空 val → 压入 pending/mm 子容器）。
+// 注意以 *[]frame 传递（追加可能触发 realloc，必须写回调用方）。
+func yamlSetKey(stack *[]frame, ind int, key, val string) {
+	st := *stack
+	cur := st[len(st)-1].node
+	if cur.kind != kindMap && cur.kind != kindSlice {
+		return
+	}
+	if val == "" && !strings.HasPrefix(val, "[") {
+		child := &yamlNode{kind: kindPending}
+		cur.vs[key] = child
+		if cur.kind == kindMap {
+			st = append(st, frame{node: child, indent: ind})
+			*stack = st
+		}
+		return
+	}
+	cur.vs[key] = parseScalarOrList(val)
+}
+
+// parseScalarOrList 标量、内联列表或内联 map（flow-style）。
+func parseScalarOrList(v string) *yamlNode {
+	if strings.HasPrefix(v, "[") {
+		node := &yamlNode{kind: kindSlice}
+		v = strings.TrimSuffix(strings.TrimSpace(v), "]")
+		v = strings.TrimPrefix(v, "[")
+		for _, part := range splitFlowItems(v) {
+			if s := strings.TrimSpace(part); s != "" {
+				node.list = append(node.list, parseScalarOrList(s))
+			}
+		}
+		return node
+	}
+	if strings.HasPrefix(v, "{") {
+		if n, ok := parseFlowMap(v); ok {
+			return n
+		}
+	}
+	return parseScalar(v)
+}
+
+// parseFlowMap 解析 flow-style map：{k: v, k2: v2, ...} → kindMap 节点。
+// 值支持标量/内联列表/嵌套 map；逗号切分遵循引号与括号深度。
+func parseFlowMap(s string) (*yamlNode, bool) {
+	inner := strings.TrimSpace(s)
+	if !strings.HasPrefix(inner, "{") || !strings.HasSuffix(inner, "}") {
+		return nil, false
+	}
+	inner = strings.TrimSpace(inner[1 : len(inner)-1])
+	node := &yamlNode{kind: kindMap, vs: map[string]*yamlNode{}}
+	for _, part := range splitFlowItems(inner) {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		k, v, ok := splitYAML(part)
+		if !ok {
+			continue
+		}
+		node.vs[strings.TrimSpace(k)] = parseScalarOrList(strings.TrimSpace(v))
+	}
+	return node, true
+}
+
+// splitFlowItems 按“引号外 + 括号深度 0”的逗号切分（flow-style 内部）。
+func splitFlowItems(s string) []string {
+	var out []string
+	inSQ, inDQ := false, false
+	depth := 0
+	start := 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\'':
+			if !inDQ {
+				inSQ = !inSQ
+			}
+		case '"':
+			if !inSQ {
+				inDQ = !inDQ
+			}
+		case '{', '[':
+			if !inSQ && !inDQ {
+				depth++
+			}
+		case '}', ']':
+			if !inSQ && !inDQ && depth > 0 {
+				depth--
+			}
+		case ',':
+			if !inSQ && !inDQ && depth == 0 {
+				out = append(out, s[start:i])
+				start = i + 1
+			}
+		}
+	}
+	out = append(out, s[start:])
+	return out
+}
+
+func parseScalar(v string) *yamlNode {
+	v = strings.TrimSpace(v)
+	if len(v) >= 2 {
+		if (v[0] == '"' && v[len(v)-1] == '"') || (v[0] == '\'' && v[len(v)-1] == '\'') {
+			v = v[1 : len(v)-1]
+		}
+	}
+	return &yamlNode{kind: kindScalar, scalar: v}
+}
+
+// stripYAMLComment 去掉行内注释（忽略引号内 #）。
+func stripYAMLComment(line string) string {
+	inSQ, inDQ := false, false
+	for i := 0; i < len(line); i++ {
+		switch line[i] {
+		case '\'':
+			if !inDQ {
+				inSQ = !inSQ
+			}
+		case '"':
+			if !inSQ {
+				inDQ = !inDQ
+			}
+		case '#':
+			if !inSQ && !inDQ {
+				return line[:i]
+			}
+		}
+	}
+	return line
+}
+
+// splitYAML 按“引号外 : 后随空格/行尾”切分。
+func splitYAML(line string) (string, string, bool) {
+	inSQ, inDQ := false, false
+	for i := 0; i < len(line); i++ {
+		c := line[i]
+		switch c {
+		case '\'':
+			if !inDQ {
+				inSQ = !inSQ
+			}
+		case '"':
+			if !inSQ {
+				inDQ = !inDQ
+			}
+		case ':':
+			if !inSQ && !inDQ && (i+1 == len(line) || line[i+1] == ' ' || line[i+1] == '\t') {
+				return strings.TrimSpace(line[:i]), strings.TrimSpace(line[i+1:]), true
+			}
+		}
+	}
+	return "", "", false
+}
+
+func indentOf(line string) int {
+	n := 0
+	for n < len(line) && line[n] == ' ' {
+		n++
+	}
+	return n
+}
+
+// ---- 读取辅助 ----
+
+func (n *yamlNode) string(key string) string {
+	if n == nil || n.kind != kindMap {
+		return ""
+	}
+	if v, ok := n.vs[key]; ok && v.kind == kindScalar {
+		return v.scalar
+	}
+	return ""
+}
+
+func (n *yamlNode) boolPtr(key string) *bool {
+	s := n.string(key)
+	if s == "" {
+		return nil
+	}
+	b, err := strconv.ParseBool(s)
+	if err != nil {
+		return nil
+	}
+	return &b
+}
+
+func (n *yamlNode) intVal(key string) int {
+	if s := n.string(key); s != "" {
+		v, _ := strconv.Atoi(s)
+		return v
+	}
+	return 0
+}
+
+func (n *yamlNode) mapOf(key string) *yamlNode {
+	if n == nil || n.kind != kindMap {
+		return nil
+	}
+	if v, ok := n.vs[key]; ok && v.kind == kindMap {
+		return v
+	}
+	return nil
+}
+
+func (n *yamlNode) sliceOf(key string) []*yamlNode {
+	if n == nil || n.kind != kindMap {
+		return nil
+	}
+	if v, ok := n.vs[key]; ok && v.kind == kindSlice {
+		return v.list
+	}
+	return nil
+}

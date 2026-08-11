@@ -187,7 +187,7 @@ export default function PoolPage({
         const r = await api.testInstance(name)
         setTestResults((prev) => ({ ...prev, [name]: r }))
         if (r.ok) toast(`「${name}」测试通过：${r.message}（${r.latency_ms}ms）`)
-        else toast(`「${name}」测试失败：${r.message}`, false)
+        else toast(r.message || '测试失败', false)
       }
       await load()
     } catch (e) {
@@ -365,7 +365,7 @@ export default function PoolPage({
               ))}
             </div>
           ) : freeModelsError ? (
-            <span className="text-[12px] text-red-500">探测失败：{freeModelsError}</span>
+            <span className="text-[12px] text-red-500">探测失败，{freeModelsError}</span>
           ) : (
             <span className="text-[12px] text-zinc-400">—</span>
           )}

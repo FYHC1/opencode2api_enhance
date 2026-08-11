@@ -1,8 +1,10 @@
-package main
+// Package protocol 定义协议层类型与纯转换（P1.2b）。
+// 本文件：Anthropic→Chat Completions 的纯转换辅助（P1.2b 函数下沉）。
+package protocol
 
-// normalizeFinishReason maps Anthropic stop reasons onto the closed set used
+// NormalizeFinishReason maps Anthropic stop reasons onto the closed set used
 // by Chat Completions.
-func normalizeFinishReason(reason string) string {
+func NormalizeFinishReason(reason string) string {
 	switch reason {
 	case "end_turn", "stop_sequence", "stop":
 		return "stop"
@@ -17,7 +19,8 @@ func normalizeFinishReason(reason string) string {
 	}
 }
 
-func anthropicUsageToChat(usage map[string]any) map[string]any {
+// AnthropicUsageToChat 把 Anthropic usage 字段映射为 Chat Completions 形态。
+func AnthropicUsageToChat(usage map[string]any) map[string]any {
 	if usage == nil {
 		return nil
 	}
@@ -31,8 +34,8 @@ func anthropicUsageToChat(usage map[string]any) map[string]any {
 	if v, ok := usage["output_tokens"]; ok {
 		out["completion_tokens"] = v
 	}
-	if p, pok := numberAsFloat(out["prompt_tokens"]); pok {
-		if c, cok := numberAsFloat(out["completion_tokens"]); cok {
+	if p, pok := NumberAsFloat(out["prompt_tokens"]); pok {
+		if c, cok := NumberAsFloat(out["completion_tokens"]); cok {
 			out["total_tokens"] = p + c
 		}
 	}
@@ -41,7 +44,8 @@ func anthropicUsageToChat(usage map[string]any) map[string]any {
 	return out
 }
 
-func numberAsFloat(v any) (float64, bool) {
+// NumberAsFloat 把数值类型归一为 float64。
+func NumberAsFloat(v any) (float64, bool) {
 	switch n := v.(type) {
 	case float64:
 		return n, true

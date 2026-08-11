@@ -7,18 +7,10 @@ import {
   Download,
   Filter,
   Inbox,
-  LayoutList,
   RefreshCw,
-  Table2,
   Trash2,
 } from 'lucide-react'
-import {
-  api,
-  downloadText,
-  type CallLogAggregate,
-  type CallLogFilter,
-  type CallLogRecord,
-} from '../lib/api'
+import { api, type CallLogRecord } from '../lib/api'
 
 const fmtTime = (ts: string) => {
   try {
@@ -56,56 +48,36 @@ const issueLabel = (rec: CallLogRecord): string => {
   return '异常'
 }
 
-const inputCls =
-  'border border-zinc-200 rounded-lg px-2.5 py-1.5 text-sm text-zinc-800 focus:outline-none focus:border-zinc-400 bg-white'
-
 export default function LogsPage({
   toast,
 }: {
   toast: (msg: string, ok?: boolean) => void
 }) {
   const [logs, setLogs] = useState<CallLogRecord[]>([])
-  const [agg, setAgg] = useState<CallLogAggregate[]>([])
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [onlyIssues, setOnlyIssues] = useState(false)
   // 按天筛选：'' = 全部日期
   const [dateFilter, setDateFilter] = useState('')
-  // 视图切换：日志列表 / 汇总 / 时段分析 / 节点分析
-  const [view, setView] = useState<'list' | 'agg' | 'hour' | 'node'>('list')
+  // 视图切换：日志列表 / 时段分析 / 节点分析
+  const [view, setView] = useState<'list' | 'hour' | 'node'>('list')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
-
-  const [fNode, setFNode] = useState('')
-  const [fKeyword, setFKeyword] = useState('')
-  const [fStatus, setFStatus] = useState('')
-
-  const buildFilter = useCallback(
-    (): CallLogFilter => ({
-      node: fNode.trim() || undefined,
-      keyword: fKeyword.trim() || undefined,
-      status: fStatus || undefined,
-      limit: 500,
-      offset: 0,
-    }),
-    [fNode, fKeyword, fStatus],
-  )
+  // 关键词过滤（main 功能 M4：匹配 model/path/err_msg/req_id）
+  const [keyword, setKeyword] = useState('')
 
   const load = useCallback(
     async (silent = true) => {
       try {
-        if (view === 'agg') {
-          setAgg(await api.callLogAggregate())
-        } else {
-          const recs = await api.callLogFiltered(buildFilter())
-          setLogs(recs)
-        }
+        const recs = await api.getCallLog(5000)
+        // 最新在前
+        setLogs([...recs].reverse())
         setError(null)
       } catch (e) {
         if (!silent) toast(String(e), false)
         else setError(String(e))
       }
     },
-    [view, buildFilter, toast],
+    [toast],
   )
 
   // 自动轮询（静默，5s）
@@ -115,38 +87,10 @@ export default function LogsPage({
     return () => clearInterval(t)
   }, [load])
 
-  // 过滤条件变化立即重查（防抖 300ms）
-  useEffect(() => {
-    if (view === 'agg') return
-    const t = setTimeout(() => void load(true), 300)
-    return () => clearTimeout(t)
-  }, [fNode, fKeyword, fStatus, view, load])
-
   const doRefresh = async () => {
     setRefreshing(true)
     await load(false)
     setRefreshing(false)
-  }
-
-  const doExportCsv = async () => {
-    try {
-      const text = await api.exportCallLogCsv()
-      downloadText(`call-log-${Date.now()}.csv`, text)
-      toast('日志 CSV 已导出', true)
-    } catch (e) {
-      toast(String(e), false)
-    }
-  }
-
-  const doClearLog = async () => {
-    if (!confirm('确定清空全部调用日志？该操作不可恢复。')) return
-    try {
-      await api.clearCallLog()
-      setLogs([])
-      toast('日志已清空')
-    } catch (e) {
-      toast(String(e), false)
-    }
   }
 
   const toggleExpand = (id: string) => {
@@ -172,9 +116,13 @@ export default function LogsPage({
     return logs.filter((l) => {
       if (onlyIssues && !hasIssue(l)) return false
       if (dateFilter && (l.ts || '').slice(0, 10) !== dateFilter) return false
+      if (keyword) {
+        const hay = [l.model || '', l.path || '', l.err_msg || '', l.req_id || ''].join(' ')
+        if (!hay.includes(keyword)) return false
+      }
       return true
     })
-  }, [logs, onlyIssues, dateFilter])
+  }, [logs, onlyIssues, dateFilter, keyword])
 
   const okCount = logs.filter((l) => l.status === 'ok').length
   const failCount = logs.length - okCount
@@ -186,14 +134,16 @@ export default function LogsPage({
         <h1 className="text-2xl font-semibold text-zinc-900">调用日志</h1>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => void doExportCsv()}
-            className="flex items-center gap-2 border border-zinc-200 text-zinc-700 rounded-lg px-4 py-2 text-sm hover:bg-zinc-50"
-          >
-            <Download size={14} />
-            导出 CSV
-          </button>
-          <button
-            onClick={() => void doClearLog()}
+            onClick={async () => {
+              if (!confirm('确定清空全部调用日志？该操作不可恢复。')) return
+              try {
+                await api.clearCallLog()
+                setLogs([])
+                toast('日志已清空')
+              } catch (e) {
+                toast(String(e), false)
+              }
+            }}
             disabled={logs.length === 0}
             className="flex items-center gap-2 bg-white border border-zinc-200 text-zinc-600 rounded-lg px-4 py-2 text-sm hover:bg-zinc-50 disabled:opacity-40 disabled:cursor-not-allowed"
           >
@@ -208,274 +158,232 @@ export default function LogsPage({
             <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
             刷新
           </button>
+          <button
+            onClick={async () => {
+              try {
+                const csv = await api.exportCallLogCSV()
+                const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+                const a = document.createElement('a')
+                a.href = URL.createObjectURL(blob)
+                a.download = 'call-log.csv'
+                a.click()
+                URL.revokeObjectURL(a.href)
+                toast('已导出 CSV', true)
+              } catch (e) {
+                toast(String(e), false)
+              }
+            }}
+            disabled={logs.length === 0}
+            className="flex items-center gap-2 bg-white border border-zinc-200 text-zinc-600 rounded-lg px-4 py-2 text-sm hover:bg-zinc-50 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Download size={14} />
+            导出 CSV
+          </button>
         </div>
       </div>
 
-      {/* 视图切换：日志列表 / 汇总 / 时段分析 / 节点分析 */}
+      {/* 过滤工具条：只看失败 / 按天 / 关键词（main 功能 M4） */}
+      <div className="flex flex-wrap items-center gap-3 mb-4">
+        <input
+          type="text"
+          placeholder="关键词过滤（模型/路径/错误/请求ID）"
+          value={keyword}
+          onChange={(e) => setKeyword(e.target.value)}
+          className="flex-1 min-w-[200px] px-3 py-2 border rounded-lg text-sm"
+        />
+      </div>
+
+      {/* 视图切换：日志列表 / 时段分析 / 节点分析 */}
       <div className="flex items-center gap-1 mb-4 bg-zinc-100/80 rounded-xl p-1 w-fit">
         {(
           [
-            ['list', '日志列表', LayoutList],
-            ['agg', '汇总', Table2],
-            ['hour', '时段分析', Activity],
-            ['node', '节点分析', Filter],
+            ['list', '日志列表'],
+            ['hour', '时段分析'],
+            ['node', '节点分析'],
           ] as const
-        ).map(([id, label, Icon]) => (
+        ).map(([id, label]) => (
           <button
             key={id}
             type="button"
             onClick={() => setView(id)}
             className={clsx(
-              'flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-[13px] font-medium transition-colors',
+              'px-4 py-1.5 rounded-lg text-[13px] font-medium transition-colors',
               view === id ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500 hover:text-zinc-700',
             )}
           >
-            <Icon size={13} />
             {label}
           </button>
         ))}
       </div>
 
-      {/* 过滤栏 */}
-      <div className="bg-white rounded-2xl border p-4 mb-4 flex flex-wrap items-center gap-3">
-        <div className="flex items-center gap-2 text-sm text-zinc-500">
-          <Filter size={14} />
-          <span className="text-zinc-700">过滤</span>
+      {/* 汇总 + 过滤 */}
+      {view === 'list' && (
+      <>
+      <div className="bg-white rounded-2xl border p-4 mb-4 flex flex-wrap items-center gap-4">
+        <div className="flex gap-5 text-sm">
+          <span className="text-zinc-600">
+            共 <b className="text-zinc-900">{logs.length}</b> 条
+          </span>
+          <span className="text-green-600">
+            【成功】<b>{okCount}</b>
+          </span>
+          <span className="text-red-600">
+            【失败】<b>{failCount}</b>
+          </span>
+          <span className="text-amber-600">
+            异常/切换 <b>{issueCount}</b>
+          </span>
         </div>
-        <input
-          value={fNode}
-          onChange={(e) => setFNode(e.target.value)}
-          placeholder="节点名包含"
-          className={clsx(inputCls, 'w-36')}
-        />
-        <input
-          value={fKeyword}
-          onChange={(e) => setFKeyword(e.target.value)}
-          placeholder="关键词（模型/路径/错误）"
-          className={clsx(inputCls, 'w-52')}
-        />
+        {dates.length > 1 && (
         <select
-          value={fStatus}
-          onChange={(e) => setFStatus(e.target.value)}
-          className={clsx(inputCls, 'w-28')}
+          value={dateFilter}
+          onChange={(e) => setDateFilter(e.target.value)}
+          className="px-2.5 py-1.5 rounded-lg border border-zinc-200 bg-white text-[13px] text-zinc-600 outline-none"
+          title="按日期筛选"
         >
-          <option value="">全部状态</option>
-          <option value="ok">成功</option>
-          <option value="error">失败/异常</option>
+          <option value="">全部日期（{dates.length} 天）</option>
+          {dates.map((d) => (
+            <option key={d} value={d}>
+              {d}
+            </option>
+          ))}
         </select>
+        )}
+        <label className="flex items-center gap-2 text-sm text-zinc-600 cursor-pointer ml-auto">
+          <input
+            type="checkbox"
+            checked={onlyIssues}
+            onChange={(e) => setOnlyIssues(e.target.checked)}
+            className="accent-zinc-900"
+          />
+          <Filter size={14} />
+          只看失败/切换
+        </label>
       </div>
 
       {error && <div className="text-red-600 text-sm mb-4">加载失败：{error}</div>}
 
-      {/* 汇总 + 只看失败 + 按天筛选（列表视图） */}
-      {view === 'list' && (
-        <div className="bg-white rounded-2xl border p-4 mb-4 flex flex-wrap items-center gap-4">
-          <div className="flex gap-5 text-sm">
-            <span className="text-zinc-600">
-              共 <b className="text-zinc-900">{logs.length}</b> 条
-            </span>
-            <span className="text-green-600">
-              【成功】<b>{okCount}</b>
-            </span>
-            <span className="text-red-600">
-              【失败】<b>{failCount}</b>
-            </span>
-            <span className="text-amber-600">
-              异常/切换 <b>{issueCount}</b>
-            </span>
-          </div>
-          {dates.length > 1 && (
-            <select
-              value={dateFilter}
-              onChange={(e) => setDateFilter(e.target.value)}
-              className="px-2.5 py-1.5 rounded-lg border border-zinc-200 bg-white text-[13px] text-zinc-600 outline-none"
-              title="按日期筛选"
-            >
-              <option value="">全部日期（{dates.length} 天）</option>
-              {dates.map((d) => (
-                <option key={d} value={d}>
-                  {d}
-                </option>
-              ))}
-            </select>
-          )}
-          <label className="flex items-center gap-2 text-sm text-zinc-600 cursor-pointer ml-auto">
-            <input
-              type="checkbox"
-              checked={onlyIssues}
-              onChange={(e) => setOnlyIssues(e.target.checked)}
-              className="accent-zinc-900"
-            />
-            <Filter size={14} />
-            只看失败/切换
-          </label>
+      {/* 日志列表 */}
+      {visible.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-16 text-zinc-400">
+          <Inbox size={40} strokeWidth={1.5} />
+          <p className="mt-3 text-sm">暂无日志</p>
+          <p className="text-xs mt-1">
+            {logs.length === 0 ? '网关尚未记录调用（需以网关模式运行）' : '没有匹配的日志'}
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {visible.map((rec) => {
+            const issue = hasIssue(rec)
+            const isExpanded = expanded.has(rec.req_id)
+            const nodes = rec.nodes ?? []
+            return (
+              <div
+                key={rec.req_id}
+                className={clsx(
+                  'rounded-2xl border bg-white overflow-hidden',
+                  issue ? 'border-amber-300/70' : 'border-zinc-200',
+                )}
+              >
+                {/* 成功：一行简短；异常：可展开 */}
+                <button
+                  type="button"
+                  onClick={() => issue && toggleExpand(rec.req_id)}
+                  className={clsx(
+                    'w-full flex items-center gap-3 px-4 py-2.5 text-left',
+                    issue && 'cursor-pointer hover:bg-zinc-50',
+                  )}
+                >
+                  <span
+                    className={clsx(
+                      'shrink-0 w-[68px] text-center text-xs font-medium rounded-md py-0.5',
+                      rec.status === 'ok' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700',
+                    )}
+                  >
+                    {rec.status === 'ok' ? '【成功】' : '【失败】'}
+                  </span>
+                  {issue && (
+                    <span className="shrink-0 text-[11px] text-amber-700 bg-amber-100 rounded-md px-2 py-0.5">
+                      {issueLabel(rec)}
+                    </span>
+                  )}
+                  <span className="text-zinc-500 text-xs tabular-nums shrink-0">{fmtTime(rec.ts)}</span>
+                  <span className="text-zinc-800 text-sm font-medium truncate flex-1">
+                    {rec.model || '-'}
+                  </span>
+                  {nodes.length > 0 && (
+                    <span className="text-zinc-500 text-xs truncate hidden sm:inline">
+                      {nodes.join(' → ')}
+                    </span>
+                  )}
+                  <span className="text-zinc-400 text-xs tabular-nums shrink-0">
+                    {fmtDur(rec.duration_ms)}
+                  </span>
+                  {issue && (
+                    <span className="shrink-0 text-zinc-400">
+                      {isExpanded ? <ChevronUpIcon /> : <ChevronRight size={16} />}
+                    </span>
+                  )}
+                </button>
+
+                {/* 异常/切换：整块详细时间线 */}
+                {issue && isExpanded && (
+                  <div className="border-t border-zinc-100 px-4 py-3 bg-zinc-50/60">
+                    <div className="text-xs text-zinc-500 mb-2 font-mono break-all">
+                      req_id: {rec.req_id} · {rec.path || '/v1/chat/completions'} · stream: {rec.stream ? '是' : '否'} · 路由: {rec.route_mode || '-'}
+                      {rec.err_msg && <span className="text-red-600"> · 错误: {rec.err_msg}</span>}
+                    </div>
+                    <div className="text-xs text-zinc-500 mb-2">
+                      token: 输入 {rec.prompt_tokens ?? 0} / 输出 {rec.completion_tokens ?? 0} · 耗时 {fmtDur(rec.duration_ms)}
+                    </div>
+                    <div className="space-y-1.5">
+                      {(rec.events ?? []).map((ev, i) => (
+                        <div key={i} className="flex items-start gap-2 text-xs">
+                          <span className="shrink-0 w-24 text-zinc-400 tabular-nums">{fmtTime(ev.at ?? '')}</span>
+                          <span
+                            className={clsx(
+                              'shrink-0 w-28 rounded px-1.5 py-0.5 text-center font-medium',
+                              ev.type === 'switch' ? 'bg-amber-100 text-amber-800'
+                                : ev.type === 'connect_ok' || ev.type === 'complete' ? 'bg-green-100 text-green-700'
+                                : ev.type === 'all_failed' ? 'bg-red-100 text-red-700'
+                                : 'bg-zinc-200 text-zinc-700',
+                            )}
+                          >
+                            {ev.type}
+                          </span>
+                          <span className="text-zinc-700 break-all">
+                            {ev.node && <b className="text-zinc-900">{ev.node}</b>}
+                            {ev.node && ev.detail ? ' — ' : ''}
+                            {ev.detail}
+                          </span>
+                        </div>
+                      ))}
+                      {rec.events?.length === 0 && (
+                        <span className="text-zinc-400">无事件明细</span>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )
+          })}
         </div>
       )}
 
-      {/* 汇总视图 */}
-      {view === 'agg' && (
-        agg.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-16 text-zinc-400">
-            <Inbox size={40} strokeWidth={1.5} />
-            <p className="mt-3 text-sm">暂无日志</p>
-            <p className="text-xs mt-1">网关尚未记录调用（需以网关模式运行）</p>
-          </div>
-        ) : (
-          <div className="bg-white rounded-2xl border overflow-hidden">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-xs text-zinc-500 border-b bg-zinc-50/60">
-                  <th className="px-4 py-2.5 font-medium">节点组合</th>
-                  <th className="px-4 py-2.5 font-medium text-right w-28">总条数</th>
-                  <th className="px-4 py-2.5 font-medium text-right w-28">异常/错误</th>
-                  <th className="px-4 py-2.5 font-medium text-right w-48">最近时间</th>
-                </tr>
-              </thead>
-              <tbody>
-                {agg.map((a) => (
-                  <tr key={a.instance} className="border-b border-zinc-100 last:border-0">
-                    <td className="px-4 py-2.5 font-mono text-xs text-zinc-800 break-all">
-                      {a.instance}
-                    </td>
-                    <td className="px-4 py-2.5 text-right tabular-nums text-zinc-800">{a.total}</td>
-                    <td
-                      className={clsx(
-                        'px-4 py-2.5 text-right tabular-nums',
-                        a.errors > 0 ? 'text-red-600 font-medium' : 'text-zinc-400',
-                      )}
-                    >
-                      {a.errors}
-                    </td>
-                    <td className="px-4 py-2.5 text-right text-xs text-zinc-500 tabular-nums">
-                      {fmtTime(a.last_ts)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )
-      )}
-
-      {/* 日志明细（列表视图） */}
-      {view === 'list' && (
-        visible.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-16 text-zinc-400">
-            <Inbox size={40} strokeWidth={1.5} />
-            <p className="mt-3 text-sm">暂无日志</p>
-            <p className="text-xs mt-1">
-              {logs.length === 0 ? '网关尚未记录调用（需以网关模式运行）' : '没有匹配的日志'}
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {visible.map((rec) => {
-              const issue = hasIssue(rec)
-              const isExpanded = expanded.has(rec.req_id)
-              const nodes = rec.nodes ?? []
-              return (
-                <div
-                  key={rec.req_id}
-                  className={clsx(
-                    'rounded-2xl border bg-white overflow-hidden',
-                    issue ? 'border-amber-300/70' : 'border-zinc-200',
-                  )}
-                >
-                  {/* 成功：一行简短；异常：可展开 */}
-                  <button
-                    type="button"
-                    onClick={() => issue && toggleExpand(rec.req_id)}
-                    className={clsx(
-                      'w-full flex items-center gap-3 px-4 py-2.5 text-left',
-                      issue && 'cursor-pointer hover:bg-zinc-50',
-                    )}
-                  >
-                    <span
-                      className={clsx(
-                        'shrink-0 w-[68px] text-center text-xs font-medium rounded-md py-0.5',
-                        rec.status === 'ok' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700',
-                      )}
-                    >
-                      {rec.status === 'ok' ? '【成功】' : '【失败】'}
-                    </span>
-                    {issue && (
-                      <span className="shrink-0 text-[11px] text-amber-700 bg-amber-100 rounded-md px-2 py-0.5">
-                        {issueLabel(rec)}
-                      </span>
-                    )}
-                    <span className="text-zinc-500 text-xs tabular-nums shrink-0">{fmtTime(rec.ts)}</span>
-                    <span className="text-zinc-800 text-sm font-medium truncate flex-1">
-                      {rec.model || '-'}
-                    </span>
-                    {nodes.length > 0 && (
-                      <span className="text-zinc-500 text-xs truncate hidden sm:inline">
-                        {nodes.join(' → ')}
-                      </span>
-                    )}
-                    <span className="text-zinc-400 text-xs tabular-nums shrink-0">
-                      {fmtDur(rec.duration_ms)}
-                    </span>
-                    {issue && (
-                      <span className="shrink-0 text-zinc-400">
-                        {isExpanded ? <ChevronDown size={16} className="rotate-180" /> : <ChevronRight size={16} />}
-                      </span>
-                    )}
-                  </button>
-
-                  {/* 异常/切换：整块详细时间线 */}
-                  {issue && isExpanded && (
-                    <div className="border-t border-zinc-100 px-4 py-3 bg-zinc-50/60">
-                      <div className="text-xs text-zinc-500 mb-2 font-mono break-all">
-                        req_id: {rec.req_id} · {rec.path || '/v1/chat/completions'} · stream: {rec.stream ? '是' : '否'} · 路由: {rec.route_mode || '-'}
-                        {rec.err_msg && <span className="text-red-600"> · 错误: {rec.err_msg}</span>}
-                      </div>
-                      <div className="text-xs text-zinc-500 mb-2">
-                        token: 输入 {rec.prompt_tokens ?? 0} / 输出 {rec.completion_tokens ?? 0} · 耗时 {fmtDur(rec.duration_ms)}
-                      </div>
-                      <div className="space-y-1.5">
-                        {(rec.events ?? []).map((ev, i) => (
-                          <div key={i} className="flex items-start gap-2 text-xs">
-                            <span className="shrink-0 w-24 text-zinc-400 tabular-nums">{fmtTime(ev.at ?? '')}</span>
-                            <span
-                              className={clsx(
-                                'shrink-0 w-28 rounded px-1.5 py-0.5 text-center font-medium',
-                                ev.type === 'switch' ? 'bg-amber-100 text-amber-800'
-                                  : ev.type === 'connect_ok' || ev.type === 'complete' ? 'bg-green-100 text-green-700'
-                                  : ev.type === 'all_failed' ? 'bg-red-100 text-red-700'
-                                  : 'bg-zinc-200 text-zinc-700',
-                              )}
-                            >
-                              {ev.type}
-                            </span>
-                            <span className="text-zinc-700 break-all">
-                              {ev.node && <b className="text-zinc-900">{ev.node}</b>}
-                              {ev.node && ev.detail ? ' —' : ''}
-                              {ev.detail}
-                            </span>
-                          </div>
-                        ))}
-                        {rec.events?.length === 0 && (
-                          <span className="text-zinc-400">无事件明细</span>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        )
-      )}
-
-      {/* 时段分析 */}
-      {view === 'hour' && <HourAnalysisView logs={logs} />}
-      {/* 节点分析 */}
-      {view === 'node' && <NodeAnalysisView logs={logs} />}
-
+      {/* 空态提示 */}
+      {logs.length > 0 && visible.length === 0 && null}
       <div className="flex items-center gap-2 text-zinc-400 text-xs mt-4">
         <Activity size={12} />
         每 5 秒自动刷新 · 保留上限可在设置页调整
       </div>
+      </>
+      )}
+
+      {/* 时段分析（阶段4填充） */}
+      {view === 'hour' && <HourAnalysisView logs={logs} />}
+      {/* 节点分析（阶段4填充） */}
+      {view === 'node' && <NodeAnalysisView logs={logs} />}
     </div>
   )
 }
@@ -662,4 +570,8 @@ function NodeAnalysisView({ logs }: { logs: CallLogRecord[] }) {
       )}
     </div>
   )
+}
+
+function ChevronUpIcon() {
+  return <ChevronDown size={16} className="rotate-180" />
 }

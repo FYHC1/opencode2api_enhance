@@ -1,0 +1,270 @@
+// Part of the P1 (core split) refactor: code moved out of main.go.
+// Same package (main) - do not change package clause manually.
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"sort"
+	"strings"
+	"time"
+)
+
+func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	defer r.Body.Close()
+	auth := extractUpstreamAuth(r)
+	body, err := io.ReadAll(io.LimitReader(r.Body, 10*1024*1024))
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		return
+	}
+
+	cnt := requestCount.Add(1)
+	slog.Debug("chat completion request body", "count", cnt, "body", string(body))
+
+	var req OpenAIRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+	// opencode 上游恒为无 key 免费档（见 chatViaVendor）→ 模型解析恒优先 -free 变体，
+	// 客户端带任何 key 都不影响落到免费模型。
+	req.Model = resolveModel(req.Model, true)
+	if req.Model == "" {
+		http.Error(w, "model is required", http.StatusBadRequest)
+		return
+	}
+
+	// 全流程调用日志：记录每个请求的决策链（网关模式下）
+	startTime := time.Now()
+	callRec := CallRecord{
+		ReqID:     getReqID(r.Context()),
+		TS:        time.Now().Format(time.RFC3339),
+		Path:      r.URL.Path,
+		Model:     req.Model,
+		Stream:    req.Stream,
+		RouteMode: routeMode,
+		Status:    "ok",
+	}
+	if callRec.ReqID == "" {
+		callRec.ReqID = "req_" + randomString(12)
+	}
+
+	// 多模态路由：检测到图片时转发到配置的上游
+
+	req.Messages = fixToolCallGaps(req.Messages)
+	keepReasoning := wantsReasoning(&req)
+	req.Messages = ensureReasoningContent(req.Messages, keepReasoning)
+	if req.Stream {
+		if req.ExtraBody == nil {
+			req.ExtraBody = map[string]any{}
+		}
+		req.ExtraBody["stream_options"] = map[string]any{"include_usage": true}
+	}
+	upstreamBody := buildUpstreamBody(&req)
+
+	if req.Stream {
+		upResp, status, _, proxyAddr, err := callOpenCodeAPIStream(upstreamBody, req.Model, auth)
+		callRec.Nodes = append(callRec.Nodes, proxyAddr)
+		if err != nil || status < 200 || status >= 300 {
+			callRec.Status = "fail"
+			callRec.ErrMsg = fmt.Sprintf("upstream status %d: %v", status, err)
+			callRec.Events = append(callRec.Events, CallEvent{Type: "upstream_error", Node: proxyAddr, Detail: callRec.ErrMsg, At: time.Now()})
+			recordCall(callRec)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(httpStatusOr(status))
+			if upResp != nil {
+				errBody, _ := io.ReadAll(upResp)
+				if len(errBody) > 0 {
+					w.Write(errBody)
+					return
+				}
+			}
+			json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"message": "upstream error", "type": "upstream_error"}})
+			return
+		}
+		callRec.Events = append(callRec.Events, CallEvent{Type: "connect_ok", Node: proxyAddr, Detail: "connected", At: time.Now()})
+		defer upResp.Close()
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.WriteHeader(http.StatusOK)
+		// 流内超时 + 断点续写切换（阶段1验证过的核心逻辑）
+		res := streamWithResume(w, r, upstreamBody, req.Model, auth, upResp, proxyAddr, keepReasoning, &callRec)
+		callRec.DurationMS = time.Since(startTime).Milliseconds()
+		if res.PromptTok > 0 || res.Completion > 0 {
+			callRec.PromptTok = res.PromptTok
+			callRec.CompletionTok = res.Completion
+			recordTokenUsage(req.Model, res.PromptTok, res.Completion, res.PromptTok+res.Completion, proxyAddr)
+		}
+		if !res.OK {
+			callRec.Status = "fail"
+			if res.ErrMsg != "" {
+				callRec.ErrMsg = res.ErrMsg
+			}
+			// 若未吐过 [DONE]，补错误事件
+			w.Write([]byte("data: {\"error\":\"stream interrupted: " + res.ErrMsg + "\"}\n\n"))
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		} else {
+			callRec.Status = "ok"
+		}
+		recordCall(callRec)
+		return
+	}
+
+	respBody, status, _, proxyAddr, err := callOpenCodeAPI(upstreamBody, req.Model, auth)
+	callRec.Nodes = append(callRec.Nodes, proxyAddr)
+	if err != nil || status < 200 || status >= 300 {
+		callRec.Status = "fail"
+		callRec.ErrMsg = fmt.Sprintf("upstream status %d: %v", status, err)
+		callRec.DurationMS = time.Since(startTime).Milliseconds()
+		callRec.Events = append(callRec.Events, CallEvent{Type: "upstream_error", Node: proxyAddr, Detail: callRec.ErrMsg, At: time.Now()})
+		recordCall(callRec)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(httpStatusOr(status))
+		if len(respBody) > 0 {
+			w.Write(respBody)
+		} else {
+			json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"message": "upstream error", "type": "upstream_error"}})
+		}
+		return
+	}
+	outBody := respBody
+	convertedResp, err := convertResponse(respBody, keepReasoning)
+	if err == nil {
+		outBody = convertedResp
+	}
+	// Record token usage
+	var usageResp map[string]any
+	if json.Unmarshal(respBody, &usageResp) == nil {
+		if u, ok := usageResp["usage"].(map[string]any); ok {
+			pt, _ := u["prompt_tokens"].(float64)
+			ct, _ := u["completion_tokens"].(float64)
+			tt, _ := u["total_tokens"].(float64)
+			if tt > 0 {
+				recordTokenUsage(req.Model, int64(pt), int64(ct), int64(tt), proxyAddr)
+			}
+			callRec.PromptTok = int64(pt)
+			callRec.CompletionTok = int64(ct)
+		}
+	}
+	callRec.DurationMS = time.Since(startTime).Milliseconds()
+	callRec.Events = append(callRec.Events, CallEvent{Type: "complete", Node: proxyAddr, Detail: "done", At: time.Now()})
+	recordCall(callRec)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	w.Write(outBody)
+}
+
+// ======================== Models Handler ========================
+
+func listModelsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	modelMu.RLock()
+	loaded, models := modelsLoaded, modelsCache
+	modelMu.RUnlock()
+	// 目录未就绪（启动后首请求早于首次聚合刷新）→ 走聚合器路径同步拉取一次。
+	// 聚合器是唯一数据源：不保留直连上游的兜底（双轨已消灭）。
+	if !loaded || len(models) == 0 {
+		refreshModelCatalog()
+		modelMu.RLock()
+		loaded, models = modelsLoaded, modelsCache
+		modelMu.RUnlock()
+	}
+	if len(models) == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error": "无法获取模型列表，请检查上游服务是否可用",
+		})
+		return
+	}
+	// 保存别名快照；目录权限仍按真实上游模型判断，最后再替换为客户端可见名称。
+	configMu.RLock()
+	aliases := make(map[string]string, len(modelAlias))
+	for alias, upstream := range modelAlias {
+		aliases[alias] = upstream
+	}
+	configMu.RUnlock()
+
+	// 仅返回免费可用模型（产品定位：免费模型聚合；付费模型不带 key 调用必 401，不展示）。
+	// 不做按 key 的鉴权分流——任何客户端拿到的都是同一份"免费目录"。
+	modelMu.RLock()
+	var combinedModels []ModelInfo
+	for _, model := range models {
+		if isFreeModel(model.ID) {
+			combinedModels = append(combinedModels, model)
+		}
+	}
+	for _, goModel := range goModelsCache {
+		if isFreeModel(goModel.ID) && !containsModelWithID(combinedModels, goModel.ID) {
+			combinedModels = append(combinedModels, goModel)
+		}
+	}
+	modelMu.RUnlock()
+
+	allModels := replaceModelIDsWithAliases(combinedModels, aliases)
+	// 多厂商聚合：把其它厂商（非 opencode）的免费模型并入列表（同名加厂商前缀）。
+	allModels = appendOtherFreeModels(allModels, globalAgg)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"object": "list",
+		"data":   allModels,
+	})
+}
+
+func replaceModelIDsWithAliases(models []ModelInfo, aliases map[string]string) []ModelInfo {
+	aliasesByUpstream := make(map[string][]string, len(aliases))
+	for alias, upstream := range aliases {
+		alias = strings.TrimSpace(alias)
+		upstream = strings.TrimSpace(upstream)
+		if alias == "" || upstream == "" {
+			continue
+		}
+		aliasesByUpstream[upstream] = append(aliasesByUpstream[upstream], alias)
+	}
+	for upstream := range aliasesByUpstream {
+		sort.Strings(aliasesByUpstream[upstream])
+	}
+
+	result := make([]ModelInfo, 0, len(models))
+	seen := make(map[string]struct{}, len(models))
+	for _, model := range models {
+		visibleIDs := aliasesByUpstream[model.ID]
+		if len(visibleIDs) == 0 {
+			// 自动兜底：未配置别名的 -free 模型，展示名去掉 -free 后缀
+			// （内部请求仍用原名；显式别名优先）。
+			if strings.HasSuffix(model.ID, "-free") {
+				visibleIDs = []string{strings.TrimSuffix(model.ID, "-free")}
+			} else {
+				visibleIDs = []string{model.ID}
+			}
+		}
+		for _, visibleID := range visibleIDs {
+			if _, exists := seen[visibleID]; exists {
+				continue
+			}
+			visibleModel := model
+			visibleModel.ID = visibleID
+			if visibleID != model.ID {
+				visibleModel.OwnedBy = "alias"
+			}
+			result = append(result, visibleModel)
+			seen[visibleID] = struct{}{}
+		}
+	}
+	return result
+}

@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/6Kmfi6HP/opencode2api/core/protocol"
 )
 
 func ptr[T any](v T) *T { return &v }
@@ -29,7 +31,7 @@ func TestAnthropicRequestConversionPreservesProtocolSemantics(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := ClaudeRequest{Model: "m", MaxTokens: ptr(0), Temperature: &zero, TopP: &zero, TopK: &topK, ToolChoice: tt.in,
 				StopSequences: []string{"END"}, Metadata: map[string]any{"user_id": "u-1"}}
-			got := convertClaudeRequest(req)
+			got := protocol.ConvertClaudeRequest(req)
 			if !reflect.DeepEqual(got.ToolChoice, tt.want) {
 				t.Fatalf("tool choice = %#v, want %#v", got.ToolChoice, tt.want)
 			}
@@ -160,7 +162,7 @@ func TestResponsesStreamAllocatesUniqueIndicesWhenToolPrecedesText(t *testing.T)
 }
 
 func TestAnthropicContentPreservesTextImageOrderAndToolErrors(t *testing.T) {
-	msgs := claudeToOpenAIMessages([]ClaudeMessage{{Role: "user", Content: []any{
+	msgs := protocol.ClaudeToOpenAIMessages([]ClaudeMessage{{Role: "user", Content: []any{
 		map[string]any{"type": "tool_result", "tool_use_id": "call_1", "is_error": true, "content": "boom"},
 		map[string]any{"type": "text", "text": "before"},
 		map[string]any{"type": "image", "source": map[string]any{"type": "url", "url": "https://example.test/a.png"}},
@@ -181,7 +183,7 @@ func TestAnthropicContentPreservesTextImageOrderAndToolErrors(t *testing.T) {
 func TestJSONSchemaCleaningReturnsCopyAndPreservesConstraints(t *testing.T) {
 	original := map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"when": map[string]any{"type": "string", "format": "date-time", "title": "When"}}}
 	before, _ := json.Marshal(original)
-	clean := cleanJsonSchema(original).(map[string]any)
+	clean := protocol.CleanJSONSchema(original).(map[string]any)
 	after, _ := json.Marshal(original)
 	if string(before) != string(after) {
 		t.Fatalf("input mutated: before=%s after=%s", before, after)

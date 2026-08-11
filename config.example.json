@@ -1,4 +1,10 @@
 {
+  "socks5_proxies": [
+    {
+      "addr": "127.0.0.1:1080",
+      "name": "local"
+    }
+  ],
   "model_alias": {
     "deepseek-v4-flash": "deepseek-v4-flash-free",
     "laguna-s-2.1": "laguna-s-2.1-free",
@@ -7,16 +13,24 @@
     "nemotron-3-ultra": "nemotron-3-ultra-free",
     "north-mini-code": "north-mini-code-free"
   },
+  "providers": [
+    {
+      "id": "opencode",
+      "type": "opencode",
+      "name": "OpenCode",
+      "enabled": true
+    }
+  ],
+  "routing": {
+    "model_provider_map": {
+      "swe-1-6-slow": "windsurf"
+    },
+    "default_provider": "opencode"
+  },
   "reasoning_effort_map": {
     "high": "high",
     "medium": "medium",
     "minimal": "low"
   },
-  "force_disable_thinking": false,
-  "socks5_proxies": [
-    {
-      "addr": "127.0.0.1:1080",
-      "name": "local"
-    }
-  ]
+  "force_disable_thinking": false
 }
