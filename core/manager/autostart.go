@@ -2,28 +2,25 @@
 // 桌面壳的窗口由 Go core 的 HTTP 服务承载（http://127.0.0.1:<port>/），
 // 页面不是 Tauri webview 本地环境，invoke 不可用 —— 因此自启逻辑必须放 core，
 // 前端经 /api/admin/autostart 走 HTTP（与其它管理接口一致）。
-// Windows 用 reg 命令写 HKCU Run 键；非 Windows 明确报错。
 //
-// 环境隔离：注册表键名跟随数据目录文件夹名（正式版 opencode2api-manager、
-// dev -dev、便携 -test），与数据目录/端口段隔离一致 —— 避免不同环境
-// 读写同一键名互相污染（如正式版启用自启后，测试/开发环境误读为已启用）。
+// 平台实现：
+//   - Windows：reg 命令写 HKCU Run 键（autostart_windows.go）
+//   - Linux：~/.config/autostart/*.desktop（autostart_other.go）
+//   - macOS：~/Library/LaunchAgents/*.plist（autostart_other.go）
+//
+// 环境隔离：自启键名/文件名跟随数据目录文件夹名（正式版 opencode2api-manager、
+// dev -dev、便携 -test），与数据目录/端口段隔离一致 —— 避免不同环境互相污染。
 package manager
 
 import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
 )
 
-const (
-	autostartRunKey       = `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
-	autostartRunNameDefault = "opencode2api-manager"
-)
+const autostartRunNameDefault = "opencode2api-manager"
 
 // autostartRunName 按数据目录派生自启键名：取目录文件夹名；
 // 异常（空/根目录）回退默认键名，保证正式版行为不变。
@@ -35,42 +32,43 @@ func autostartRunName(dataDir string) string {
 	return base
 }
 
-// autostartStatus 查询自启注册表项是否存在。
-// 非 Windows 平台：返回「未启用」（合理状态）不报错——对齐 main 的修复，
-// 避免 Linux/headless 下设置页因 GET 报错整体加载失败（仅 SET 时明确报错）。
+// autostartStatus 查询自启是否启用（平台实现：Windows 注册表 / 其他 自启文件）。
 func autostartStatus(dataDir string) (bool, error) {
-	if runtime.GOOS != "windows" {
-		return false, nil
-	}
-	name := autostartRunName(dataDir)
-	out, err := exec.Command("reg", "query", autostartRunKey, "/v", name).CombinedOutput()
-	if err != nil {
-		// reg query 找不到键时返回非零；视为未启用（不报错）
-		return false, nil
-	}
-	return strings.Contains(string(out), name), nil
+	return platformAutostartStatus(dataDir)
 }
 
-// setAutostart 写/删自启注册表项。
+// setAutostart 写/删自启（平台实现：Windows 注册表 / 其他 自启文件）。
 func setAutostart(dataDir string, enabled bool) error {
-	if runtime.GOOS != "windows" {
-		return fmt.Errorf("仅 Windows 支持开机自启")
-	}
-	name := autostartRunName(dataDir)
-	if enabled {
-		exe, err := os.Executable()
-		if err != nil {
-			return fmt.Errorf("获取可执行文件路径失败: %w", err)
-		}
-		val := fmt.Sprintf(`"%s"`, exe)
-		if out, err := exec.Command("reg", "add", autostartRunKey, "/v", name, "/t", "REG_SZ", "/d", val, "/f").CombinedOutput(); err != nil {
-			return fmt.Errorf("写入注册表失败: %v (%s)", err, strings.TrimSpace(string(out)))
-		}
-		return nil
-	}
-	// 幂等：值不存在时删除失败也可接受
-	_, _ = exec.Command("reg", "delete", autostartRunKey, "/v", name, "/f").CombinedOutput()
-	return nil
+	return platformSetAutostart(dataDir, enabled)
+}
+
+// desktopAutostartContent 生成 Linux XDG autostart .desktop 内容（可单测）。
+func desktopAutostartContent(exe, name string) string {
+	return fmt.Sprintf(`[Desktop Entry]
+Type=Application
+Name=opencode2api %s
+Exec="%s"
+X-GNOME-Autostart-enabled=true
+`, name, exe)
+}
+
+// launchAgentContent 生成 macOS LaunchAgent plist 内容（可单测）。
+func launchAgentContent(exe, name string) string {
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>opencode2api-%s</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>%s</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>
+`, name, exe)
 }
 
 // AutostartGetHandler GET → {enabled}。

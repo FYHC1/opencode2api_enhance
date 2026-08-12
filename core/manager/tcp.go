@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -153,16 +152,33 @@ func isPortFree(port uint16) bool {
 	return true
 }
 
-// ------------------------------------------------ Windows 端口清理
+// --------------------------------- 端口占用查询（平台无关壳） ---------------------------------
 
-// netstatLineRe 匹配 netstat -ano -tcp 行：
-//
-//	TCP    127.0.0.1:18100    0.0.0.0:0    LISTENING    1234
-//
-// 捕获本地端口、状态、PID。
-var netstatLineRe = regexp.MustCompile(`^TCP\s+127\.0\.0\.1:(\d{2,5})\s+\S+:\d+\s+(LISTENING|ESTABLISHED|TIME_WAIT)\s+(\d+)$`)
+// pidsOnPort 返回占用指定端口的 PID 集合（平台实现：Windows netstat / 非 Windows lsof）。
+func pidsOnPort(port uint16) []int {
+	return listPortPids(port)
+}
 
-// runNetstat（Windows）执行 netstat -ano -tcp；非 Windows 返回空（桩，P5 替换 lsof）。
+// parseLsofPIDOutput 解析 lsof -t 输出（每行一个十进制 PID，非 PID 行容错跳过）；平台无关便于单测。
+func parseLsofPIDOutput(out string) []int {
+	seen := map[int]bool{}
+	var pids []int
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		pid, err := strconv.Atoi(line)
+		if err != nil || pid <= 0 || seen[pid] {
+			continue
+		}
+		seen[pid] = true
+		pids = append(pids, pid)
+	}
+	return pids
+}
+
+// runNetstat（Windows）执行 netstat -ano -tcp；非 Windows 返回空（桩，端口清理走 lsof）。
 func runNetstat() []string {
 	out, err := netstatCmd()
 	if err != nil {
@@ -178,27 +194,4 @@ var netstatCmd = func() ([]byte, error) {
 		return nil, fmt.Errorf("netstat unavailable on this platform")
 	}
 	return c.Output()
-}
-
-// pidsOnPort 解析 netstat 输出中占用给定端口的 PID 集合。
-func pidsOnPort(port uint16) []int {
-	seen := map[int]bool{}
-	var pids []int
-	for _, line := range runNetstat() {
-		m := netstatLineRe.FindStringSubmatch(strings.TrimSpace(line))
-		if m == nil {
-			continue
-		}
-		p, _ := strconv.Atoi(m[1])
-		if uint16(p) != port {
-			continue
-		}
-		pid, _ := strconv.Atoi(m[3])
-		if pid <= 0 || seen[pid] {
-			continue
-		}
-		seen[pid] = true
-		pids = append(pids, pid)
-	}
-	return pids
 }
