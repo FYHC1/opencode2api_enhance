@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import clsx from 'clsx'
-import { Server, Layers, Radar, Settings, BarChart3, ScrollText } from 'lucide-react'
+import { invoke } from '@tauri-apps/api/core'
+import { Server, Layers, Radar, Settings, BarChart3, ScrollText, LogOut } from 'lucide-react'
+import { api } from './lib/api'
 import { TitleBar } from './components/TitleBar'
 import InstancesPage from './pages/InstancesPage'
 import PoolPage from './pages/PoolPage'
@@ -29,10 +31,51 @@ export default function App() {
     done: 0,
     total: 0,
   })
+  // D1：退出二次确认（退出并释放 / 退出不释放 / 取消）
+  const [exitOpen, setExitOpen] = useState(false)
+  const [exiting, setExiting] = useState(false)
 
   const showToast = (msg: string, ok = true) => {
     setToast({ msg, ok })
     setTimeout(() => setToast(null), 3600)
+  }
+
+  // 退出（不释放实例）：直接调用壳退出（实例留在后台继续运行）。
+  const doExitKeep = async () => {
+    setExitOpen(false)
+    try {
+      await invoke('quit_app')
+    } catch {
+      showToast('退出需要桌面版环境', false)
+    }
+  }
+
+  // 退出并释放：先按 4 并发释放全部实例（含独享与池成员），进度全局可见，完成后退出。
+  const doExitRelease = async () => {
+    setExitOpen(false)
+    setExiting(true)
+    try {
+      const ins = await api.listInstances()
+      const names = ins.map((i) => i.name)
+      if (names.length === 0) {
+        await invoke('quit_app')
+        return
+      }
+      setRelease({ active: true, done: 0, total: names.length })
+      const batchSize = 4
+      let done = 0
+      for (let i = 0; i < names.length; i += batchSize) {
+        const chunk = names.slice(i, i + batchSize)
+        await Promise.allSettled(chunk.map((n) => api.removeInstance(n)))
+        done += chunk.length
+        setRelease({ active: true, done, total: names.length })
+      }
+      setRelease({ active: true, done: names.length, total: names.length })
+      await invoke('quit_app')
+    } catch (e) {
+      setExiting(false)
+      showToast(String(e), false)
+    }
   }
 
   return (
@@ -67,7 +110,7 @@ export default function App() {
           {tab === 'nodes' && <NodesPage toast={showToast} />}
           {tab === 'stats' && <StatsPage toast={showToast} />}
           {tab === 'logs' && <LogsPage toast={showToast} />}
-          {tab === 'settings' && <SettingsPage toast={showToast} />}
+          {tab === 'settings' && <SettingsPage toast={showToast} onRequestExit={() => setExitOpen(true)} />}
         </main>
       </div>
 
@@ -101,6 +144,50 @@ export default function App() {
           </div>
           <div className="mt-1.5 text-[11px] text-zinc-400">
             {release.done >= release.total ? '已完成' : '正在释放，不影响你继续操作…'}
+          </div>
+        </div>
+      )}
+    {/* D1：退出二次确认弹窗 */}
+      {exitOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-900/40"
+          onClick={() => !exiting && setExitOpen(false)}
+        >
+          <div className="bg-white rounded-2xl shadow-xl w-[440px] p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="text-[15px] font-semibold text-zinc-900">退出程序</div>
+            <p className="text-[13px] text-zinc-600 leading-relaxed">
+              退出前可以选择是否先释放全部实例（停止并删除，含独享与池成员）。
+              <br />
+              「退出不释放」会直接退出，实例进程留在后台继续运行。
+            </p>
+            <div className="space-y-2">
+              <button
+                type="button"
+                onClick={() => void doExitRelease()}
+                disabled={exiting}
+                className="w-full flex items-center gap-2 px-4 py-2.5 rounded-lg text-[13px] font-medium text-red-700 bg-red-50 hover:bg-red-100 disabled:opacity-50 transition-colors"
+              >
+                <LogOut size={15} />
+                {exiting ? '正在释放实例并退出…' : '退出并释放全部实例'}
+              </button>
+              <button
+                type="button"
+                onClick={() => void doExitKeep()}
+                disabled={exiting}
+                className="w-full flex items-center gap-2 px-4 py-2.5 rounded-lg text-[13px] font-medium text-zinc-700 bg-zinc-100 hover:bg-zinc-200 disabled:opacity-50 transition-colors"
+              >
+                <LogOut size={15} />
+                退出不释放（实例留在后台）
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => setExitOpen(false)}
+              disabled={exiting}
+              className="w-full px-4 py-2 rounded-lg text-[13px] text-zinc-600 bg-white border border-zinc-200 hover:bg-zinc-50 disabled:opacity-50 transition-colors"
+            >
+              取消
+            </button>
           </div>
         </div>
       )}

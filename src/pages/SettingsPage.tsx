@@ -1,10 +1,16 @@
 import { useEffect, useState } from 'react'
 import clsx from 'clsx'
-import { Loader2, Search, Trash2 } from 'lucide-react'
+import { Loader2, Search, Trash2, LogOut } from 'lucide-react'
 import { api, type OrphanProcess } from '../lib/api'
 import type { ConfigView, BinariesInfo } from '../lib/api'
 
-export default function SettingsPage({ toast }: { toast: (msg: string, ok?: boolean) => void }) {
+export default function SettingsPage({
+  toast,
+  onRequestExit,
+}: {
+  toast: (msg: string, ok?: boolean) => void
+  onRequestExit?: () => void
+}) {
   const [config, setConfig] = useState<ConfigView | null>(null)
   const [autostart, setAutostart] = useState<boolean>(false)
   const [binariesInfo, setBinariesInfo] = useState<BinariesInfo | null>(null)
@@ -909,6 +915,19 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
         </div>
 
         <p className="text-zinc-500 text-xs">子程序随主程序内嵌，运行时不满足时自动释放</p>
+
+        {/* D1：退出程序（二次确认由 App 层弹窗负责） */}
+        <div className="pt-3 border-t border-zinc-100">
+          <button
+            type="button"
+            onClick={() => onRequestExit?.()}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-[13px] font-medium text-red-600 bg-red-50 hover:bg-red-100 transition-colors"
+          >
+            <LogOut size={14} />
+            退出程序
+          </button>
+          <p className="text-zinc-500 text-xs mt-2">退出前可先释放全部实例（停止并删除）；不释放则实例留在后台继续运行</p>
+        </div>
       </div>
     </div>
   )
