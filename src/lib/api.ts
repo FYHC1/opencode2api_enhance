@@ -285,6 +285,19 @@ export type ResetStatsResult = {
   failed: string[]
 }
 
+/** 单日统计（统计页按天查看：按统一网关调用日志聚合） */
+export type DayStats = {
+  day: string
+  total_requests: number
+  ok_requests: number
+  fail_requests: number
+  total_prompt_tokens: number
+  total_completion_tokens: number
+  total_tokens: number
+  by_model: ModelStat[]
+  by_node: GatewayNodeStat[]
+}
+
 // ─── 订阅（main 功能迁移 M1） ─────────────────────────────────────────────
 
 export type SubscribeNode = {
@@ -453,6 +466,8 @@ export const api = {
 
   // Token 统计（按实例）
   getStats: () => req<StatsSummary>('GET', '/stats'),
+  /** 按天统计（date=YYYY-MM-DD，空=全量；按统一网关调用日志聚合） */
+  statsByDay: (date?: string) => req<DayStats>('GET', '/stats/by-day', undefined, { date: date ?? undefined }),
   /** 重置全部 Token 统计（clearDeleted=同时清除已删除节点历史统计） */
   resetStats: (clearDeleted?: boolean) =>
     req<ResetStatsResult>('POST', '/stats/reset', undefined, { clearDeleted: clearDeleted ?? undefined }),

@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useState } from 'react'
 import clsx from 'clsx'
-import { BarChart3, ChevronDown, ChevronRight, RefreshCw, RotateCcw, Inbox, HeartPulse } from 'lucide-react'
-import { api, type StatsSummary, type HealthSummary } from '../lib/api'
+import { BarChart3, ChevronDown, ChevronRight, RefreshCw, RotateCcw, Inbox, HeartPulse, CalendarDays, Loader2 } from 'lucide-react'
+import { api, type StatsSummary, type HealthSummary, type DayStats } from '../lib/api'
 
 /** 千分位格式化 */
 const fmt = (n: number) => n.toLocaleString('en-US')
@@ -42,6 +42,43 @@ export default function StatsPage({
   // 健康巡检（main 功能 M2）
   const [health, setHealth] = useState<HealthSummary | null>(null)
   const [checking, setChecking] = useState(false)
+  // 按天查看：日期列表（来自调用日志）+ 选中日 + 当日聚合
+  const [dates, setDates] = useState<string[]>([])
+  const [day, setDay] = useState('')
+  const [dayStats, setDayStats] = useState<DayStats | null>(null)
+  const [dayBusy, setDayBusy] = useState(false)
+
+  // 提取调用日志中出现过的日期（新→旧），供按天筛选
+  const loadDates = useCallback(async () => {
+    try {
+      const recs = await api.getCallLog(5000)
+      const s = new Set<string>()
+      for (const l of recs) {
+        const d = (l.ts || '').slice(0, 10)
+        if (d) s.add(d)
+      }
+      setDates([...s].sort().reverse())
+    } catch {
+      /* 忽略：无日志时日期为空 */
+    }
+  }, [])
+
+  // 选择日期 → 拉取当日聚合；切回全部 → 恢复累计视图
+  const doSelectDay = async (d: string) => {
+    setDay(d)
+    if (!d) {
+      setDayStats(null)
+      return
+    }
+    setDayBusy(true)
+    try {
+      setDayStats(await api.statsByDay(d))
+    } catch (e) {
+      toast(String(e), false)
+    } finally {
+      setDayBusy(false)
+    }
+  }
 
   const load = useCallback(
     async (silent = true) => {
@@ -64,14 +101,16 @@ export default function StatsPage({
   // 自动轮询（静默，5s）
   useEffect(() => {
     void load()
+    void loadDates()
     const t = setInterval(() => void load(true), 5000)
     return () => clearInterval(t)
-  }, [load])
+  }, [load, loadDates])
 
   // 手动刷新（带 loading）
   const doRefresh = async () => {
     setRefreshing(true)
     await load(false)
+    await loadDates()
     setRefreshing(false)
   }
 
@@ -134,12 +173,54 @@ export default function StatsPage({
         </div>
       </div>
 
-      {/* 总览卡片 */}
+      {/* 按天查看 */}
+      <div className="flex items-center gap-3">
+        <div className="flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5">
+          <CalendarDays size={14} className="text-zinc-400" />
+          <select
+            value={day}
+            onChange={(e) => void doSelectDay(e.target.value)}
+            className="text-[13px] text-zinc-600 bg-transparent outline-none"
+            title="按日期查看统计（数据来自统一网关调用日志）"
+          >
+            <option value="">全部日期（累计）</option>
+            {dates.map((d) => (
+              <option key={d} value={d}>
+                {d}
+              </option>
+            ))}
+          </select>
+        </div>
+        {dayBusy ? (
+          <Loader2 size={14} className="animate-spin text-zinc-400" />
+        ) : (
+          day && (
+            <span className="text-[12px] text-zinc-400">
+              {day} · 按统一网关调用日志统计
+            </span>
+          )
+        )}
+      </div>
+
+      {/* 总览卡片：按天 6 卡 / 累计 4 卡 */}
       <div className="flex flex-wrap gap-4">
-        <Card label="总请求数" value={fmt(stats?.total_requests ?? 0)} />
-        <Card label="总输入 Token" value={fmt(stats?.total_prompt_tokens ?? 0)} />
-        <Card label="总输出 Token" value={fmt(stats?.total_completion_tokens ?? 0)} />
-        <Card label="总 Token" value={fmt(stats?.total_tokens ?? 0)} accent />
+        {day && dayStats ? (
+          <>
+            <Card label="当日请求数" value={fmt(dayStats.total_requests)} />
+            <Card label="成功" value={fmt(dayStats.ok_requests)} />
+            <Card label="失败" value={fmt(dayStats.fail_requests)} />
+            <Card label="输入 Token" value={fmt(dayStats.total_prompt_tokens)} />
+            <Card label="输出 Token" value={fmt(dayStats.total_completion_tokens)} />
+            <Card label="总 Token" value={fmt(dayStats.total_tokens)} accent />
+          </>
+        ) : (
+          <>
+            <Card label="总请求数" value={fmt(stats?.total_requests ?? 0)} />
+            <Card label="总输入 Token" value={fmt(stats?.total_prompt_tokens ?? 0)} />
+            <Card label="总输出 Token" value={fmt(stats?.total_completion_tokens ?? 0)} />
+            <Card label="总 Token" value={fmt(stats?.total_tokens ?? 0)} accent />
+          </>
+        )}
       </div>
 
       {/* 健康巡检卡片（main 功能 M2） */}
@@ -196,8 +277,72 @@ export default function StatsPage({
         </div>
       )}
 
-      {/* 实例表格 */}
+      {/* 实例表格：按天明细 or 累计实例表 */}
       <div className="bg-white rounded-[16px] border border-zinc-200 shadow-sm p-5">
+        {day && dayStats ? (
+          <div className="space-y-5">
+            {/* 当日模型用量 */}
+            <div>
+              <div className="text-[13px] font-semibold text-zinc-800 mb-2">当日模型用量</div>
+              {dayStats.by_model.length === 0 ? (
+                <p className="text-[12px] text-zinc-400">当日无调用记录</p>
+              ) : (
+                <table className="w-full text-[13px]">
+                  <thead>
+                    <tr className="text-left text-[12px] text-zinc-500 border-b border-zinc-100">
+                      <th className="py-2 pr-3 font-medium">模型</th>
+                      <th className="py-2 pr-3 font-medium text-right">请求数</th>
+                      <th className="py-2 pr-3 font-medium text-right">输入 Token</th>
+                      <th className="py-2 pr-3 font-medium text-right">输出 Token</th>
+                      <th className="py-2 font-medium text-right">总计</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dayStats.by_model.map((m) => (
+                      <tr key={m.model} className="border-b border-zinc-50">
+                        <td className="py-2 pr-3 text-zinc-800">{m.model}</td>
+                        <td className="py-2 pr-3 text-right tabular-nums text-zinc-600">{fmt(m.requests)}</td>
+                        <td className="py-2 pr-3 text-right tabular-nums text-zinc-600">{fmt(m.prompt_tokens)}</td>
+                        <td className="py-2 pr-3 text-right tabular-nums text-zinc-600">{fmt(m.completion_tokens)}</td>
+                        <td className="py-2 text-right tabular-nums font-medium text-zinc-900">{fmt(m.total_tokens)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            {/* 当日节点用量 */}
+            {dayStats.by_node.length > 0 && (
+              <div>
+                <div className="text-[13px] font-semibold text-zinc-800 mb-2">当日节点用量（经统一网关路由）</div>
+                <table className="w-full text-[13px]">
+                  <thead>
+                    <tr className="text-left text-[12px] text-zinc-500 border-b border-zinc-100">
+                      <th className="py-2 pr-3 font-medium">节点</th>
+                      <th className="py-2 pr-3 font-medium text-right">请求数</th>
+                      <th className="py-2 pr-3 font-medium text-right">输入 Token</th>
+                      <th className="py-2 pr-3 font-medium text-right">输出 Token</th>
+                      <th className="py-2 font-medium text-right">总计</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dayStats.by_node.map((n) => (
+                      <tr key={n.addr} className="border-b border-zinc-50">
+                        <td className="py-2 pr-3 text-zinc-800">{n.name}</td>
+                        <td className="py-2 pr-3 text-right tabular-nums text-zinc-600">{fmt(n.requests)}</td>
+                        <td className="py-2 pr-3 text-right tabular-nums text-zinc-600">{fmt(n.prompt_tokens)}</td>
+                        <td className="py-2 pr-3 text-right tabular-nums text-zinc-600">{fmt(n.completion_tokens)}</td>
+                        <td className="py-2 text-right tabular-nums font-medium text-zinc-900">{fmt(n.total_tokens)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        ) : (
+          <>
         {isEmpty && !error ? (
           <div className="py-12 flex flex-col items-center gap-2 text-zinc-400">
             <Inbox size={28} strokeWidth={1.5} />
@@ -324,6 +469,8 @@ export default function StatsPage({
           <div className="mt-3 text-[11px] text-zinc-400">
             每 5 秒自动刷新 · 已删除实例的统计仍保留在历史区
           </div>
+        )}
+          </>
         )}
       </div>
 
