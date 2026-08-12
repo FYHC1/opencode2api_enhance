@@ -37,12 +37,17 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
   // 健康巡检（main 功能 M2）
   const [healthInterval, setHealthInterval] = useState(0)
   const [healthThreshold, setHealthThreshold] = useState(0)
-  // 实例池性能模式（P1/P2）：探活 + 质量加权路由 + 熔断
+  // 实例池性能模式（P1/P2）：探活 + 质量加权路由 + 熔断 + 竞速
   const [poolForm, setPoolForm] = useState({
     pool_probe_interval_sec: 45,
     pool_quality_window_min: 10,
     pool_breaker_threshold: 3,
     pool_halfopen_interval_sec: 60,
+    pool_race_copies: 2,
+    scan_concurrency: 8,
+    batch_concurrency: 4,
+    test_concurrency: 4,
+    pool_probe_concurrency: 4,
   })
   const [poolProbeEnabled, setPoolProbeEnabled] = useState(true)
   const [perfMode, setPerfMode] = useState(true)
@@ -84,6 +89,11 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
           pool_quality_window_min: cfg.pool_quality_window_min,
           pool_breaker_threshold: cfg.pool_breaker_threshold,
           pool_halfopen_interval_sec: cfg.pool_halfopen_interval_sec,
+          pool_race_copies: cfg.pool_race_copies,
+          scan_concurrency: cfg.scan_concurrency,
+          batch_concurrency: cfg.batch_concurrency,
+          test_concurrency: cfg.test_concurrency,
+          pool_probe_concurrency: cfg.pool_probe_concurrency,
         })
         setPoolProbeEnabled(cfg.pool_probe_enabled)
         setPerfMode(cfg.pool_performance_mode)
@@ -235,6 +245,19 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
       toast('性能模式参数不合法：间隔需 ≥0，窗口/熔断/半开需 ≥1', false)
       return
     }
+    const concurrency: [string, number, number, number][] = [
+      ['竞速并行（1~4）', f.pool_race_copies, 1, 4],
+      ['节点扫描并发（1~16）', f.scan_concurrency, 1, 16],
+      ['批量启停/释放并发（1~16）', f.batch_concurrency, 1, 16],
+      ['一键测试并发（1~16）', f.test_concurrency, 1, 16],
+      ['链路探活并发（1~16）', f.pool_probe_concurrency, 1, 16],
+    ]
+    for (const [label, v, lo, hi] of concurrency) {
+      if (v < lo || v > hi) {
+        toast(`并发不合法：${label}`, false)
+        return
+      }
+    }
     try {
       await api.configSet('pool_probe_interval_sec', String(f.pool_probe_interval_sec))
       await api.configSet('pool_quality_window_min', String(f.pool_quality_window_min))
@@ -242,6 +265,11 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
       await api.configSet('pool_halfopen_interval_sec', String(f.pool_halfopen_interval_sec))
       await api.configSet('pool_probe_enabled', String(poolProbeEnabled))
       await api.configSet('pool_performance_mode', String(perfMode))
+      await api.configSet('pool_race_copies', String(f.pool_race_copies))
+      await api.configSet('scan_concurrency', String(f.scan_concurrency))
+      await api.configSet('batch_concurrency', String(f.batch_concurrency))
+      await api.configSet('test_concurrency', String(f.test_concurrency))
+      await api.configSet('pool_probe_concurrency', String(f.pool_probe_concurrency))
       toast('性能模式配置已保存（热生效）', true)
     } catch (e) {
       console.error('保存性能模式配置失败', e)
@@ -658,6 +686,33 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
             className="w-28 px-3 py-2 border rounded-lg"
           />
           <p className="text-zinc-500 text-xs">熔断到期后放行 1 个探测请求，成功即自动回归池子。默认 60</p>
+        </div>
+
+        {/* 并发设置（D3） */}
+        <div className="pt-2 border-t border-zinc-100">
+          <div className="text-sm font-medium text-zinc-700 mb-2">并发设置</div>
+          <div className="grid grid-cols-2 gap-x-6 gap-y-2">
+            {([
+              ['pool_race_copies', '竞速并行（1~4）', 1, 4],
+              ['scan_concurrency', '节点扫描并发（1~16）', 1, 16],
+              ['batch_concurrency', '批量启停/释放（1~16）', 1, 16],
+              ['test_concurrency', '一键测试并发（1~16）', 1, 16],
+              ['pool_probe_concurrency', '链路探活并发（1~16）', 1, 16],
+            ] as const).map(([key, label, lo, hi]) => (
+              <div key={key} className="flex items-center justify-between gap-3">
+                <label className="text-[13px] text-zinc-600">{label}</label>
+                <input
+                  type="number"
+                  min={lo}
+                  max={hi}
+                  value={poolForm[key]}
+                  onChange={(e) => setPoolForm({ ...poolForm, [key]: Number(e.target.value) })}
+                  className="w-20 px-2 py-1.5 border rounded-lg text-[13px] text-right"
+                />
+              </div>
+            ))}
+          </div>
+          <p className="text-zinc-500 text-xs mt-1.5">并发过高可能引起进程风暴，建议保持默认</p>
         </div>
 
         {/* 探活启用开关 */}

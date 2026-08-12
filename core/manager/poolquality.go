@@ -138,6 +138,38 @@ func poolRaceCopiesOf(cfg Config) int {
 	return 2
 }
 
+// scanConcurrencyOf 节点扫描并发生效值（默认 8）。
+func scanConcurrencyOf(cfg Config) int {
+	if cfg.ScanConcurrency > 0 {
+		return cfg.ScanConcurrency
+	}
+	return 8
+}
+
+// batchConcurrencyOf 批量启停/释放并发生效值（默认 4）。
+func batchConcurrencyOf(cfg Config) int {
+	if cfg.BatchConcurrency > 0 {
+		return cfg.BatchConcurrency
+	}
+	return 4
+}
+
+// testConcurrencyOf 一键测试并发生效值（默认 4）。
+func testConcurrencyOf(cfg Config) int {
+	if cfg.TestConcurrency > 0 {
+		return cfg.TestConcurrency
+	}
+	return 4
+}
+
+// poolProbeConcurrencyOf 池链路探活并发生效值（默认 4）。
+func poolProbeConcurrencyOf(cfg Config) int {
+	if cfg.PoolProbeConcurrency > 0 {
+		return cfg.PoolProbeConcurrency
+	}
+	return 4
+}
+
 // probeTargetURL 探测目标：优先配置 base_url（补 /v1/models），否则默认厂商端点。
 func probeTargetURL(cfg Config) string {
 	base := strings.TrimSpace(cfg.BaseURL)
@@ -304,10 +336,11 @@ func (m *Manager) RunPoolQualityOnce(runner Runner) PoolQualitySummary {
 		}
 	}
 
-	// 并发探测（poolProbeWorkers 上限），单实例失败不阻塞整轮。
+	// 并发探测（配置可调，默认 4 上限），单实例失败不阻塞整轮。
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, poolProbeWorkers)
+	workers := poolProbeConcurrencyOf(cfg)
+	sem := make(chan struct{}, workers)
 	for i := range running {
 		inst := running[i]
 		wg.Add(1)

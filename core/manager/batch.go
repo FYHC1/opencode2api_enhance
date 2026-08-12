@@ -11,10 +11,10 @@ import (
 )
 
 const (
-	batchStartWorkers    = 4
-	batchStopWorkers     = 8
-	batchDeleteWorkers   = 4
-	defaultBasePort      = 18100
+	batchStartWorkers  = 4
+	batchStopWorkers   = 8
+	batchDeleteWorkers = 4
+	defaultBasePort    = 18100
 	// singboxPortOffset 实例 sing-box 出口端口相对实例 API 端口的偏移。
 	// 新端口规则（2026-08-10 决策）：紧挨实例段 +2000，不再用旧 +10000 错开——
 	// 使"环境槽位表"（实例段 + sing-box 段 4000 连续）可落在 40000+ 保留段且零重叠。
@@ -113,11 +113,20 @@ func (m *Manager) BatchAdd(nodes []ClashNode, basePort uint16, useNodeName bool,
 	return result
 }
 
-// BatchStart 并行启动实例（4 worker）。
+// batchWorkers 批量操作并发 worker 数（D3：可配 batch_concurrency；停止保留 2x 快速语义）。
+func (m *Manager) batchWorkers(stop bool) int {
+	n := batchConcurrencyOf(m.loadConfig())
+	if stop {
+		n *= 2
+	}
+	return n
+}
+
+// BatchStart 并行启动实例（并发可配，默认 4）。
 func (m *Manager) BatchStart(runner Runner, names []string) map[string]error {
 	out := map[string]error{}
 	var mu sync.Mutex
-	sem := make(chan struct{}, batchStartWorkers)
+	sem := make(chan struct{}, m.batchWorkers(false))
 	var wg sync.WaitGroup
 	for _, n := range names {
 		n := n
@@ -136,11 +145,11 @@ func (m *Manager) BatchStart(runner Runner, names []string) map[string]error {
 	return out
 }
 
-// BatchStop 并行停止实例（8 worker，含运行中判定）。
+// BatchStop 并行停止实例（并发可配，默认 8 = 基准 4 × 2，含运行中判定）。
 func (m *Manager) BatchStop(runner Runner, names []string) map[string]error {
 	out := make(map[string]error)
 	var mu sync.Mutex
-	sem := make(chan struct{}, batchStopWorkers)
+	sem := make(chan struct{}, m.batchWorkers(true))
 	var wg sync.WaitGroup
 	for _, n := range names {
 		n := n
@@ -159,11 +168,11 @@ func (m *Manager) BatchStop(runner Runner, names []string) map[string]error {
 	return out
 }
 
-// BatchDelete 批量删除（先停后删，4 worker 并发，避免进程风暴）。
+// BatchDelete 批量删除（先停后删，并发可配，默认 4，避免进程风暴）。
 func (m *Manager) BatchDelete(runner Runner, names []string) map[string]error {
 	out := make(map[string]error)
 	var mu sync.Mutex
-	sem := make(chan struct{}, batchDeleteWorkers)
+	sem := make(chan struct{}, m.batchWorkers(false))
 	var wg sync.WaitGroup
 	for _, n := range names {
 		n := n

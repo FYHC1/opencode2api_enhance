@@ -126,6 +126,13 @@ export type ConfigView = {
   pool_breaker_threshold: number
   pool_halfopen_interval_sec: number
   pool_performance_mode: boolean
+  /** 请求级竞速（P2b） */
+  pool_race_copies: number
+  /** 并发设置（D3） */
+  scan_concurrency: number
+  batch_concurrency: number
+  test_concurrency: number
+  pool_probe_concurrency: number
 }
 
 export type BinariesInfo = {

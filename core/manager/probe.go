@@ -140,7 +140,11 @@ func (c *ScanController) Start(opts ScanOptions) (ScanProgress, error) {
 	} else if opts.TimeoutSec < 3 {
 		opts.TimeoutSec = 3
 	}
-	if opts.Concurrency <= 0 || opts.Concurrency > 8 {
+	// 扫描并发：未指定用配置（默认 8），上限 8 防探测风暴（D3）。
+	if opts.Concurrency <= 0 {
+		opts.Concurrency = scanConcurrencyOf(c.m.loadConfig())
+	}
+	if opts.Concurrency > 8 {
 		opts.Concurrency = 8
 	}
 	c.mu.Lock()

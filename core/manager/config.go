@@ -54,6 +54,12 @@ type Config struct {
 	// 请求级竞速并行数（P2b）：一次请求并行扇出 N 个候选出口，首个成功者胜（<=0 用默认 2；1 = 关闭）。
 	PoolRaceCopies int `json:"pool_race_copies,omitempty"`
 
+	// 并发设置（D3）：扫描 / 批量启停与释放 / 一键测试 / 池链路探活 的 worker 上限（<=0 用默认）。
+	ScanConcurrency      int `json:"scan_concurrency,omitempty"`
+	BatchConcurrency     int `json:"batch_concurrency,omitempty"`
+	TestConcurrency      int `json:"test_concurrency,omitempty"`
+	PoolProbeConcurrency int `json:"pool_probe_concurrency,omitempty"`
+
 	// GatewayKey 统一网关鉴权密钥（空 = 回退默认 sk-unified-local；main 功能 M6）。
 	GatewayKey string `json:"gateway_key,omitempty"`
 
@@ -157,6 +163,14 @@ func (m *Manager) ConfigGet(key string) (string, error) {
 		return strconv.FormatBool(poolPerfModeEnabled(cfg)), nil
 	case "pool_race_copies":
 		return strconv.Itoa(cfg.PoolRaceCopies), nil
+	case "scan_concurrency":
+		return strconv.Itoa(cfg.ScanConcurrency), nil
+	case "batch_concurrency":
+		return strconv.Itoa(cfg.BatchConcurrency), nil
+	case "test_concurrency":
+		return strconv.Itoa(cfg.TestConcurrency), nil
+	case "pool_probe_concurrency":
+		return strconv.Itoa(cfg.PoolProbeConcurrency), nil
 	case "gateway_key":
 		// 密钥不回显：设置过返回掩码，未设置返回空（main 语义一致）。
 		if cfg.GatewayKey == "" {
@@ -340,6 +354,42 @@ func (m *Manager) ConfigSet(key, value string) error {
 			return errors.New("pool_race_copies 需 >= 0")
 		}
 		cfg.PoolRaceCopies = int(v)
+	case "scan_concurrency":
+		v, err := parseInt()
+		if err != nil {
+			return err
+		}
+		if v < 1 || v > 16 {
+			return errors.New("scan_concurrency 需在 1~16 之间")
+		}
+		cfg.ScanConcurrency = int(v)
+	case "batch_concurrency":
+		v, err := parseInt()
+		if err != nil {
+			return err
+		}
+		if v < 1 || v > 16 {
+			return errors.New("batch_concurrency 需在 1~16 之间")
+		}
+		cfg.BatchConcurrency = int(v)
+	case "test_concurrency":
+		v, err := parseInt()
+		if err != nil {
+			return err
+		}
+		if v < 1 || v > 16 {
+			return errors.New("test_concurrency 需在 1~16 之间")
+		}
+		cfg.TestConcurrency = int(v)
+	case "pool_probe_concurrency":
+		v, err := parseInt()
+		if err != nil {
+			return err
+		}
+		if v < 1 || v > 16 {
+			return errors.New("pool_probe_concurrency 需在 1~16 之间")
+		}
+		cfg.PoolProbeConcurrency = int(v)
 	case "gateway_key":
 		// 空串 = 重置为默认（gatewayKey() 回退 sk-unified-local）；非空需至少 8 字符（main 校验一致）。
 		if value == "" {
@@ -406,6 +456,10 @@ type ConfigView struct {
 	PoolHalfOpenIntervalSec int    `json:"pool_halfopen_interval_sec"`
 	PoolPerformanceMode     bool   `json:"pool_performance_mode"`
 	PoolRaceCopies          int    `json:"pool_race_copies"`
+	ScanConcurrency         int    `json:"scan_concurrency"`
+	BatchConcurrency        int    `json:"batch_concurrency"`
+	TestConcurrency         int    `json:"test_concurrency"`
+	PoolProbeConcurrency    int    `json:"pool_probe_concurrency"`
 	HasGatewayKey           bool   `json:"has_gateway_key"`
 	GatewayKey              string `json:"gateway_key"`
 }
@@ -447,6 +501,10 @@ func (m *Manager) ConfigViewOf() ConfigView {
 		PoolHalfOpenIntervalSec: poolHalfOpenIntervalOf(cfg),
 		PoolPerformanceMode:     poolPerfModeEnabled(cfg),
 		PoolRaceCopies:          poolRaceCopiesOf(cfg),
+		ScanConcurrency:         scanConcurrencyOf(cfg),
+		BatchConcurrency:        batchConcurrencyOf(cfg),
+		TestConcurrency:         testConcurrencyOf(cfg),
+		PoolProbeConcurrency:    poolProbeConcurrencyOf(cfg),
 		HasGatewayKey:           cfg.GatewayKey != "",
 		GatewayKey:              maskSecret(cfg.GatewayKey),
 	}
