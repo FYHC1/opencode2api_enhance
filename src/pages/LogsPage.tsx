@@ -123,9 +123,10 @@ export default function LogsPage({
     })
   }, [logs, onlyIssues, dateFilter, keyword])
 
-  const okCount = logs.filter((l) => l.status === 'ok').length
-  const failCount = logs.length - okCount
-  const issueCount = logs.filter(hasIssue).length
+  // 汇总统计与列表同一筛选视图（日期/关键词/只看失败均联动）
+  const okCount = visible.filter((l) => l.status === 'ok').length
+  const failCount = visible.length - okCount
+  const issueCount = visible.filter(hasIssue).length
 
   return (
     <div className="p-6 max-w-4xl mx-auto">
@@ -200,7 +201,7 @@ export default function LogsPage({
       <div className="bg-white rounded-2xl border p-4 mb-4 flex flex-wrap items-center gap-4">
         <div className="flex gap-5 text-sm">
           <span className="text-zinc-600">
-            共 <b className="text-zinc-900">{logs.length}</b> 条
+            共 <b className="text-zinc-900">{visible.length}</b> 条
           </span>
           <span className="text-green-600">
             【成功】<b>{okCount}</b>
