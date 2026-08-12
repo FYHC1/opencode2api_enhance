@@ -55,6 +55,17 @@ func applyConfig(cfg AppConfig) {
 	setTimeoutConfigFromApp(cfg)
 	applyBadStatusConfig(cfg)
 
+	// P2 性能模式：质量加权路由 + 熔断/半开（未设置保持当前值；关闭时路由行为与基线一致）。
+	if cfg.PoolPerformanceMode != nil {
+		poolPerfMode = *cfg.PoolPerformanceMode
+	}
+	if cfg.PoolBreakerThreshold > 0 {
+		poolBreakerThreshold = cfg.PoolBreakerThreshold
+	}
+	if cfg.PoolHalfOpenIntervalSec > 0 {
+		poolHalfOpenIntervalSec = cfg.PoolHalfOpenIntervalSec
+	}
+
 	socks5Mu.Lock()
 	proxiesChanged := false
 	if cfg.Socks5Proxies != nil {

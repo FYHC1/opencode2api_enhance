@@ -90,6 +90,12 @@ func (m *Manager) buildRouterCfg(singboxPorts []uint16, portNames map[uint16]str
 	applyIf("failover_probe_min", appCfg.FailoverProbeMin)
 	applyIf("failover_probe_max", appCfg.FailoverProbeMax)
 	applyIf("call_log_max", appCfg.CallLogMax)
+	// P2 性能模式：熔断阈值 / 半开间隔 / 开关透传（>0 才写，未配置子进程用默认）。
+	applyIf("pool_breaker_threshold", int64(appCfg.PoolBreakerThreshold))
+	applyIf("pool_halfopen_interval_sec", int64(appCfg.PoolHalfOpenIntervalSec))
+	if appCfg.PoolPerformanceMode != nil {
+		cfg["pool_performance_mode"] = *appCfg.PoolPerformanceMode
+	}
 	// 透传厂商注册表 + 路由：网关子进程与核心一致，能注册多厂商（如 windsurf）
 	cfg = injectVendorConfig(cfg, appCfg)
 	return json.MarshalIndent(cfg, "", "  ")

@@ -209,6 +209,10 @@ var (
 
 // pickHealthyProxy 从 start 位置起轮询，跳过冷却中代理；全冷→返回冷却最早结束的兜底。
 func pickHealthyProxy(proxies []Socks5Proxy, start int) Socks5Proxy {
+	// P2 性能模式：质量加权路由 + 熔断/半开（关闭时走基线逻辑）。
+	if poolPerfMode {
+		return pickWeightedProxy(proxies, start)
+	}
 	now := time.Now()
 	var fallback Socks5Proxy
 	var fallbackUntil time.Time
@@ -242,7 +246,6 @@ func markSocks5Result(addr string, status int, requestErr error) {
 		return
 	}
 	socks5HealthMu.Lock()
-	defer socks5HealthMu.Unlock()
 
 	// 坏状态码：计数 + 达到阈值标记坏池
 	if reason, ok := badStatusCodes[status]; ok {
@@ -256,25 +259,29 @@ func markSocks5Result(addr string, status int, requestErr error) {
 		state.failures++
 		state.until = time.Now().Add(45 * time.Second)
 		socks5Health[addr] = state
-		return
-	}
-
-	failed := requestErr != nil || status == http.StatusBadGateway ||
-		status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout
-	if !failed {
-		if status >= 200 && status < 300 {
-			delete(socks5Health, addr)
+	} else {
+		failed := requestErr != nil || status == http.StatusBadGateway ||
+			status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout
+		if !failed {
+			if status >= 200 && status < 300 {
+				delete(socks5Health, addr)
+			}
+		} else {
+			state := socks5Health[addr]
+			state.failures++
+			cooldown := 20 * time.Second
+			if state.failures >= 3 {
+				cooldown = 2 * time.Minute
+			}
+			state.until = time.Now().Add(cooldown)
+			socks5Health[addr] = state
 		}
-		return
 	}
-	state := socks5Health[addr]
-	state.failures++
-	cooldown := 20 * time.Second
-	if state.failures >= 3 {
-		cooldown = 2 * time.Minute
-	}
-	state.until = time.Now().Add(cooldown)
-	socks5Health[addr] = state
+	socks5HealthMu.Unlock()
+
+	// P2：请求结果回填（熔断 + 反馈窗口），所有路径统一收口——
+	// 成功（2xx）清除熔断（半开恢复），失败累计计数触发熔断。
+	applyPoolResult(addr, status, requestErr)
 }
 
 // getHTTPClientWithProxy 返回 HTTP 客户端及所用代理地址。

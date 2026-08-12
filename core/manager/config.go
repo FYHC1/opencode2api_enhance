@@ -31,11 +31,11 @@ type Config struct {
 	ShowNodePrefix      bool   `json:"show_node_prefix,omitempty"`
 
 	// SubscribeURL 订阅地址；SubscribeIntervalMin 自动拉取间隔（分钟，<=0 不自动拉）。
-	SubscribeURL        string `json:"subscribe_url,omitempty"`
+	SubscribeURL         string `json:"subscribe_url,omitempty"`
 	SubscribeIntervalMin int    `json:"subscribe_interval_min,omitempty"`
 
 	// 健康巡检：检查间隔（秒，<=0 不巡检）与自动重启连续失败阈值（<=0 不重启）。
-	HealthCheckIntervalSec  int `json:"health_check_interval_sec,omitempty"`
+	HealthCheckIntervalSec int `json:"health_check_interval_sec,omitempty"`
 	HealthRestartThreshold int `json:"health_restart_threshold,omitempty"`
 
 	// 实例池链路探活（性能模式 P1）：间隔（秒）、单次超时（秒）、质量窗口（分钟），
@@ -44,6 +44,13 @@ type Config struct {
 	PoolProbeTimeoutSec  int   `json:"pool_probe_timeout_sec,omitempty"`
 	PoolQualityWindowMin int   `json:"pool_quality_window_min,omitempty"`
 	PoolProbeEnabled     *bool `json:"pool_probe_enabled,omitempty"`
+
+	// 性能模式（P2）：熔断阈值（连续失败达该次数 → open）、半开间隔（秒）、开关。
+	// PoolBreakerThreshold/PoolHalfOpenIntervalSec <=0 用默认值（3 / 60）；
+	// PoolPerformanceMode 未设置（nil）默认开启（关闭时路由行为与基线一致）。
+	PoolBreakerThreshold    int   `json:"pool_breaker_threshold,omitempty"`
+	PoolHalfOpenIntervalSec int   `json:"pool_halfopen_interval_sec,omitempty"`
+	PoolPerformanceMode     *bool `json:"pool_performance_mode,omitempty"`
 
 	// GatewayKey 统一网关鉴权密钥（空 = 回退默认 sk-unified-local；main 功能 M6）。
 	GatewayKey string `json:"gateway_key,omitempty"`
@@ -140,6 +147,12 @@ func (m *Manager) ConfigGet(key string) (string, error) {
 		return strconv.Itoa(cfg.PoolQualityWindowMin), nil
 	case "pool_probe_enabled":
 		return strconv.FormatBool(poolProbeEnabled(cfg)), nil
+	case "pool_breaker_threshold":
+		return strconv.Itoa(cfg.PoolBreakerThreshold), nil
+	case "pool_halfopen_interval_sec":
+		return strconv.Itoa(cfg.PoolHalfOpenIntervalSec), nil
+	case "pool_performance_mode":
+		return strconv.FormatBool(poolPerfModeEnabled(cfg)), nil
 	case "gateway_key":
 		// 密钥不回显：设置过返回掩码，未设置返回空（main 语义一致）。
 		if cfg.GatewayKey == "" {
@@ -290,6 +303,30 @@ func (m *Manager) ConfigSet(key, value string) error {
 			return fmt.Errorf("invalid boolean for pool_probe_enabled: %s", value)
 		}
 		cfg.PoolProbeEnabled = &b
+	case "pool_breaker_threshold":
+		v, err := parseInt()
+		if err != nil {
+			return err
+		}
+		if v < 0 {
+			return errors.New("pool_breaker_threshold 需 >= 0")
+		}
+		cfg.PoolBreakerThreshold = int(v)
+	case "pool_halfopen_interval_sec":
+		v, err := parseInt()
+		if err != nil {
+			return err
+		}
+		if v < 0 {
+			return errors.New("pool_halfopen_interval_sec 需 >= 0")
+		}
+		cfg.PoolHalfOpenIntervalSec = int(v)
+	case "pool_performance_mode":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("invalid boolean for pool_performance_mode: %s", value)
+		}
+		cfg.PoolPerformanceMode = &b
 	case "gateway_key":
 		// 空串 = 重置为默认（gatewayKey() 回退 sk-unified-local）；非空需至少 8 字符（main 校验一致）。
 		if value == "" {
@@ -331,28 +368,31 @@ func (m *Manager) ConfigSet(key, value string) error {
 
 // ConfigView 是前端 /api/admin/config 的响应形态（密码脱敏）。
 type ConfigView struct {
-	BaseURL             string `json:"base_url"`
-	DefaultPassword     string `json:"default_password"`
-	HasPassword         bool   `json:"has_password"`
-	ClashExternalURL    string `json:"clash_external_url"`
-	HasClashToken       bool   `json:"has_clash_token"`
-	TimeoutTTFTMinMS    int64  `json:"timeout_ttft_min_ms"`
-	TimeoutTTFTMaxMS    int64  `json:"timeout_ttft_max_ms"`
-	TimeoutSilenceMinMS int64  `json:"timeout_silence_min_ms"`
-	TimeoutSilenceMaxMS int64  `json:"timeout_silence_max_ms"`
-	FailoverProbeMin    int64  `json:"failover_probe_min"`
-	FailoverProbeMax    int64  `json:"failover_probe_max"`
-	CallLogMax          int64  `json:"call_log_max"`
-	ShowNodePrefix      bool   `json:"show_node_prefix"`
-	SubscribeURL         string `json:"subscribe_url"`
-	SubscribeIntervalMin int    `json:"subscribe_interval_min"`
-	HealthCheckIntervalSec  int `json:"health_check_interval_sec"`
-	HealthRestartThreshold int `json:"health_restart_threshold"`
-	PoolProbeIntervalSec   int  `json:"pool_probe_interval_sec"`
-	PoolProbeTimeoutSec    int  `json:"pool_probe_timeout_sec"`
-	PoolQualityWindowMin   int  `json:"pool_quality_window_min"`
-	PoolProbeEnabled       bool `json:"pool_probe_enabled"`
-	HasGatewayKey           bool `json:"has_gateway_key"`
+	BaseURL                 string `json:"base_url"`
+	DefaultPassword         string `json:"default_password"`
+	HasPassword             bool   `json:"has_password"`
+	ClashExternalURL        string `json:"clash_external_url"`
+	HasClashToken           bool   `json:"has_clash_token"`
+	TimeoutTTFTMinMS        int64  `json:"timeout_ttft_min_ms"`
+	TimeoutTTFTMaxMS        int64  `json:"timeout_ttft_max_ms"`
+	TimeoutSilenceMinMS     int64  `json:"timeout_silence_min_ms"`
+	TimeoutSilenceMaxMS     int64  `json:"timeout_silence_max_ms"`
+	FailoverProbeMin        int64  `json:"failover_probe_min"`
+	FailoverProbeMax        int64  `json:"failover_probe_max"`
+	CallLogMax              int64  `json:"call_log_max"`
+	ShowNodePrefix          bool   `json:"show_node_prefix"`
+	SubscribeURL            string `json:"subscribe_url"`
+	SubscribeIntervalMin    int    `json:"subscribe_interval_min"`
+	HealthCheckIntervalSec  int    `json:"health_check_interval_sec"`
+	HealthRestartThreshold  int    `json:"health_restart_threshold"`
+	PoolProbeIntervalSec    int    `json:"pool_probe_interval_sec"`
+	PoolProbeTimeoutSec     int    `json:"pool_probe_timeout_sec"`
+	PoolQualityWindowMin    int    `json:"pool_quality_window_min"`
+	PoolProbeEnabled        bool   `json:"pool_probe_enabled"`
+	PoolBreakerThreshold    int    `json:"pool_breaker_threshold"`
+	PoolHalfOpenIntervalSec int    `json:"pool_halfopen_interval_sec"`
+	PoolPerformanceMode     bool   `json:"pool_performance_mode"`
+	HasGatewayKey           bool   `json:"has_gateway_key"`
 	GatewayKey              string `json:"gateway_key"`
 }
 
@@ -368,27 +408,30 @@ func (m *Manager) ConfigViewOf() ConfigView {
 		return v
 	}
 	return ConfigView{
-		BaseURL:             cfg.BaseURL,
-		DefaultPassword:     maskSecret(cfg.DefaultPassword),
-		HasPassword:         cfg.DefaultPassword != "",
-		ClashExternalURL:    cfg.ClashExternalURL,
-		HasClashToken:       cfg.ClashAuthToken != "",
-		TimeoutTTFTMinMS:    def(cfg.TimeoutTTFTMinMS, 10000),
-		TimeoutTTFTMaxMS:    def(cfg.TimeoutTTFTMaxMS, 10000),
-		TimeoutSilenceMinMS: def(cfg.TimeoutSilenceMinMS, 5000),
-		TimeoutSilenceMaxMS: def(cfg.TimeoutSilenceMaxMS, 5000),
-		FailoverProbeMin:    def(cfg.FailoverProbeMin, 2),
-		FailoverProbeMax:    def(cfg.FailoverProbeMax, 3),
-		CallLogMax:          def(cfg.CallLogMax, 5000),
-		ShowNodePrefix:      cfg.ShowNodePrefix,
-		SubscribeURL:        cfg.SubscribeURL,
-		SubscribeIntervalMin: cfg.SubscribeIntervalMin,
+		BaseURL:                 cfg.BaseURL,
+		DefaultPassword:         maskSecret(cfg.DefaultPassword),
+		HasPassword:             cfg.DefaultPassword != "",
+		ClashExternalURL:        cfg.ClashExternalURL,
+		HasClashToken:           cfg.ClashAuthToken != "",
+		TimeoutTTFTMinMS:        def(cfg.TimeoutTTFTMinMS, 10000),
+		TimeoutTTFTMaxMS:        def(cfg.TimeoutTTFTMaxMS, 10000),
+		TimeoutSilenceMinMS:     def(cfg.TimeoutSilenceMinMS, 5000),
+		TimeoutSilenceMaxMS:     def(cfg.TimeoutSilenceMaxMS, 5000),
+		FailoverProbeMin:        def(cfg.FailoverProbeMin, 2),
+		FailoverProbeMax:        def(cfg.FailoverProbeMax, 3),
+		CallLogMax:              def(cfg.CallLogMax, 5000),
+		ShowNodePrefix:          cfg.ShowNodePrefix,
+		SubscribeURL:            cfg.SubscribeURL,
+		SubscribeIntervalMin:    cfg.SubscribeIntervalMin,
 		HealthCheckIntervalSec:  cfg.HealthCheckIntervalSec,
-		HealthRestartThreshold: cfg.HealthRestartThreshold,
-		PoolProbeIntervalSec:   poolProbeInterval(cfg),
-		PoolProbeTimeoutSec:    int(poolProbeTimeout(cfg).Seconds()),
-		PoolQualityWindowMin:   int(poolQualityWindowSec(cfg) / 60),
-		PoolProbeEnabled:       poolProbeEnabled(cfg),
+		HealthRestartThreshold:  cfg.HealthRestartThreshold,
+		PoolProbeIntervalSec:    poolProbeInterval(cfg),
+		PoolProbeTimeoutSec:     int(poolProbeTimeout(cfg).Seconds()),
+		PoolQualityWindowMin:    int(poolQualityWindowSec(cfg) / 60),
+		PoolProbeEnabled:        poolProbeEnabled(cfg),
+		PoolBreakerThreshold:    poolBreakerThresholdOf(cfg),
+		PoolHalfOpenIntervalSec: poolHalfOpenIntervalOf(cfg),
+		PoolPerformanceMode:     poolPerfModeEnabled(cfg),
 		HasGatewayKey:           cfg.GatewayKey != "",
 		GatewayKey:              maskSecret(cfg.GatewayKey),
 	}

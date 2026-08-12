@@ -138,6 +138,8 @@ func (g *Gateway) startChild(runner Runner) error {
 			"-config", cfgPath,
 			"-password", g.password,
 			"-gateway",
+			// P2: 注入实例池质量文件路径，子进程路由按质量分加权/熔断（空 = 无质量约束）。
+			"-pool-quality", filepath.Join(g.m.Paths().RuntimeDir, "pool_quality.json"),
 			"-log-level", "warn",
 		},
 		Dir:      dir,

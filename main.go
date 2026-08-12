@@ -21,13 +21,13 @@ func frontendDistDir() string {
 	if exe, err := os.Executable(); err == nil {
 		exeDir := filepath.Dir(exe)
 		cands = append(cands,
-			filepath.Join(exeDir, "dist"),                // 便携包：exe 旁
+			filepath.Join(exeDir, "dist"),                   // 便携包：exe 旁
 			filepath.Join(exeDir, "..", "..", "..", "dist"), // dev：target/debug/bin → 仓库根
 		)
 	}
 	if wd, err := os.Getwd(); err == nil {
 		cands = append(cands,
-			filepath.Join(wd, "dist"),   // 常规：cwd/dist
+			filepath.Join(wd, "dist"),       // 常规：cwd/dist
 			filepath.Join(wd, "..", "dist"), // dev：cwd=src-tauri → 仓库根
 		)
 	}
@@ -78,6 +78,7 @@ func main() {
 	flag.StringVar(&adminPassword, "password", "123456", "管理面板密码（留空则不启用登录验证）")
 	flag.BoolVar(&debugMode, "debug", false, "启用调试日志")
 	flag.BoolVar(&gatewayMode, "gateway", false, "统一网关模式（记录节点级统计）")
+	flag.StringVar(&poolQualityPath, "pool-quality", "", "实例池质量文件路径（网关子进程注入；空 = 无质量约束）")
 	flag.StringVar(&logLevel, "log-level", "info", "日志级别: debug/info/warn/error")
 	flag.StringVar(&logFile, "log-file", "", "日志文件路径（留空输出到 stdout）")
 	var listenAddr string
@@ -143,7 +144,6 @@ func main() {
 		BuildOpenCfg: managerInst.BuildOpenCodeCfgFor,
 		ListNodes:    managerInst.ListNodesWithGroup,
 	})
-
 
 	mux := http.NewServeMux()
 	registerHTTPRoutes(mux, managerInst)

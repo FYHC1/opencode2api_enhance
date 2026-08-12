@@ -25,6 +25,14 @@ type AppConfig struct {
 	BadStatusCodes map[string]string `json:"bad_status_codes,omitempty"`
 	// 坏池阈值：连续坏状态码次数达到后节点进坏池（默认 3）
 	BadThreshold int `json:"bad_threshold,omitempty"`
+
+	// 实例池性能模式（P2）：质量加权路由 + 熔断/半开。
+	// PoolPerformanceMode 未设置（nil）默认开启；关闭时路由行为与基线一致。
+	PoolPerformanceMode *bool `json:"pool_performance_mode,omitempty"`
+	// 熔断阈值：连续失败达该次数后节点进入熔断（open）态（默认 3）。
+	PoolBreakerThreshold int `json:"pool_breaker_threshold,omitempty"`
+	// 半开间隔：熔断节点按该周期（秒）放行 1 个探测请求，成功即恢复（默认 60）。
+	PoolHalfOpenIntervalSec int `json:"pool_halfopen_interval_sec,omitempty"`
 	// ShowNodePrefix 是否在对话流首段展示「🤖 节点 · 模型」前缀（默认关闭）
 	ShowNodePrefix *bool `json:"show_node_prefix,omitempty"`
 

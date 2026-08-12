@@ -106,6 +106,30 @@ func poolProbeEnabled(cfg Config) bool {
 	return true
 }
 
+// poolBreakerThresholdOf 熔断阈值生效值（连续失败达该次数 → open，<=0 用默认 3）。
+func poolBreakerThresholdOf(cfg Config) int {
+	if cfg.PoolBreakerThreshold > 0 {
+		return cfg.PoolBreakerThreshold
+	}
+	return 3
+}
+
+// poolHalfOpenIntervalOf 半开间隔生效值（秒，<=0 用默认 60）。
+func poolHalfOpenIntervalOf(cfg Config) int {
+	if cfg.PoolHalfOpenIntervalSec > 0 {
+		return cfg.PoolHalfOpenIntervalSec
+	}
+	return 60
+}
+
+// poolPerfModeEnabled 性能模式开关生效值（未显式设置默认开启）。
+func poolPerfModeEnabled(cfg Config) bool {
+	if cfg.PoolPerformanceMode != nil {
+		return *cfg.PoolPerformanceMode
+	}
+	return true
+}
+
 // probeTargetURL 探测目标：优先配置 base_url（补 /v1/models），否则默认厂商端点。
 func probeTargetURL(cfg Config) string {
 	base := strings.TrimSpace(cfg.BaseURL)
