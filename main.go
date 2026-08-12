@@ -210,6 +210,8 @@ func registerHTTPRoutes(mux *http.ServeMux, managerInst *manager.Manager) {
 	managerInst.StartSubscribeLoop()
 	// M2: 健康巡检后台循环（配置 health_check_interval_sec 生效时运行）。
 	managerInst.StartHealthLoop()
+	// P1: 实例池链路探活后台循环（与健康巡检并行，pool_probe_enabled 生效时运行）。
+	managerInst.StartPoolQualityLoop()
 	// P4-5: 管理域操作面路由（/api/admin/*）。
 	mux.HandleFunc("/api/admin/nodes", loggingMiddleware(requireAuth(managerInst.NodesHandler())))
 	// 节点删除（main 分支功能迁移 M5；仅订阅缓存节点可删）。
@@ -240,6 +242,9 @@ func registerHTTPRoutes(mux *http.ServeMux, managerInst *manager.Manager) {
 	// 健康巡检（main 分支功能迁移 M2）。
 	mux.HandleFunc("/api/admin/health/check", loggingMiddleware(requireAuth(managerInst.HealthCheckHandler())))
 	mux.HandleFunc("/api/admin/health/summary", loggingMiddleware(requireAuth(managerInst.HealthSummaryHandler())))
+	// P1: 实例池链路质量（质量汇总视图 + 手动触发一轮探活）。
+	mux.HandleFunc("/api/admin/pool/quality", loggingMiddleware(requireAuth(managerInst.PoolQualityHandler())))
+	mux.HandleFunc("/api/admin/pool/quality/probe", loggingMiddleware(requireAuth(managerInst.PoolProbeTriggerHandler())))
 	mux.HandleFunc("/api/admin/data/clean", loggingMiddleware(requireAuth(managerInst.DataCleanHandler())))
 	mux.HandleFunc("/api/admin/gateway/status", loggingMiddleware(requireAuth(managerInst.GatewayStatusHandler())))
 	mux.HandleFunc("/api/admin/gateway/route-mode", loggingMiddleware(requireAuth(managerInst.GatewayRouteModeHandler())))

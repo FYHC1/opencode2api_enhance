@@ -38,6 +38,13 @@ type Config struct {
 	HealthCheckIntervalSec  int `json:"health_check_interval_sec,omitempty"`
 	HealthRestartThreshold int `json:"health_restart_threshold,omitempty"`
 
+	// 实例池链路探活（性能模式 P1）：间隔（秒）、单次超时（秒）、质量窗口（分钟），
+	// <=0 时用默认值（45s / 3s / 10min）；PoolProbeEnabled 未设置（nil）默认开启。
+	PoolProbeIntervalSec int   `json:"pool_probe_interval_sec,omitempty"`
+	PoolProbeTimeoutSec  int   `json:"pool_probe_timeout_sec,omitempty"`
+	PoolQualityWindowMin int   `json:"pool_quality_window_min,omitempty"`
+	PoolProbeEnabled     *bool `json:"pool_probe_enabled,omitempty"`
+
 	// GatewayKey 统一网关鉴权密钥（空 = 回退默认 sk-unified-local；main 功能 M6）。
 	GatewayKey string `json:"gateway_key,omitempty"`
 
@@ -125,6 +132,14 @@ func (m *Manager) ConfigGet(key string) (string, error) {
 		return strconv.Itoa(cfg.HealthCheckIntervalSec), nil
 	case "health_restart_threshold":
 		return strconv.Itoa(cfg.HealthRestartThreshold), nil
+	case "pool_probe_interval_sec":
+		return strconv.Itoa(cfg.PoolProbeIntervalSec), nil
+	case "pool_probe_timeout_sec":
+		return strconv.Itoa(cfg.PoolProbeTimeoutSec), nil
+	case "pool_quality_window_min":
+		return strconv.Itoa(cfg.PoolQualityWindowMin), nil
+	case "pool_probe_enabled":
+		return strconv.FormatBool(poolProbeEnabled(cfg)), nil
 	case "gateway_key":
 		// 密钥不回显：设置过返回掩码，未设置返回空（main 语义一致）。
 		if cfg.GatewayKey == "" {
@@ -242,6 +257,39 @@ func (m *Manager) ConfigSet(key, value string) error {
 			return err
 		}
 		cfg.HealthRestartThreshold = int(v)
+	case "pool_probe_interval_sec":
+		v, err := parseInt()
+		if err != nil {
+			return err
+		}
+		if v < 0 {
+			return errors.New("pool_probe_interval_sec 需 >= 0")
+		}
+		cfg.PoolProbeIntervalSec = int(v)
+	case "pool_probe_timeout_sec":
+		v, err := parseInt()
+		if err != nil {
+			return err
+		}
+		if v < 0 {
+			return errors.New("pool_probe_timeout_sec 需 >= 0")
+		}
+		cfg.PoolProbeTimeoutSec = int(v)
+	case "pool_quality_window_min":
+		v, err := parseInt()
+		if err != nil {
+			return err
+		}
+		if v < 0 {
+			return errors.New("pool_quality_window_min 需 >= 0")
+		}
+		cfg.PoolQualityWindowMin = int(v)
+	case "pool_probe_enabled":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("invalid boolean for pool_probe_enabled: %s", value)
+		}
+		cfg.PoolProbeEnabled = &b
 	case "gateway_key":
 		// 空串 = 重置为默认（gatewayKey() 回退 sk-unified-local）；非空需至少 8 字符（main 校验一致）。
 		if value == "" {
@@ -300,6 +348,10 @@ type ConfigView struct {
 	SubscribeIntervalMin int    `json:"subscribe_interval_min"`
 	HealthCheckIntervalSec  int `json:"health_check_interval_sec"`
 	HealthRestartThreshold int `json:"health_restart_threshold"`
+	PoolProbeIntervalSec   int  `json:"pool_probe_interval_sec"`
+	PoolProbeTimeoutSec    int  `json:"pool_probe_timeout_sec"`
+	PoolQualityWindowMin   int  `json:"pool_quality_window_min"`
+	PoolProbeEnabled       bool `json:"pool_probe_enabled"`
 	HasGatewayKey           bool `json:"has_gateway_key"`
 	GatewayKey              string `json:"gateway_key"`
 }
@@ -333,6 +385,10 @@ func (m *Manager) ConfigViewOf() ConfigView {
 		SubscribeIntervalMin: cfg.SubscribeIntervalMin,
 		HealthCheckIntervalSec:  cfg.HealthCheckIntervalSec,
 		HealthRestartThreshold: cfg.HealthRestartThreshold,
+		PoolProbeIntervalSec:   poolProbeInterval(cfg),
+		PoolProbeTimeoutSec:    int(poolProbeTimeout(cfg).Seconds()),
+		PoolQualityWindowMin:   int(poolQualityWindowSec(cfg) / 60),
+		PoolProbeEnabled:       poolProbeEnabled(cfg),
 		HasGatewayKey:           cfg.GatewayKey != "",
 		GatewayKey:              maskSecret(cfg.GatewayKey),
 	}
