@@ -48,7 +48,15 @@ UI 参照 Windsurf Account Manager 的浅色官网风格：Tauri 2 无边框窗�
 
 - **Headless（无图形界面 / 服务器）**：同一 Go core 二进制以管理器方式运行即完整 Web 服务（`./opencode2api -port 40000 -password "change-me" -config config.json`），默认监听 `:<port>` 全接口、托管前端 `dist/`，纯浏览器完成全部管理；仅本机访问可加 `-listen 127.0.0.1`（管理 API 含启停实例等高权限操作，公网部署务必配合反向代理限制来源），见 [部署文档](docs/DEPLOYMENT.md)。
 - **桌面（Linux）**：安装 .deb / AppImage 即可；桌面模式内置本地 HTTP 服务，前端经它取数，行为与 Windows 版一致。
+- **Docker（服务器）**：仓库根目录 `docker compose up -d --build` 即起完整管理器（含六页前端与 sing-box 出口），管理面板 `http://127.0.0.1:40000`，见 [部署文档](docs/DEPLOYMENT.md)。
 - 数据目录与配置：`OPCODE2API_DATA_DIR` 隔离数据；`OPCODE2API_MANAGER_PORT` 覆盖管理端口；`config.json` 支持网关端口/密钥、订阅、健康巡检、日志过滤等配置项。
+
+## macOS 部署
+
+- 安装包：CI 产出 `.dmg`（内含 `.app`）。
+- **Gatekeeper**：当前未签名/未公证，首次打开需在访达右键 App →「打开」，或在系统设置 →「隐私与安全性」点「仍要打开」。
+- 开机自启走 LaunchAgent（`~/Library/LaunchAgents/opencode2api-<环境>.plist`），端口清理用 `lsof`，行为与 Windows 版一致。
+- 签名/公证接入属后续迭代（需 Apple Developer 账号），不影响本地使用。
 
 ## 轻量化原则
 
