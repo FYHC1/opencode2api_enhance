@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import clsx from 'clsx'
-import { api } from '../lib/api'
+import { Loader2, Search, Trash2 } from 'lucide-react'
+import { api, type OrphanProcess } from '../lib/api'
 import type { ConfigView, BinariesInfo } from '../lib/api'
 
 export default function SettingsPage({ toast }: { toast: (msg: string, ok?: boolean) => void }) {
@@ -45,6 +46,11 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
   })
   const [poolProbeEnabled, setPoolProbeEnabled] = useState(true)
   const [perfMode, setPerfMode] = useState(true)
+  // 残留进程清理（孤儿实例 / 探针残留）
+  const [orphans, setOrphans] = useState<OrphanProcess[]>([])
+  const [orphanBusy, setOrphanBusy] = useState(false)
+  const [killBusy, setKillBusy] = useState(false)
+  const [selected, setSelected] = useState<Set<number>>(new Set())
 
 
   useEffect(() => {
@@ -240,6 +246,56 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
     } catch (e) {
       console.error('保存性能模式配置失败', e)
       toast('保存失败', false)
+    }
+  }
+
+  // 残留进程：探测 / 全选 / 一键清除
+  const doScanOrphans = async () => {
+    setOrphanBusy(true)
+    try {
+      const s = await api.orphanScan()
+      setOrphans(s.items)
+      setSelected(new Set(s.items.map((i) => i.pid)))
+      toast(`探测到 ${s.total} 个残留进程（探针 ${s.probe} · 孤儿 ${s.orphan}）`, s.total === 0)
+    } catch (e) {
+      console.error('探测残留进程失败', e)
+      toast('探测失败', false)
+    } finally {
+      setOrphanBusy(false)
+    }
+  }
+
+  const toggleAll = () => {
+    setSelected((prev) => (prev.size === orphans.length ? new Set() : new Set(orphans.map((i) => i.pid))))
+  }
+
+  const toggleOne = (pid: number) => {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(pid)) next.delete(pid)
+      else next.add(pid)
+      return next
+    })
+  }
+
+  const doKillOrphans = async () => {
+    const pids = [...selected]
+    if (pids.length === 0) {
+      toast('未选中任何进程', false)
+      return
+    }
+    if (!window.confirm(`确定清除选中的 ${pids.length} 个残留进程？\n运行中的实例与网关不受影响。`)) return
+    setKillBusy(true)
+    try {
+      const r = await api.orphanKill(pids)
+      const errCount = Object.keys(r.errors).length
+      toast(`已清除 ${r.killed.length} 个残留进程${errCount ? `，失败 ${errCount}` : ''}`, errCount === 0)
+      await doScanOrphans() // 清除后自动重新探测
+    } catch (e) {
+      console.error('清除残留进程失败', e)
+      toast('清除失败', false)
+    } finally {
+      setKillBusy(false)
     }
   }
 
@@ -655,6 +711,88 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
           <span className="text-sm text-zinc-700">开机时自动启动管理器</span>
         </div>
         <p className="text-zinc-500 text-xs">Windows 注册表</p>
+      </div>
+
+      {/* 残留进程清理（孤儿实例 / 探针残留） */}
+      <div className="bg-white rounded-2xl border p-5 space-y-4">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-medium text-zinc-900">残留进程清理</h2>
+            <p className="text-zinc-500 text-xs">
+              探测「占着进程但未使用」的节点/实例/探针残留（扫描残留、已停止实例的孤儿进程），勾选后一键清除；运行中的实例与网关自动跳过。
+            </p>
+          </div>
+          <button
+            onClick={() => void doScanOrphans()}
+            disabled={orphanBusy}
+            className="flex items-center gap-1.5 bg-zinc-900 text-white rounded-lg px-4 py-2 hover:bg-zinc-700 disabled:opacity-60 disabled:cursor-not-allowed whitespace-nowrap"
+          >
+            {orphanBusy ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
+            {orphanBusy ? '探测中…' : '探测残留'}
+          </button>
+        </div>
+
+        {orphans.length > 0 && (
+          <>
+            <div className="rounded-lg border border-zinc-200 overflow-hidden">
+              <table className="w-full text-[13px]">
+                <thead>
+                  <tr className="text-left text-zinc-400 bg-zinc-50 border-b border-zinc-100">
+                    <th className="py-2 pl-3 w-8">
+                      <input
+                        type="checkbox"
+                        checked={selected.size === orphans.length && orphans.length > 0}
+                        onChange={toggleAll}
+                        title="全选/取消"
+                      />
+                    </th>
+                    <th className="py-2 pl-2">进程</th>
+                    <th className="py-2 pl-2">PID</th>
+                    <th className="py-2 pl-2">类型</th>
+                    <th className="py-2 pl-2 pr-3">说明</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {orphans.map((o) => (
+                    <tr key={o.pid} className="border-b border-zinc-50 hover:bg-zinc-50/60">
+                      <td className="py-2 pl-3">
+                        <input type="checkbox" checked={selected.has(o.pid)} onChange={() => toggleOne(o.pid)} />
+                      </td>
+                      <td className="py-2 pl-2 text-zinc-700 font-mono">{o.name}</td>
+                      <td className="py-2 pl-2 text-zinc-500">{o.pid}</td>
+                      <td className="py-2 pl-2">
+                        <span
+                          className={clsx(
+                            'inline-block px-2 py-0.5 rounded-full text-[11px] font-medium',
+                            o.category === 'probe' ? 'bg-orange-50 text-orange-600' : 'bg-amber-50 text-amber-700',
+                          )}
+                        >
+                          {o.category === 'probe' ? '探针残留' : '实例残留'}
+                        </span>
+                        {o.instance && <span className="ml-1.5 text-[12px] text-zinc-500">{o.instance}</span>}
+                        {o.port! > 0 && <span className="ml-1.5 text-[12px] text-zinc-400">端口 {o.port}</span>}
+                      </td>
+                      <td className="py-2 pl-2 pr-3 text-zinc-500">{o.detail}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex items-center justify-end gap-3">
+              <span className="text-[12px] text-zinc-400">
+                已选 {selected.size} / {orphans.length}
+              </span>
+              <button
+                onClick={() => void doKillOrphans()}
+                disabled={killBusy || selected.size === 0}
+                className="flex items-center gap-1.5 bg-red-600 text-white rounded-lg px-4 py-2 text-sm hover:bg-red-700 disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {killBusy ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                {killBusy ? '清除中…' : '一键清除'}
+              </button>
+            </div>
+          </>
+        )}
       </div>
 
       {/* 清除数据 */}

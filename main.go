@@ -242,6 +242,9 @@ func registerHTTPRoutes(mux *http.ServeMux, managerInst *manager.Manager) {
 	// 健康巡检（main 分支功能迁移 M2）。
 	mux.HandleFunc("/api/admin/health/check", loggingMiddleware(requireAuth(managerInst.HealthCheckHandler())))
 	mux.HandleFunc("/api/admin/health/summary", loggingMiddleware(requireAuth(managerInst.HealthSummaryHandler())))
+	// 残留进程：探测 + 一键清除（孤儿实例 / 探针残留）。
+	mux.HandleFunc("/api/admin/processes/orphans", loggingMiddleware(requireAuth(managerInst.OrphanScanHandler())))
+	mux.HandleFunc("/api/admin/processes/orphans/kill", loggingMiddleware(requireAuth(managerInst.OrphanKillHandler())))
 	// P1: 实例池链路质量（质量汇总视图 + 手动触发一轮探活）。
 	mux.HandleFunc("/api/admin/pool/quality", loggingMiddleware(requireAuth(managerInst.PoolQualityHandler())))
 	mux.HandleFunc("/api/admin/pool/quality/probe", loggingMiddleware(requireAuth(managerInst.PoolProbeTriggerHandler())))

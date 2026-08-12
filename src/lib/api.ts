@@ -212,6 +212,30 @@ export type PoolQualitySummary = {
   records: PoolQualityRecord[]
 }
 
+// ─── 残留进程探测与清除（孤儿实例 / 探针残留） ─────────────────────────────────────────────
+
+export type OrphanProcess = {
+  pid: number
+  name: string
+  /** probe = 探针扫描残留；orphan = 已停止实例残留 */
+  category: 'probe' | 'orphan'
+  instance?: string
+  port?: number
+  detail: string
+}
+
+export type OrphanScan = {
+  total: number
+  probe: number
+  orphan: number
+  items: OrphanProcess[]
+}
+
+export type OrphanKillResult = {
+  killed: number[]
+  errors: Record<string, string>
+}
+
 // ─── Token 统计（按实例） ─────────────────────────────────────────────
 
 export type ModelStat = {
@@ -461,6 +485,10 @@ export const api = {
   // 实例池链路质量（性能模式 P1）：汇总视图 + 手动触发一轮探活
   poolQuality: () => req<PoolQualitySummary>('GET', '/pool/quality'),
   poolQualityProbe: () => req<PoolQualitySummary>('POST', '/pool/quality/probe'),
+
+  // 残留进程：探测占着进程但未使用的节点/实例/探针 + 按 PID 一键清除
+  orphanScan: () => req<OrphanScan>('GET', '/processes/orphans'),
+  orphanKill: (pids: number[]) => req<OrphanKillResult>('POST', '/processes/orphans/kill', { pids }),
 
   // 清除数据（1=运行数据, 2=+实例记录, 3=全部重置）
   dataClean: (level: 1 | 2 | 3) => req<void>('POST', '/data/clean', { level }),
