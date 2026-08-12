@@ -10,10 +10,12 @@ services:
       OPCODE2API_GATEWAY_PORT: "18080"
       OPCODE2API_INSTANCE_BASE_PORT: "48100"
     ports:
-      - "40000:40000" # 管理面板（浏览器访问）
+      - "44000:40000" # 管理面板（本地验证避开正式版 40000；服务器部署可按需改回）
       - "18080:18080" # 统一网关（客户端接入）
-    # 生产务必修改默认密码（123456）：
+    # 生产务必修改默认密码（123456），或保持无鉴权 + 前置反向代理：
     # command: ["-port", "40000", "-listen", "0.0.0.0", "-password", "换成你的密钥"]
+    # 默认无鉴权启动（-password ""，与桌面版一致；前端为无登录页的六页 UI，公网需反向代理保护）
+    command: ["-port", "40000", "-listen", "0.0.0.0", "-password", ""]
     volumes:
       - manager-data:/data
 

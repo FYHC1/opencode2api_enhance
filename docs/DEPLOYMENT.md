@@ -206,12 +206,14 @@ sudo systemctl status opencode2api
 无需桌面壳即可在服务器 / 内网使用（需在可执行文件旁放置 `sing-box.exe`）。
 
 ```bash
-./opencode2api -port 40000 -password "change-me" -config config.json
-# 浏览器访问 http://<host>:40000/（需登录）
+./opencode2api -port 40000 -password "" -listen 0.0.0.0
+# 浏览器访问 http://<host>:40000/（前端为无登录页六页 UI，默认无鉴权）
 ```
 
 - 默认监听 `:<port>`（全接口）；服务器部署建议显式 `-listen 0.0.0.0`，
   或收紧为 `-listen 127.0.0.1` 仅本机访问。
+- **鉴权说明**：前端尚未内置登录页（规划中）。默认以 `-password ""` 无鉴权启动（与桌面版一致）；
+  公网部署务必前置反向代理（nginx + TLS / Basic Auth）限制来源，或用反向代理层 Basic Auth 兜底鉴权。
 - 数据目录经 `OPCODE2API_DATA_DIR` 隔离（默认 `<UserConfigDir>/opencode2api-manager`）。
 
 > **安全**：`-password` 非空时 `/api/admin/*` 与前端均要求会话登录；即便如此，

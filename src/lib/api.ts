@@ -396,6 +396,10 @@ async function req<T>(method: string, path: string, body?: unknown, qs?: Record<
   }
   const ct = res.headers.get('content-type') ?? ''
   if (ct.includes('json')) return (await res.json()) as T
+  if (ct.includes('text/html') || res.redirected) {
+    // 后端返回登录页/重定向（开启鉴权但前端无登录页）或错误页：不把 HTML 当数据。
+    throw new Error('需要登录或会话已过期，请刷新页面重试')
+  }
   return (await res.text()) as unknown as T
 }
 
