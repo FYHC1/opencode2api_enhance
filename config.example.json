@@ -32,5 +32,8 @@
     "medium": "medium",
     "minimal": "low"
   },
-  "force_disable_thinking": false
+  "force_disable_thinking": false,
+  "pool_performance_mode": true,
+  "pool_breaker_threshold": 3,
+  "pool_halfopen_interval_sec": 60
 }
