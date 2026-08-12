@@ -36,6 +36,15 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
   // 健康巡检（main 功能 M2）
   const [healthInterval, setHealthInterval] = useState(0)
   const [healthThreshold, setHealthThreshold] = useState(0)
+  // 实例池性能模式（P1/P2）：探活 + 质量加权路由 + 熔断
+  const [poolForm, setPoolForm] = useState({
+    pool_probe_interval_sec: 45,
+    pool_quality_window_min: 10,
+    pool_breaker_threshold: 3,
+    pool_halfopen_interval_sec: 60,
+  })
+  const [poolProbeEnabled, setPoolProbeEnabled] = useState(true)
+  const [perfMode, setPerfMode] = useState(true)
 
 
   useEffect(() => {
@@ -64,6 +73,14 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
         setSubscribeInterval(cfg.subscribe_interval_min)
         setHealthInterval(cfg.health_check_interval_sec)
         setHealthThreshold(cfg.health_restart_threshold)
+        setPoolForm({
+          pool_probe_interval_sec: cfg.pool_probe_interval_sec,
+          pool_quality_window_min: cfg.pool_quality_window_min,
+          pool_breaker_threshold: cfg.pool_breaker_threshold,
+          pool_halfopen_interval_sec: cfg.pool_halfopen_interval_sec,
+        })
+        setPoolProbeEnabled(cfg.pool_probe_enabled)
+        setPerfMode(cfg.pool_performance_mode)
       } catch (e) {
         console.error('加载设置失败', e)
         toast('加载设置失败', false)
@@ -200,6 +217,28 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
       toast('健康巡检配置已保存', true)
     } catch (e) {
       console.error('保存健康巡检失败', e)
+      toast('保存失败', false)
+    }
+  }
+
+  // 实例池性能模式（P1/P2）：探活间隔/窗口 + 熔断阈值/半开 + 开关
+  const handleSavePool = async () => {
+    const f = poolForm
+    if (f.pool_probe_interval_sec < 0 || f.pool_quality_window_min < 1 ||
+        f.pool_breaker_threshold < 1 || f.pool_halfopen_interval_sec < 1) {
+      toast('性能模式参数不合法：间隔需 ≥0，窗口/熔断/半开需 ≥1', false)
+      return
+    }
+    try {
+      await api.configSet('pool_probe_interval_sec', String(f.pool_probe_interval_sec))
+      await api.configSet('pool_quality_window_min', String(f.pool_quality_window_min))
+      await api.configSet('pool_breaker_threshold', String(f.pool_breaker_threshold))
+      await api.configSet('pool_halfopen_interval_sec', String(f.pool_halfopen_interval_sec))
+      await api.configSet('pool_probe_enabled', String(poolProbeEnabled))
+      await api.configSet('pool_performance_mode', String(perfMode))
+      toast('性能模式配置已保存（热生效）', true)
+    } catch (e) {
+      console.error('保存性能模式配置失败', e)
       toast('保存失败', false)
     }
   }
@@ -506,6 +545,95 @@ export default function SettingsPage({ toast }: { toast: (msg: string, ok?: bool
         </div>
 
         <button onClick={handleSaveHealth} className="bg-zinc-900 text-white rounded-lg px-4 py-2 hover:bg-zinc-700">
+          保存
+        </button>
+      </div>
+
+      {/* 实例池性能模式（P1/P2） */}
+      <div className="bg-white rounded-2xl border p-5 space-y-4">
+        <h2 className="text-lg font-medium text-zinc-900">实例池性能模式</h2>
+        <p className="text-zinc-500 text-xs">
+          链路级主动探活（经实例出口发真实请求）+ 质量加权路由：坏节点自动降权/剔除，熔断到期自动回归，全程无感。
+        </p>
+
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-zinc-700">探活间隔（秒，0 = 不自动探活）</label>
+          <input
+            type="number"
+            min={0}
+            value={poolForm.pool_probe_interval_sec}
+            onChange={(e) => setPoolForm({ ...poolForm, pool_probe_interval_sec: Number(e.target.value) })}
+            className="w-28 px-3 py-2 border rounded-lg"
+          />
+          <p className="text-zinc-500 text-xs">后台按此间隔探测全部运行实例的链路质量。默认 45</p>
+        </div>
+
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-zinc-700">质量窗口（分钟）</label>
+          <input
+            type="number"
+            min={1}
+            value={poolForm.pool_quality_window_min}
+            onChange={(e) => setPoolForm({ ...poolForm, pool_quality_window_min: Number(e.target.value) })}
+            className="w-28 px-3 py-2 border rounded-lg"
+          />
+          <p className="text-zinc-500 text-xs">质量分统计最近 N 分钟内的探活样本。默认 10</p>
+        </div>
+
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-zinc-700">熔断阈值（连续失败次数）</label>
+          <input
+            type="number"
+            min={1}
+            value={poolForm.pool_breaker_threshold}
+            onChange={(e) => setPoolForm({ ...poolForm, pool_breaker_threshold: Number(e.target.value) })}
+            className="w-28 px-3 py-2 border rounded-lg"
+          />
+          <p className="text-zinc-500 text-xs">连续失败达阈值后节点进入熔断，路由不再选中。默认 3</p>
+        </div>
+
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-zinc-700">半开间隔（秒）</label>
+          <input
+            type="number"
+            min={1}
+            value={poolForm.pool_halfopen_interval_sec}
+            onChange={(e) => setPoolForm({ ...poolForm, pool_halfopen_interval_sec: Number(e.target.value) })}
+            className="w-28 px-3 py-2 border rounded-lg"
+          />
+          <p className="text-zinc-500 text-xs">熔断到期后放行 1 个探测请求，成功即自动回归池子。默认 60</p>
+        </div>
+
+        {/* 探活启用开关 */}
+        <div className="flex items-center space-x-3">
+          <label className="relative inline-flex items-center cursor-pointer">
+            <input
+              type="checkbox"
+              checked={poolProbeEnabled}
+              onChange={(e) => setPoolProbeEnabled(e.target.checked)}
+              className="sr-only peer"
+            />
+            <div className="w-11 h-6 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-zinc-900"></div>
+          </label>
+          <span className="text-sm text-zinc-700">链路主动探活</span>
+        </div>
+
+        {/* 性能模式开关 */}
+        <div className="flex items-center space-x-3">
+          <label className="relative inline-flex items-center cursor-pointer">
+            <input
+              type="checkbox"
+              checked={perfMode}
+              onChange={(e) => setPerfMode(e.target.checked)}
+              className="sr-only peer"
+            />
+            <div className="w-11 h-6 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-zinc-900"></div>
+          </label>
+          <span className="text-sm text-zinc-700">性能模式（质量加权路由 + 熔断自动恢复）</span>
+        </div>
+        <p className="text-zinc-500 text-xs">关闭后路由行为与基线一致（纯游标 + 冷却），探活记录保留</p>
+
+        <button onClick={handleSavePool} className="bg-zinc-900 text-white rounded-lg px-4 py-2 hover:bg-zinc-700">
           保存
         </button>
       </div>

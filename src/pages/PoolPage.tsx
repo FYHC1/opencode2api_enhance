@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import clsx from 'clsx'
-import { Copy, Loader2, Power, RefreshCw, ShieldCheck, Network, Search, Play, Square, TestTube2, Trash2, KeyRound, Pencil, Check, X } from 'lucide-react'
-import { api, type GatewayStatus, type Instance, type TestResult } from '../lib/api'
+import { Copy, Loader2, Power, RefreshCw, ShieldCheck, Network, Search, Play, Square, TestTube2, Trash2, KeyRound, Pencil, Check, X, Activity } from 'lucide-react'
+import { api, type GatewayStatus, type Instance, type TestResult, type PoolQualitySummary, type PoolQualityRecord, type PoolQualityLevel } from '../lib/api'
 
 function statusBadge(st: Instance['status']): [string, string] {
   if (st === 'Running') return ['bg-green-50 text-green-700', '健康']
@@ -20,6 +20,11 @@ export default function PoolPage({
 }) {
   const [gw, setGw] = useState<GatewayStatus | null>(null)
   const [instances, setInstances] = useState<Instance[]>([])
+  // 链路质量（P1 探活评分，按实例名匹配）
+  const [quality, setQuality] = useState<PoolQualitySummary | null>(null)
+  const [qualityBusy, setQualityBusy] = useState(false)
+  // 性能模式开关（P2 质量加权路由 + 熔断）
+  const [perfMode, setPerfMode] = useState<boolean | null>(null)
   // 测试结果（行内徽章正反馈）：name → TestResult
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({})
   const [stopping, setStopping] = useState(false)
@@ -53,14 +58,26 @@ export default function PoolPage({
       )
     })
 
+  const qualityByName = new Map<string, PoolQualityRecord>()
+  if (quality) for (const r of quality.records) qualityByName.set(r.name, r)
+
   const load = useCallback(async () => {
     try {
-      const [g, ins] = await Promise.all([api.gatewayStatus(), api.listInstances()])
+      const [g, ins, q] = await Promise.all([api.gatewayStatus(), api.listInstances(), api.poolQuality()])
       setGw(g)
       setInstances(ins)
+      setQuality(q)
     } catch (e) {
       /* 轮询静默失败，保留上次状态 */
     }
+  }, [])
+
+  // 性能模式开关初始值（P2）
+  useEffect(() => {
+    api
+      .configGet()
+      .then((c) => setPerfMode(c.pool_performance_mode))
+      .catch(() => {})
   }, [])
 
   // 首次加载 + 轻量轮询（网关状态 / 实例健康会变化）
@@ -122,6 +139,32 @@ export default function PoolPage({
       toast(String(e), false)
     } finally {
       setRouteBusy(false)
+    }
+  }
+
+  // 立即触发一轮链路探活（P1）
+  const doProbe = async () => {
+    setQualityBusy(true)
+    try {
+      const q = await api.poolQualityProbe()
+      setQuality(q)
+      toast(`链路探活完成：healthy ${q.healthy} · degraded ${q.degraded} · flaky ${q.flaky} · down ${q.down}`, q.down === 0)
+    } catch (e) {
+      toast(String(e), false)
+    } finally {
+      setQualityBusy(false)
+    }
+  }
+
+  // 性能模式开关（P2）：关闭时路由行为与基线一致
+  const doTogglePerf = async () => {
+    const next = !(perfMode ?? true)
+    try {
+      await api.configSet('pool_performance_mode', String(next))
+      setPerfMode(next)
+      toast(next ? '性能模式已开启：质量加权路由 + 熔断自动恢复' : '性能模式已关闭：回到基线路由行为', true)
+    } catch (e) {
+      toast(String(e), false)
     }
   }
 
@@ -394,25 +437,51 @@ export default function PoolPage({
         <div>
           <h3 className="text-[14px] font-semibold text-zinc-900 mb-0.5">路由模式</h3>
           <p className="text-[12px] text-zinc-400">
-            smart（默认）：故障转移+健康计数+超时切换；failover：失败才切换；round_robin：轮询分发。
+            smart（默认）：{perfMode ? '质量加权 + ' : ''}故障转移+健康计数+超时切换；failover：失败才切换；round_robin：轮询分发。
+            {perfMode ? ' 性能模式下坏节点按质量分自动降权/剔除，熔断到期自动回归。' : ''}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          {(['smart', 'failover', 'round_robin'] as const).map((m) => (
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2" title={perfMode ? '开启：质量加权路由 + 熔断/半开自动恢复' : '关闭：路由行为与基线一致（纯游标+冷却）'}>
             <button
-              key={m}
-              onClick={() => void doSetRouteMode(m)}
-              disabled={!running || routeBusy}
+              onClick={() => void doTogglePerf()}
+              disabled={perfMode === null}
               className={clsx(
-                'px-4 py-1.5 rounded-lg text-[13px] border transition-colors disabled:cursor-not-allowed disabled:opacity-50',
-                gw?.route_mode === m
-                  ? 'bg-zinc-900 text-white border-zinc-900'
-                  : 'text-zinc-600 bg-white border-zinc-200 hover:bg-zinc-50',
+                'relative inline-flex items-center h-6 w-11 rounded-full transition-colors disabled:opacity-50',
+                perfMode ? 'bg-teal-600' : 'bg-zinc-300',
               )}
+              aria-label="性能模式开关"
             >
-              {m === 'smart' ? 'smart（默认）' : m}
+              <span className={clsx('inline-block w-4 h-4 rounded-full bg-white shadow transition-transform', perfMode ? 'translate-x-6' : 'translate-x-1')} />
             </button>
-          ))}
+            <span className="text-[12px] text-zinc-600 whitespace-nowrap">性能模式</span>
+          </div>
+          <span className="w-px h-6 bg-zinc-200" />
+          <button
+            onClick={() => void doProbe()}
+            disabled={qualityBusy}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-teal-700 bg-teal-50 border border-teal-100 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {qualityBusy ? <Loader2 size={14} className="animate-spin" /> : <Activity size={14} />}
+            {qualityBusy ? '探活中…' : '立即探活'}
+          </button>
+          <div className="flex items-center gap-2">
+            {(['smart', 'failover', 'round_robin'] as const).map((m) => (
+              <button
+                key={m}
+                onClick={() => void doSetRouteMode(m)}
+                disabled={!running || routeBusy}
+                className={clsx(
+                  'px-4 py-1.5 rounded-lg text-[13px] border transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+                  gw?.route_mode === m
+                    ? 'bg-zinc-900 text-white border-zinc-900'
+                    : 'text-zinc-600 bg-white border-zinc-200 hover:bg-zinc-50',
+                )}
+              >
+                {m === 'smart' ? 'smart（默认）' : m}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -482,6 +551,7 @@ export default function PoolPage({
                 <th className="py-3 pl-4">名称 / 节点 IP</th>
                 <th className="py-3 pl-2">端口</th>
                 <th className="py-3 pl-2">健康状态</th>
+                <th className="py-3 pl-2">链路质量</th>
                 <th className="py-3 pl-2 pr-4 text-right">操作</th>
               </tr>
             </thead>
@@ -514,6 +584,7 @@ export default function PoolPage({
                         {testBadge(testResults[i.name])}
                       </div>
                     </td>
+                    <td className="py-2.5 pl-2">{qualityBadge(qualityByName.get(i.name))}</td>
 <td className="py-2.5 pl-2 pr-4">
                       <div className="flex items-center justify-end gap-1.5">
                         {i.status === 'Running' ? (
@@ -612,6 +683,34 @@ export default function PoolPage({
         </div>
       )}
     </div>
+  )
+}
+
+/** 测试结果徽章：✓ 通过+延迟+详情 / ✗ 失败+原因（无结果返回 null 不占位） */
+/** 链路质量徽标（P1 探活评分）：质量分 + 等级 + 平均延迟（无记录显示"未探测"） */
+function qualityBadge(r?: PoolQualityRecord) {
+  const levelMap: Record<PoolQualityLevel, [string, string]> = {
+    healthy: ['bg-green-50 text-green-700', '健康'],
+    degraded: ['bg-amber-50 text-amber-700', '较慢'],
+    flaky: ['bg-orange-50 text-orange-600', '抖动'],
+    down: ['bg-red-50 text-red-600', '不可用'],
+  }
+  if (!r) {
+    return (
+      <span className="inline-block px-2 py-0.5 rounded-full text-[11px] font-medium bg-zinc-100 text-zinc-400 whitespace-nowrap">
+        未探测
+      </span>
+    )
+  }
+  const [cls, label] = levelMap[r.level] ?? levelMap.healthy
+  return (
+    <span
+      className={clsx('inline-block px-2 py-0.5 rounded-full text-[11px] font-medium whitespace-nowrap', cls)}
+      title={`成功率 ${(r.success_rate * 100).toFixed(0)}% · 平均延迟 ${r.avg_latency_ms}ms · 连续失败 ${r.consecutive_failures} 次`}
+    >
+      {r.score} 分 · {label}
+      {r.avg_latency_ms > 0 ? ` · ${r.avg_latency_ms}ms` : ''}
+    </span>
   )
 }
 

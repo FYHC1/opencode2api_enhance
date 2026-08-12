@@ -117,6 +117,15 @@ export type ConfigView = {
   health_restart_threshold: number
   has_gateway_key: boolean
   gateway_key: string
+  /** 实例池链路探活（P1） */
+  pool_probe_interval_sec: number
+  pool_probe_timeout_sec: number
+  pool_quality_window_min: number
+  pool_probe_enabled: boolean
+  /** 性能模式熔断/半开（P2） */
+  pool_breaker_threshold: number
+  pool_halfopen_interval_sec: number
+  pool_performance_mode: boolean
 }
 
 export type BinariesInfo = {
@@ -173,6 +182,34 @@ export type RestartPoolResult = {
   freed_ports: number[]
   gateway_running: boolean
   error: string | null
+}
+
+// ─── 实例池链路质量（性能模式 P1/P2） ─────────────────────────────────────────────
+
+export type PoolQualityLevel = 'healthy' | 'degraded' | 'flaky' | 'down'
+
+export type PoolQualityRecord = {
+  name: string
+  port: number
+  singbox_port: number
+  /** 质量分 0~100（未探测 = 100） */
+  score: number
+  level: PoolQualityLevel
+  success_rate: number
+  avg_latency_ms: number
+  consecutive_failures: number
+  last_probe_ts: number
+}
+
+export type PoolQualitySummary = {
+  total: number
+  probed: number
+  healthy: number
+  degraded: number
+  flaky: number
+  down: number
+  last_scan_ts: number
+  records: PoolQualityRecord[]
 }
 
 // ─── Token 统计（按实例） ─────────────────────────────────────────────
@@ -420,6 +457,10 @@ export const api = {
 
   // 一键重启实例池（全停→强制清端口→全启→网关同步）
   restartPool: () => req<RestartPoolResult>('POST', '/pool/restart'),
+
+  // 实例池链路质量（性能模式 P1）：汇总视图 + 手动触发一轮探活
+  poolQuality: () => req<PoolQualitySummary>('GET', '/pool/quality'),
+  poolQualityProbe: () => req<PoolQualitySummary>('POST', '/pool/quality/probe'),
 
   // 清除数据（1=运行数据, 2=+实例记录, 3=全部重置）
   dataClean: (level: 1 | 2 | 3) => req<void>('POST', '/data/clean', { level }),
