@@ -43,13 +43,13 @@ jobs:
           mkdir -p bin
           go build -trimpath -ldflags "-s -w" -o bin/opencode2api.exe .
 
-      - name: Download sing-box (1.13.15)
+      - name: Download sing-box (1.13.16)
         shell: powershell
         run: |
           New-Item -ItemType Directory -Force -Path bin | Out-Null
-          Invoke-WebRequest -Uri "https://github.com/SagerNet/sing-box/releases/download/v1.13.15/sing-box-1.13.15-windows-amd64.zip" -OutFile singbox.zip
+          Invoke-WebRequest -Uri "https://github.com/SagerNet/sing-box/releases/download/v1.13.16/sing-box-1.13.16-windows-amd64.zip" -OutFile singbox.zip
           Expand-Archive -Path singbox.zip -DestinationPath singbox-extracted -Force
-          Copy-Item -Path "singbox-extracted/sing-box-1.13.15-windows-amd64/sing-box.exe" -Destination "bin/sing-box.exe" -Force
+          Copy-Item -Path "singbox-extracted/sing-box-1.13.16-windows-amd64/sing-box.exe" -Destination "bin/sing-box.exe" -Force
 
       - name: Install frontend dependencies
         shell: bash

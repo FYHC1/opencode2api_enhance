@@ -78,8 +78,8 @@ bash scripts/make-portable.sh        # 组装 dist/opencode2api-manager-<ver>-po
 
 `bin/` 被 `.gitignore` 忽略，`opencode2api.exe` 与 `sing-box.exe` 均不入库，本地构建前需自行准备：
 
-- `opencode2api.exe`：由本仓库 Go 源码构建（`go build -trimpath -ldflags "-s -w" -o bin/opencode2api.exe .`）
-- `sing-box.exe`：从 [sing-box 官方 Release](https://github.com/SagerNet/sing-box/releases) 下载，当前与 CI 一致固定 v1.13.15
+- `opencode2api`（Windows 为 `.exe`）：由本仓库 Go 源码构建（`go build -trimpath -ldflags "-s -w" -o bin/opencode2api .`）
+- `sing-box`（Windows 为 `.exe`）：一键脚本 `./scripts/fetch-singbox.sh` 从 [sing-box 官方 Release](https://github.com/SagerNet/sing-box/releases) 下载（默认 v1.13.16，`SINGBOX_VERSION` 可覆盖），自动按宿主平台放到 `bin/`；CI 由 workflow 自动准备
 
 远程构建无需手动准备：GitHub Actions 会自动构建 Go 核心、下载 sing-box 并完成打包（见 `.github/workflows/build-release.yml`）。
 
