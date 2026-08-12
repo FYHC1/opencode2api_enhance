@@ -28,6 +28,8 @@ var (
 	poolHalfOpenIntervalSec = 60
 	// poolQualityPath 质量文件路径（-pool-quality 注入；空 = 无质量文件）。
 	poolQualityPath string
+	// poolRaceCopies 请求级竞速并行数（默认 2；1 = 退化为串行）。
+	poolRaceCopies = 2
 )
 
 // ---- 质量文件缓存（读 runtime/pool_quality.json，节流刷新） ----
@@ -306,4 +308,94 @@ func pickWeightedProxy(proxies []Socks5Proxy, start int) Socks5Proxy {
 	}
 	// 全池无可用候选：回退冷却最早结束的节点（与基线兜底一致）。
 	return fallback
+}
+
+// raceCandidates 请求级竞速候选：返回质量优先的至多 n 个可用代理
+// （跳过坏池/冷却中/熔断/down/flaky；healthy 优先、degraded 次之、分高在前）。
+// 无任何可用候选时回退一个"冷却最早结束"的节点；n<=1 或池空返回 nil（不竞速）。
+func raceCandidates(n int) []Socks5Proxy {
+	if n <= 1 || !poolPerfMode {
+		return nil
+	}
+	now := time.Now()
+	loadPoolQualityCache()
+
+	socks5Mu.RLock()
+	proxies := append([]Socks5Proxy(nil), socks5Proxies...)
+	socks5Mu.RUnlock()
+	if len(proxies) == 0 {
+		return nil
+	}
+
+	type cand struct {
+		proxy Socks5Proxy
+		score int
+		tier  int
+	}
+	var cands []cand
+	var fallback Socks5Proxy
+	var fallbackUntil time.Time
+
+	socks5HealthMu.Lock()
+	for _, proxy := range proxies {
+		state := socks5Health[proxy.Addr]
+		if state.badReason != "" {
+			continue
+		}
+		if breakerState(proxy.Addr) != "closed" {
+			continue // 熔断中不参与竞速（半开放行语义留给单发路径）
+		}
+		if !state.until.IsZero() && now.Before(state.until) {
+			if fallback.Addr == "" || state.until.Before(fallbackUntil) {
+				fallback = proxy
+				fallbackUntil = state.until
+			}
+			continue
+		}
+		q, known := poolQualityOf(proxy.Addr)
+		score, level := 100, "healthy"
+		if known {
+			score, level = q.Score, q.Level
+		}
+		if fb := poolFeedbackScore(proxy.Addr); fb >= 0 {
+			if known {
+				score = (score*7 + fb*3) / 10
+			} else {
+				score = fb
+			}
+		}
+		if score < 0 {
+			score = 0
+		}
+		if score > 100 {
+			score = 100
+		}
+		switch level {
+		case "down", "flaky":
+			continue
+		case "degraded":
+			cands = append(cands, cand{proxy: proxy, score: score, tier: 1})
+		default:
+			cands = append(cands, cand{proxy: proxy, score: score, tier: 2})
+		}
+	}
+	socks5HealthMu.Unlock()
+
+	if len(cands) == 0 {
+		if fallback.Addr != "" {
+			return []Socks5Proxy{fallback}
+		}
+		return nil
+	}
+	sort.SliceStable(cands, func(i, j int) bool {
+		if cands[i].tier != cands[j].tier {
+			return cands[i].tier > cands[j].tier
+		}
+		return cands[i].score > cands[j].score
+	})
+	out := make([]Socks5Proxy, 0, n)
+	for i := 0; i < len(cands) && len(out) < n; i++ {
+		out = append(out, cands[i].proxy)
+	}
+	return out
 }

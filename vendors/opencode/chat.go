@@ -12,6 +12,8 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/6Kmfi6HP/opencode2api/core/contract"
@@ -209,8 +211,22 @@ func (v *Vendor) call(ctx context.Context, msg *contract.Message, streaming bool
 			break
 		}
 		tr := v.transport()
-		client, proxyAddr := tr.Client(a.tier(), streaming)
-		resp, err := client.Do(up)
+		// P2b 请求级竞速：首轮并行扇出 N 个候选，首个 2xx（流式 = 首个 chunk 到达）胜出。
+		racer, hasRacer := tr.(contract.Racer)
+		var client *http.Client
+		var resp *http.Response
+		var proxyAddr string
+		if retryCount == 0 && hasRacer && v.raceCopies() > 1 {
+			resp, proxyAddr, err = v.raceDo(ctx, racer, up, streaming, v.raceCopies())
+			if err == nil && resp == nil {
+				// 竞速无候选：退化普通单发。
+				client, proxyAddr = tr.Client(a.tier(), streaming)
+				resp, err = client.Do(up)
+			}
+		} else {
+			client, proxyAddr = tr.Client(a.tier(), streaming)
+			resp, err = client.Do(up)
+		}
 		if err != nil {
 			tr.Mark(proxyAddr, 0, err)
 			lastErr = err
@@ -242,7 +258,9 @@ func (v *Vendor) call(ctx context.Context, msg *contract.Message, streaming bool
 		lastProxyAddr = proxyAddr
 		lastErr = fmt.Errorf("upstream error")
 		if v.isRetryable(resp.StatusCode) {
-			client.CloseIdleConnections()
+			if client != nil {
+				client.CloseIdleConnections()
+			}
 			if resp.StatusCode == http.StatusUnauthorized {
 				retry401Count++
 				if retry401Count >= max401Retries {
@@ -269,6 +287,123 @@ func (v *Vendor) call(ctx context.Context, msg *contract.Message, streaming bool
 		return nil, fmt.Errorf("all models failed")
 	}
 	return &callResult{body: lastBody, status: lastStatus, headers: lastHeader, nodeAddr: lastProxyAddr}, lastErr
+}
+
+// raceCopies 返回竞速并行数（配置 >0 生效，否则 1 = 关闭竞速）。
+func (v *Vendor) raceCopies() int {
+	if v.cfg.RaceCopies > 0 {
+		return v.cfg.RaceCopies
+	}
+	return 1
+}
+
+// prefixReadCloser 在流式响应前拼回竞速阶段已读出的首字节。
+type prefixReadCloser struct {
+	io.Reader
+	io.Closer
+}
+
+// raceOutcome 是竞速中单个候选的结果。
+type raceOutcome struct {
+	resp *http.Response
+	addr string
+	err  error
+}
+
+// raceDo 请求级竞速：并行扇出至多 copies 个候选出口，首个 2xx（流式 = 首个 chunk 到达）胜出，其余取消。
+// 返回（nil, "", nil）表示无候选——调用方应退化普通单发。
+func (v *Vendor) raceDo(ctx context.Context, racer contract.Racer, req *http.Request, streaming bool, copies int) (*http.Response, string, error) {
+	clients, addrs := racer.CandidateClients(contract.TierFree, streaming, copies)
+	if len(clients) == 0 {
+		return nil, "", nil
+	}
+	if len(clients) == 1 {
+		resp, err := clients[0].Do(req)
+		return resp, addrs[0], err
+	}
+	// 请求体需要多副本（每个候选一份）。
+	var bodyBytes []byte
+	if req.Body != nil {
+		bodyBytes, _ = io.ReadAll(req.Body)
+		req.Body.Close()
+	}
+	rctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	results := make(chan raceOutcome, len(clients))
+	var wg sync.WaitGroup
+	for i := range clients {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			r := req.Clone(rctx)
+			if bodyBytes != nil {
+				r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+			}
+			resp, err := clients[i].Do(r)
+			if err != nil {
+				results <- raceOutcome{err: err, addr: addrs[i]}
+				return
+			}
+			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+				results <- raceOutcome{resp: resp, addr: addrs[i]}
+				return
+			}
+			if streaming {
+				// 等首个 chunk：读 1 字节确认流已开始；读到即锁流。
+				buf := make([]byte, 1)
+				n, rerr := resp.Body.Read(buf)
+				if rerr != nil && n == 0 {
+					resp.Body.Close()
+					results <- raceOutcome{err: rerr, addr: addrs[i]}
+					return
+				}
+				resp.Body = &prefixReadCloser{
+					Reader: io.MultiReader(bytes.NewReader(buf[:n]), resp.Body),
+					Closer: resp.Body,
+				}
+			}
+			results <- raceOutcome{resp: resp, addr: addrs[i]}
+		}(i)
+	}
+
+	var firstFail *raceOutcome
+	var done int32
+	for {
+		o := <-results
+		if o.err == nil && o.resp != nil && o.resp.StatusCode >= 200 && o.resp.StatusCode < 300 {
+			cancel() // 终止其余候选
+			go raceDrain(&wg, results)
+			return o.resp, o.addr, nil
+		}
+		f := o
+		if firstFail == nil {
+			firstFail = &f
+		}
+		if atomic.AddInt32(&done, 1) == int32(len(clients)) {
+			cancel()
+			go raceDrain(&wg, results)
+			if firstFail.err != nil {
+				return nil, "", firstFail.err
+			}
+			return firstFail.resp, firstFail.addr, nil
+		}
+	}
+}
+
+// raceDrain 竞速收尾：等所有候选 goroutine 退出后关闭落选响应的 Body（防连接泄漏）。
+func raceDrain(wg *sync.WaitGroup, results chan raceOutcome) {
+	wg.Wait()
+	for {
+		select {
+		case o := <-results:
+			if o.resp != nil {
+				o.resp.Body.Close()
+			}
+		default:
+			return
+		}
+	}
 }
 
 // Chat 实现 contract.Vendor（非流式）。

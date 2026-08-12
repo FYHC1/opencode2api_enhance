@@ -51,6 +51,8 @@ type Config struct {
 	PoolBreakerThreshold    int   `json:"pool_breaker_threshold,omitempty"`
 	PoolHalfOpenIntervalSec int   `json:"pool_halfopen_interval_sec,omitempty"`
 	PoolPerformanceMode     *bool `json:"pool_performance_mode,omitempty"`
+	// 请求级竞速并行数（P2b）：一次请求并行扇出 N 个候选出口，首个成功者胜（<=0 用默认 2；1 = 关闭）。
+	PoolRaceCopies int `json:"pool_race_copies,omitempty"`
 
 	// GatewayKey 统一网关鉴权密钥（空 = 回退默认 sk-unified-local；main 功能 M6）。
 	GatewayKey string `json:"gateway_key,omitempty"`
@@ -153,6 +155,8 @@ func (m *Manager) ConfigGet(key string) (string, error) {
 		return strconv.Itoa(cfg.PoolHalfOpenIntervalSec), nil
 	case "pool_performance_mode":
 		return strconv.FormatBool(poolPerfModeEnabled(cfg)), nil
+	case "pool_race_copies":
+		return strconv.Itoa(cfg.PoolRaceCopies), nil
 	case "gateway_key":
 		// 密钥不回显：设置过返回掩码，未设置返回空（main 语义一致）。
 		if cfg.GatewayKey == "" {
@@ -327,6 +331,15 @@ func (m *Manager) ConfigSet(key, value string) error {
 			return fmt.Errorf("invalid boolean for pool_performance_mode: %s", value)
 		}
 		cfg.PoolPerformanceMode = &b
+	case "pool_race_copies":
+		v, err := parseInt()
+		if err != nil {
+			return err
+		}
+		if v < 0 {
+			return errors.New("pool_race_copies 需 >= 0")
+		}
+		cfg.PoolRaceCopies = int(v)
 	case "gateway_key":
 		// 空串 = 重置为默认（gatewayKey() 回退 sk-unified-local）；非空需至少 8 字符（main 校验一致）。
 		if value == "" {
@@ -392,6 +405,7 @@ type ConfigView struct {
 	PoolBreakerThreshold    int    `json:"pool_breaker_threshold"`
 	PoolHalfOpenIntervalSec int    `json:"pool_halfopen_interval_sec"`
 	PoolPerformanceMode     bool   `json:"pool_performance_mode"`
+	PoolRaceCopies          int    `json:"pool_race_copies"`
 	HasGatewayKey           bool   `json:"has_gateway_key"`
 	GatewayKey              string `json:"gateway_key"`
 }
@@ -432,6 +446,7 @@ func (m *Manager) ConfigViewOf() ConfigView {
 		PoolBreakerThreshold:    poolBreakerThresholdOf(cfg),
 		PoolHalfOpenIntervalSec: poolHalfOpenIntervalOf(cfg),
 		PoolPerformanceMode:     poolPerfModeEnabled(cfg),
+		PoolRaceCopies:          poolRaceCopiesOf(cfg),
 		HasGatewayKey:           cfg.GatewayKey != "",
 		GatewayKey:              maskSecret(cfg.GatewayKey),
 	}

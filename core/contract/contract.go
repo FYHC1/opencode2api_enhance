@@ -76,7 +76,7 @@ type Message struct {
 	Stream   bool           // 是否流式 SSE
 	Options  map[string]any // 通用透传选项：temperature / max_tokens / top_p / tools / thinking / extra_body 等（所有厂商共享语义）
 	Extra    map[string]any // 厂商私有区：core 只负责搬运，不解释语义。厂商自定义参数一律放这里，
-	                        // 保持 Options 的通用语义不被厂商键污染（新厂商接入时优先使用本区）。
+	// 保持 Options 的通用语义不被厂商键污染（新厂商接入时优先使用本区）。
 }
 
 // Reply 是厂商返回给 core 的统一结果。
@@ -114,6 +114,15 @@ type Transport interface {
 
 	// Mark 记录一次请求结果（成功/失败），供代理池健康/冷却维护。
 	Mark(proxyAddr string, status int, reqErr error)
+}
+
+// Racer 可选的竞速传输（性能模式 P2b——请求级竞速）：
+// 一次请求并行扇出多个候选出口，第一个成功（流式 = 首个 chunk）胜出，其余取消。
+// Transport 实现方可选择性实现；厂商端做类型断言，未实现则退化为串行 Client。
+type Racer interface {
+	// CandidateClients 返回质量优先的至多 n 个候选（client + 出口节点地址）。
+	// 直连/无候选时返回空（调用方回退普通 Client）。
+	CandidateClients(tier Tier, streaming bool, n int) ([]*http.Client, []string)
 }
 
 // DirectTransport 是最简传输实现：直连（http.DefaultClient）、无代理、无健康维护。

@@ -130,6 +130,14 @@ func poolPerfModeEnabled(cfg Config) bool {
 	return true
 }
 
+// poolRaceCopiesOf 请求级竞速并行数生效值（<=0 用默认 2）。
+func poolRaceCopiesOf(cfg Config) int {
+	if cfg.PoolRaceCopies > 0 {
+		return cfg.PoolRaceCopies
+	}
+	return 2
+}
+
 // probeTargetURL 探测目标：优先配置 base_url（补 /v1/models），否则默认厂商端点。
 func probeTargetURL(cfg Config) string {
 	base := strings.TrimSpace(cfg.BaseURL)

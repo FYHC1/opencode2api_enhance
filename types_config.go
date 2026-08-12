@@ -33,6 +33,8 @@ type AppConfig struct {
 	PoolBreakerThreshold int `json:"pool_breaker_threshold,omitempty"`
 	// 半开间隔：熔断节点按该周期（秒）放行 1 个探测请求，成功即恢复（默认 60）。
 	PoolHalfOpenIntervalSec int `json:"pool_halfopen_interval_sec,omitempty"`
+	// 请求级竞速并行数（P2b）：一次请求并行扇出 N 个候选出口，首个成功者胜（默认 2；1 = 关闭竞速）。
+	PoolRaceCopies int `json:"pool_race_copies,omitempty"`
 	// ShowNodePrefix 是否在对话流首段展示「🤖 节点 · 模型」前缀（默认关闭）
 	ShowNodePrefix *bool `json:"show_node_prefix,omitempty"`
 

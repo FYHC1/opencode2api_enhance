@@ -65,6 +65,9 @@ func applyConfig(cfg AppConfig) {
 	if cfg.PoolHalfOpenIntervalSec > 0 {
 		poolHalfOpenIntervalSec = cfg.PoolHalfOpenIntervalSec
 	}
+	if cfg.PoolRaceCopies > 0 {
+		poolRaceCopies = cfg.PoolRaceCopies
+	}
 
 	socks5Mu.Lock()
 	proxiesChanged := false

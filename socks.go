@@ -336,8 +336,20 @@ func getHTTPClientWithProxy() (*http.Client, string) {
 		}
 	}
 
+	client := clientForProxy(proxy)
+
+	if !useRR {
+		socks5Client = client
+		socks5ClientAddr = activeSocks5
+	}
+	return client, proxy.Addr
+}
+
+// clientForProxy 为指定代理构造 HTTP 客户端（复用一个可用池参数）。
+// 竞速（raceCandidates）与单发路径共用，保证行为一致。
+func clientForProxy(proxy Socks5Proxy) *http.Client {
 	dial := socks5Dial(proxy)
-	client := &http.Client{
+	return &http.Client{
 		Timeout: 300 * time.Second,
 		Transport: &http.Transport{
 			DialContext:         dial,
@@ -346,12 +358,6 @@ func getHTTPClientWithProxy() (*http.Client, string) {
 			IdleConnTimeout:     90 * time.Second,
 		},
 	}
-
-	if !useRR {
-		socks5Client = client
-		socks5ClientAddr = activeSocks5
-	}
-	return client, proxy.Addr
 }
 
 func getHTTPClient() *http.Client {

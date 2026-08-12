@@ -51,6 +51,9 @@ type Config struct {
 	Transport contract.Transport
 	// AdminPassword 本地门禁密钥：客户端用它修复应视为 public（免费）而非透传付费 key。
 	AdminPassword string
+	// RaceCopies 请求级竞速并行数（P2b）：>1 且 Transport 支持 contract.Racer 时，
+	// 一次请求并行扇出该数量的候选出口，首个成功者胜（默认 1 = 关闭竞速）。
+	RaceCopies int
 }
 
 // Vendor 实现 contract.Vendor，代表 OpenCode 上游。

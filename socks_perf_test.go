@@ -295,3 +295,38 @@ func TestLoadPoolQualityCacheCorrupt(t *testing.T) {
 		t.Fatalf("corrupt file cache=%v, want nil", poolQualityCache)
 	}
 }
+
+// TestRaceCandidates 请求级竞速候选：质量优先排序、n 上限、n<=1 不竞速、down/flaky 剔除。
+func TestRaceCandidates(t *testing.T) {
+	resetPoolPerfState()
+	socks5Mu.Lock()
+	socks5Proxies = []Socks5Proxy{mkProxy(28101), mkProxy(28102), mkProxy(28103), mkProxy(28104)}
+	socks5Mu.Unlock()
+	poolQualityPath = writePoolQualityFile(t, map[string]struct {
+		Port  uint16
+		Score int
+		Level string
+	}{
+		"a": {28101, 95, "healthy"},
+		"b": {28102, 70, "degraded"},
+		"c": {28103, 55, "flaky"},
+		"d": {28104, 10, "down"},
+	})
+
+	// down/flaky 剔除，健康优先：expect [28101(95 healthy), 28102(70 degraded)]。
+	got := raceCandidates(2)
+	if len(got) != 2 ||
+		got[0].Addr != "127.0.0.1:28101" ||
+		got[1].Addr != "127.0.0.1:28102" {
+		t.Fatalf("raceCandidates(2)=%+v, want [28101 28102]", got)
+	}
+
+	// n 上限生效；n<=1 不竞速。
+	if len(raceCandidates(1)) != 0 {
+		t.Fatal("n<=1 should not race")
+	}
+	four := raceCandidates(4)
+	if len(four) != 2 {
+		t.Fatalf("raceCandidates(4)=%d, want 2 (flaky/down skipped)", len(four))
+	}
+}

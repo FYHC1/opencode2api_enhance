@@ -44,6 +44,35 @@ func (rootTransport) Mark(proxyAddr string, status int, reqErr error) {
 	markSocks5Result(proxyAddr, status, reqErr)
 }
 
+// CandidateClients 实现 contract.Racer：质量优先返回至多 n 个竞速候选。
+// 付费层直连无候选；竞速候选空时厂商回退普通 Client。
+func (rootTransport) CandidateClients(tier contract.Tier, streaming bool, n int) ([]*http.Client, []string) {
+	tt := TierFree
+	if tier == contract.TierPaid {
+		tt = TierPaid
+	}
+	if tt == TierPaid {
+		return nil, nil // 付费层直连，不参与代理竞速
+	}
+	proxies := raceCandidates(n)
+	if len(proxies) == 0 {
+		return nil, nil
+	}
+	clients := make([]*http.Client, 0, len(proxies))
+	addrs := make([]string, 0, len(proxies))
+	for _, p := range proxies {
+		c := clientForProxy(p)
+		if streaming {
+			sc := *c // 流式去掉总超时（避免长推理流被切断）
+			sc.Timeout = 0
+			c = &sc
+		}
+		clients = append(clients, c)
+		addrs = append(addrs, p.Addr)
+	}
+	return clients, addrs
+}
+
 // newAggregator 装配厂商注册表：默认自动注册全部已编译厂商（扩增即生效），
 // 配置 providers 可选覆盖（enabled=false 禁用 / id、name、params 覆盖）。
 //
@@ -99,7 +128,7 @@ func vendorParams(t string) map[string]any {
 	switch t {
 	case "opencode":
 		return map[string]any{
-			opencode.ParamTransport:      rootTransport{},
+			opencode.ParamTransport:     rootTransport{},
 			opencode.ParamAdminPassword: adminPassword,
 		}
 	case "windsurf":
