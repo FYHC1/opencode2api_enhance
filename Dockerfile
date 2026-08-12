@@ -26,7 +26,7 @@ ARG SINGBOX_VERSION=1.13.16
 RUN mkdir -p /out/bin && \
     go build -trimpath -ldflags "-s -w" -o /out/opencode2api . && \
     cp -r dist /out/dist && \
-    wget -qO- "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/sing-box-${SINGBOX_VERSION}-linux-amd64.tar.gz" \
+    wget -qO- --tries=5 --timeout=60 --waitretry=5 "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/sing-box-${SINGBOX_VERSION}-linux-amd64.tar.gz" \
       | tar xz -C /tmp && \
     find /tmp -name sing-box -type f -exec cp {} /out/bin/sing-box \;
 
@@ -35,12 +35,14 @@ FROM alpine:3.20
 RUN apk add --no-cache ca-certificates tzdata && \
     addgroup -S app && adduser -S -G app -h /app app
 WORKDIR /app
-COPY --from=build /out/opencode2api /app/opencode2api
+# 布局：管理二进制与 sing-box 出口子程序同放 /app/bin（关于页「二进制目录」可两者检出）；
+# 前端 dist 放 /app/dist（cwd=/app 可被 frontendDistDir 找到）。
+COPY --from=build /out/opencode2api /app/bin/opencode2api
 COPY --from=build /out/bin /app/bin
 COPY --from=build /out/dist /app/dist
 ENV OPCODE2API_DATA_DIR=/data
 EXPOSE 40000 18080
 VOLUME ["/data"]
 USER app
-ENTRYPOINT ["/app/opencode2api"]
+ENTRYPOINT ["/app/bin/opencode2api"]
 CMD ["-port", "40000", "-listen", "0.0.0.0"]

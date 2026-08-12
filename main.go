@@ -187,11 +187,8 @@ func registerHTTPRoutes(mux *http.ServeMux, managerInst *manager.Manager) {
 	mux.HandleFunc("/v1/models", loggingMiddleware(apiKeyAuthMiddleware(listModelsHandler)))
 	mux.HandleFunc("/login", loggingMiddleware(loginHandler))
 	mux.HandleFunc("/logout", loggingMiddleware(logoutHandler))
-	mux.HandleFunc("/api/config", loggingMiddleware(requireAuth(adminConfigHandler)))
-	mux.HandleFunc("/api/stats", loggingMiddleware(requireAuth(adminStatsHandler)))
+	// /api/reset-stats 保留：实例子进程/网关子进程的复位契约（stats.go ResetStats 对运行中实例 HTTP DELETE）。
 	mux.HandleFunc("/api/reset-stats", loggingMiddleware(apiKeyAuthMiddleware(resetStatsHandler)))
-	mux.HandleFunc("/api/node-status", loggingMiddleware(apiKeyAuthMiddleware(nodeStatusHandler)))
-	mux.HandleFunc("/api/reload", loggingMiddleware(requireAuth(reloadHandler)))
 	// P4: 管理域并入 core（/api/admin/*，鉴权与既有 /api/* 一致；由 core/manager 实现）
 	mux.HandleFunc("/api/admin/config", loggingMiddleware(requireAuth(managerInst.ConfigGetHandler())))
 	mux.HandleFunc("/api/admin/config/set", loggingMiddleware(requireAuth(managerInst.ConfigSetHandler())))
@@ -275,9 +272,10 @@ func registerHTTPRoutes(mux *http.ServeMux, managerInst *manager.Manager) {
 		})
 		slog.Info("frontend dist served", "dir", distDir)
 	} else {
+		// 旧版内嵌管理面板已移除：无 dist/ 时不提供页面，仅提示。
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/" {
-				requireAuth(adminPageHandler)(w, r)
+				http.Error(w, "前端资源缺失：请确保 dist/ 存在（Web/Docker 需打包前端）", http.StatusNotFound)
 				return
 			}
 			http.NotFound(w, r)
