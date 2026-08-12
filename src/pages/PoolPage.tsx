@@ -278,10 +278,16 @@ export default function PoolPage({
         ok = r.success_count
         fail = r.error_count
       } else {
-        // 测试：前端并行探测，结果逐行回填徽章
-        const results = await Promise.allSettled(names.map((n) => api.testInstance(n)))
+        // 测试：仅测试运行中的池成员；未启动计入「跳过」，避免误报失败。
+        const runningNames = members.filter((i) => i.status === 'Running').map((i) => i.name)
+        const skipped = names.length - runningNames.length
+        if (runningNames.length === 0) {
+          toast(`池成员均未启动（${names.length} 个），无需测试`, false)
+          return
+        }
+        const results = await Promise.allSettled(runningNames.map((n) => api.testInstance(n)))
         const updated: Record<string, TestResult> = {}
-        names.forEach((n, i) => {
+        runningNames.forEach((n, i) => {
           const r = results[i]!
           if (r.status === 'fulfilled' && r.value.ok) {
             ok++
@@ -300,9 +306,10 @@ export default function PoolPage({
           }
         })
         setTestResults((prev) => ({ ...prev, ...updated }))
+        if (skipped > 0) toast(`已跳过未启动的 ${skipped} 个池成员`, true)
       }
       const label = kind === 'start' ? '启动' : kind === 'stop' ? '停止' : '测试'
-      toast(`池成员${label}完成：成功 ${ok} 个${fail ? `，失败 ${fail}` : ''}`, fail === 0)
+      toast(`池成员${label}完成：成功 ${ok} 个，失败 ${fail} 个${kind === 'test' ? '' : ''}`, fail === 0)
       await load()
     } finally {
       setAllBusy(null)

@@ -218,11 +218,19 @@ if (kind === 'delete' && !confirm(`确定释放选中的 ${names.length} 个实�
     }
     setTestBusy(true)
     try {
-      const results = await Promise.allSettled(names.map((n) => api.testInstance(n)))
+      // D2：仅测试已启动（Running）实例；未启动计入「跳过」，避免误报失败。
+      const statusByName = new Map(instances.map((i) => [i.name, i.status]))
+      const running = names.filter((n) => statusByName.get(n) === 'Running')
+      const skipped = names.length - running.length
+      if (running.length === 0) {
+        toast(`勾选的实例均未启动（${names.length} 个），无需测试`, false)
+        return
+      }
+      const results = await Promise.allSettled(running.map((n) => api.testInstance(n)))
       let ok = 0
       let fail = 0
       const updated: Record<string, TestResult> = {}
-      names.forEach((n, i) => {
+      running.forEach((n, i) => {
         const r = results[i]!
         if (r.status === 'fulfilled' && r.value.ok) {
           ok++
@@ -241,7 +249,7 @@ if (kind === 'delete' && !confirm(`确定释放选中的 ${names.length} 个实�
         }
       })
       setTestResults((prev) => ({ ...prev, ...updated }))
-      toast(`测试完成：成功 ${ok} 个${fail ? `，失败 ${fail}` : ''}`, fail === 0)
+      toast(`测试完成：成功 ${ok} 个，失败 ${fail} 个${skipped ? `，跳过未启动 ${skipped} 个` : ''}`, fail === 0)
       await load()
     } finally {
       setTestBusy(false)
