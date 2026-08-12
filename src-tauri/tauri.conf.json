@@ -31,7 +31,10 @@
   "bundle": {
     "active": true,
     "targets": [
-      "nsis"
+      "nsis",
+      "deb",
+      "appimage",
+      "dmg"
     ],
     "icon": [
       "icons/32x32.png",
@@ -47,6 +50,19 @@
       "nsis": {
         "installMode": "perMachine"
       }
+    },
+    "linux": {
+      "deb": {
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libgtk-3-0",
+          "libayatana-appindicator3-1",
+          "librsvg2-2"
+        ]
+      }
+    },
+    "macOS": {
+      "dmg": {}
     },
     "resources": {
       "../dist/index.html": "bin/dist/index.html",
