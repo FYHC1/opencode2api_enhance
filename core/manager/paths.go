@@ -13,6 +13,7 @@ package manager
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
 // DefaultDataDir 计算管理数据目录（Rust config.rs 语义）。
@@ -48,13 +49,18 @@ func ResolvePaths(dataDir string) Paths {
 	if p, e := os.Executable(); e == nil {
 		exeDir = filepath.Dir(p)
 	}
-	// 约定：Go core 由壳（Rust）释放到 <壳exe>/bin/ 下运行，sing-box.exe 与 core 同目录。
+	// 约定：Go core 由壳（Rust）释放到 <壳exe>/bin/ 下运行，sing-box 与 core 同目录。
 	// 因此 binDir 默认 = core 所在目录（filepath.Dir(os.Executable())），无需再拼 "bin"。
 	binDir := exeDir
 	// 兼容旧形态：若 core 目录下没有 sing-box，但父级存在 bin/ 子目录，则回退（如单文件 Web 直跑）。
-	if _, err := os.Stat(filepath.Join(exeDir, "sing-box.exe")); err != nil {
+	// 平台后缀：Windows 为 .exe，其余平台无后缀。
+	sbName := "sing-box"
+	if runtime.GOOS == "windows" {
+		sbName = "sing-box.exe"
+	}
+	if _, err := os.Stat(filepath.Join(exeDir, sbName)); err != nil {
 		alt := filepath.Join(exeDir, "bin")
-		if fi, e := os.Stat(filepath.Join(alt, "sing-box.exe")); e == nil && !fi.IsDir() {
+		if fi, e := os.Stat(filepath.Join(alt, sbName)); e == nil && !fi.IsDir() {
 			binDir = alt
 		}
 	}

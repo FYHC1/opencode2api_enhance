@@ -1,0 +1,21 @@
+services:
+  manager:
+    build: .
+    image: opencode2api-manager:latest
+    container_name: opencode2api-manager
+    restart: unless-stopped
+    environment:
+      # 数据目录（卷挂载持久化）；端口三件套按需覆盖
+      OPCODE2API_DATA_DIR: /data
+      OPCODE2API_GATEWAY_PORT: "18080"
+      OPCODE2API_INSTANCE_BASE_PORT: "48100"
+    ports:
+      - "40000:40000" # 管理面板（浏览器访问）
+      - "18080:18080" # 统一网关（客户端接入）
+    # 生产务必修改默认密码（123456）：
+    # command: ["-port", "40000", "-listen", "0.0.0.0", "-password", "换成你的密钥"]
+    volumes:
+      - manager-data:/data
+
+volumes:
+  manager-data:

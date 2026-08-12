@@ -85,6 +85,23 @@ journalctl -u opencode2api-manager -f        # 查看日志
 
 ---
 
+### 6. Docker 部署（管理器镜像，含前端 + sing-box）
+
+仓库根目录提供管理器专用 `Dockerfile` 与 `docker-compose.yml`（与下方「上游代理本体」的 `deploy/compose/` 不同：本镜像 = core + 六页前端 + sing-box 出口，开箱即用的完整管理器）：
+
+```bash
+docker compose up -d --build   # 或 docker build -t opencode2api-manager:latest .
+```
+
+- 管理面板：浏览器访问 `http://127.0.0.1:40000`（默认密码 `123456`，生产务必改——
+  在 `docker-compose.yml` 取消 `command` 注释换成你自己的密钥）
+- 统一网关：`http://127.0.0.1:18080/v1`
+- 数据持久化：卷 `manager-data` 挂载到 `/data`（`OPCODE2API_DATA_DIR`），升级容器不丢实例/配置/日志
+- 端口三件套：`OPCODE2API_DATA_DIR` / `OPCODE2API_GATEWAY_PORT` / `OPCODE2API_INSTANCE_BASE_PORT` 均可环境变量覆盖
+- 镜像多阶段构建（node 前端 → Go core + 官方 sing-box → alpine 精简运行镜像），管理二进制与 sing-box 静态编译，体积轻量
+
+---
+
 ## Docker Compose
 
 项目提供三套 compose 模版：

@@ -1,0 +1,15 @@
+# 构建上下文排除（多阶段构建内部各自 COPY 所需白名单）
+node_modules
+src-tauri/target
+src-tauri/gen
+bin
+dist
+.git
+.gitignore
+*.log
+*.out
+legacy
+docs
+portable
+Dockerfile
+docker-compose.yml
