@@ -39,23 +39,6 @@ export default function SettingsPage({
   // 一键拉取目标：独享 / 进池（main 功能 M1）
   const [subscribeTarget, setSubscribeTarget] = useState<'solo' | 'pool'>('solo')
   const [subscribeBusy, setSubscribeBusy] = useState(false)
-  // 健康巡检（main 功能 M2）
-  const [healthInterval, setHealthInterval] = useState(0)
-  const [healthThreshold, setHealthThreshold] = useState(0)
-  // 实例池性能模式（P1/P2）：探活 + 质量加权路由 + 熔断 + 竞速
-  const [poolForm, setPoolForm] = useState({
-    pool_probe_interval_sec: 45,
-    pool_quality_window_min: 10,
-    pool_breaker_threshold: 3,
-    pool_halfopen_interval_sec: 60,
-    pool_race_copies: 2,
-    scan_concurrency: 8,
-    batch_concurrency: 4,
-    test_concurrency: 4,
-    pool_probe_concurrency: 4,
-  })
-  const [poolProbeEnabled, setPoolProbeEnabled] = useState(true)
-  const [perfMode, setPerfMode] = useState(true)
   // 残留进程清理（孤儿实例 / 探针残留）
   const [orphans, setOrphans] = useState<OrphanProcess[]>([])
   const [orphanBusy, setOrphanBusy] = useState(false)
@@ -87,21 +70,6 @@ export default function SettingsPage({
         setShowNodePrefix(cfg.show_node_prefix)
         setSubscribeUrl(cfg.subscribe_url)
         setSubscribeInterval(cfg.subscribe_interval_min)
-        setHealthInterval(cfg.health_check_interval_sec)
-        setHealthThreshold(cfg.health_restart_threshold)
-        setPoolForm({
-          pool_probe_interval_sec: cfg.pool_probe_interval_sec,
-          pool_quality_window_min: cfg.pool_quality_window_min,
-          pool_breaker_threshold: cfg.pool_breaker_threshold,
-          pool_halfopen_interval_sec: cfg.pool_halfopen_interval_sec,
-          pool_race_copies: cfg.pool_race_copies,
-          scan_concurrency: cfg.scan_concurrency,
-          batch_concurrency: cfg.batch_concurrency,
-          test_concurrency: cfg.test_concurrency,
-          pool_probe_concurrency: cfg.pool_probe_concurrency,
-        })
-        setPoolProbeEnabled(cfg.pool_probe_enabled)
-        setPerfMode(cfg.pool_performance_mode)
       } catch (e) {
         console.error('加载设置失败', e)
         toast('加载设置失败', false)
@@ -212,58 +180,6 @@ export default function SettingsPage({
   }
 
   // 统一网关密钥（main 功能 M6）已在实例池页提供（同一 gateway_key，避免两处重复入口）——此处不再保留
-
-  // 健康巡检（main 功能 M2）
-  const handleSaveHealth = async () => {
-    try {
-      await api.configSet('health_check_interval_sec', String(healthInterval))
-      await api.configSet('health_restart_threshold', String(healthThreshold))
-      toast('健康巡检配置已保存', true)
-    } catch (e) {
-      console.error('保存健康巡检失败', e)
-      toast('保存失败', false)
-    }
-  }
-
-  // 实例池性能模式（P1/P2）：探活间隔/窗口 + 熔断阈值/半开 + 开关
-  const handleSavePool = async () => {
-    const f = poolForm
-    if (f.pool_probe_interval_sec < 0 || f.pool_quality_window_min < 1 ||
-        f.pool_breaker_threshold < 1 || f.pool_halfopen_interval_sec < 1) {
-      toast('性能模式参数不合法：间隔需 ≥0，窗口/熔断/半开需 ≥1', false)
-      return
-    }
-    const concurrency: [string, number, number, number][] = [
-      ['竞速并行（1~4）', f.pool_race_copies, 1, 4],
-      ['节点扫描并发（1~16）', f.scan_concurrency, 1, 16],
-      ['批量启停/释放并发（1~16）', f.batch_concurrency, 1, 16],
-      ['一键测试并发（1~16）', f.test_concurrency, 1, 16],
-      ['链路探活并发（1~16）', f.pool_probe_concurrency, 1, 16],
-    ]
-    for (const [label, v, lo, hi] of concurrency) {
-      if (v < lo || v > hi) {
-        toast(`并发不合法：${label}`, false)
-        return
-      }
-    }
-    try {
-      await api.configSet('pool_probe_interval_sec', String(f.pool_probe_interval_sec))
-      await api.configSet('pool_quality_window_min', String(f.pool_quality_window_min))
-      await api.configSet('pool_breaker_threshold', String(f.pool_breaker_threshold))
-      await api.configSet('pool_halfopen_interval_sec', String(f.pool_halfopen_interval_sec))
-      await api.configSet('pool_probe_enabled', String(poolProbeEnabled))
-      await api.configSet('pool_performance_mode', String(perfMode))
-      await api.configSet('pool_race_copies', String(f.pool_race_copies))
-      await api.configSet('scan_concurrency', String(f.scan_concurrency))
-      await api.configSet('batch_concurrency', String(f.batch_concurrency))
-      await api.configSet('test_concurrency', String(f.test_concurrency))
-      await api.configSet('pool_probe_concurrency', String(f.pool_probe_concurrency))
-      toast('性能模式配置已保存（热生效）', true)
-    } catch (e) {
-      console.error('保存性能模式配置失败', e)
-      toast('保存失败', false)
-    }
-  }
 
   // 残留进程：探测 / 全选 / 一键清除
   const doScanOrphans = async () => {
@@ -566,154 +482,6 @@ export default function SettingsPage({
         </div>
 
         <button onClick={handleSaveSubscribe} className="bg-zinc-900 text-white rounded-lg px-4 py-2 hover:bg-zinc-700">
-          保存
-        </button>
-      </div>
-
-      {/* 健康巡检（main 功能 M2） */}
-      <div className="bg-white rounded-2xl border p-5 space-y-4">
-        <h2 className="text-lg font-medium text-zinc-900">健康巡检</h2>
-        <p className="text-zinc-500 text-xs">周期探测实例 API 端口，连续失败达阈值自动重启（0 = 不启用）</p>
-
-        <div className="space-y-2">
-          <label className="block text-sm font-medium text-zinc-700">检查间隔（秒，0 = 不巡检）</label>
-          <input
-            type="number"
-            min={0}
-            value={healthInterval}
-            onChange={(e) => setHealthInterval(Number(e.target.value))}
-            className="w-28 px-3 py-2 border rounded-lg"
-          />
-        </div>
-
-        <div className="space-y-2">
-          <label className="block text-sm font-medium text-zinc-700">连续失败自动重启阈值（0 = 不重启）</label>
-          <input
-            type="number"
-            min={0}
-            value={healthThreshold}
-            onChange={(e) => setHealthThreshold(Number(e.target.value))}
-            className="w-28 px-3 py-2 border rounded-lg"
-          />
-        </div>
-
-        <button onClick={handleSaveHealth} className="bg-zinc-900 text-white rounded-lg px-4 py-2 hover:bg-zinc-700">
-          保存
-        </button>
-      </div>
-
-      {/* 实例池性能模式（P1/P2） */}
-      <div className="bg-white rounded-2xl border p-5 space-y-4">
-        <h2 className="text-lg font-medium text-zinc-900">实例池性能模式</h2>
-        <p className="text-zinc-500 text-xs">
-          链路级主动探活（经实例出口发真实请求）+ 质量加权路由：坏节点自动降权/剔除，熔断到期自动回归，全程无感。
-        </p>
-
-        <div className="space-y-2">
-          <label className="block text-sm font-medium text-zinc-700">探活间隔（秒，0 = 不自动探活）</label>
-          <input
-            type="number"
-            min={0}
-            value={poolForm.pool_probe_interval_sec}
-            onChange={(e) => setPoolForm({ ...poolForm, pool_probe_interval_sec: Number(e.target.value) })}
-            className="w-28 px-3 py-2 border rounded-lg"
-          />
-          <p className="text-zinc-500 text-xs">后台按此间隔探测全部运行实例的链路质量。默认 45</p>
-        </div>
-
-        <div className="space-y-2">
-          <label className="block text-sm font-medium text-zinc-700">质量窗口（分钟）</label>
-          <input
-            type="number"
-            min={1}
-            value={poolForm.pool_quality_window_min}
-            onChange={(e) => setPoolForm({ ...poolForm, pool_quality_window_min: Number(e.target.value) })}
-            className="w-28 px-3 py-2 border rounded-lg"
-          />
-          <p className="text-zinc-500 text-xs">质量分统计最近 N 分钟内的探活样本。默认 10</p>
-        </div>
-
-        <div className="space-y-2">
-          <label className="block text-sm font-medium text-zinc-700">熔断阈值（连续失败次数）</label>
-          <input
-            type="number"
-            min={1}
-            value={poolForm.pool_breaker_threshold}
-            onChange={(e) => setPoolForm({ ...poolForm, pool_breaker_threshold: Number(e.target.value) })}
-            className="w-28 px-3 py-2 border rounded-lg"
-          />
-          <p className="text-zinc-500 text-xs">连续失败达阈值后节点进入熔断，路由不再选中。默认 3</p>
-        </div>
-
-        <div className="space-y-2">
-          <label className="block text-sm font-medium text-zinc-700">半开间隔（秒）</label>
-          <input
-            type="number"
-            min={1}
-            value={poolForm.pool_halfopen_interval_sec}
-            onChange={(e) => setPoolForm({ ...poolForm, pool_halfopen_interval_sec: Number(e.target.value) })}
-            className="w-28 px-3 py-2 border rounded-lg"
-          />
-          <p className="text-zinc-500 text-xs">熔断到期后放行 1 个探测请求，成功即自动回归池子。默认 60</p>
-        </div>
-
-        {/* 并发设置（D3） */}
-        <div className="pt-2 border-t border-zinc-100">
-          <div className="text-sm font-medium text-zinc-700 mb-2">并发设置</div>
-          <div className="grid grid-cols-2 gap-x-6 gap-y-2">
-            {([
-              ['pool_race_copies', '竞速并行（1~4）', 1, 4],
-              ['scan_concurrency', '节点扫描并发（1~16）', 1, 16],
-              ['batch_concurrency', '批量启停/释放（1~16）', 1, 16],
-              ['test_concurrency', '一键测试并发（1~16）', 1, 16],
-              ['pool_probe_concurrency', '链路探活并发（1~16）', 1, 16],
-            ] as const).map(([key, label, lo, hi]) => (
-              <div key={key} className="flex items-center justify-between gap-3">
-                <label className="text-[13px] text-zinc-600">{label}</label>
-                <input
-                  type="number"
-                  min={lo}
-                  max={hi}
-                  value={poolForm[key]}
-                  onChange={(e) => setPoolForm({ ...poolForm, [key]: Number(e.target.value) })}
-                  className="w-20 px-2 py-1.5 border rounded-lg text-[13px] text-right"
-                />
-              </div>
-            ))}
-          </div>
-          <p className="text-zinc-500 text-xs mt-1.5">并发过高可能引起进程风暴，建议保持默认</p>
-        </div>
-
-        {/* 探活启用开关 */}
-        <div className="flex items-center space-x-3">
-          <label className="relative inline-flex items-center cursor-pointer">
-            <input
-              type="checkbox"
-              checked={poolProbeEnabled}
-              onChange={(e) => setPoolProbeEnabled(e.target.checked)}
-              className="sr-only peer"
-            />
-            <div className="w-11 h-6 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-zinc-900"></div>
-          </label>
-          <span className="text-sm text-zinc-700">链路主动探活</span>
-        </div>
-
-        {/* 性能模式开关 */}
-        <div className="flex items-center space-x-3">
-          <label className="relative inline-flex items-center cursor-pointer">
-            <input
-              type="checkbox"
-              checked={perfMode}
-              onChange={(e) => setPerfMode(e.target.checked)}
-              className="sr-only peer"
-            />
-            <div className="w-11 h-6 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-zinc-900"></div>
-          </label>
-          <span className="text-sm text-zinc-700">性能模式（质量加权路由 + 熔断自动恢复）</span>
-        </div>
-        <p className="text-zinc-500 text-xs">关闭后路由行为与基线一致（纯游标 + 冷却），探活记录保留</p>
-
-        <button onClick={handleSavePool} className="bg-zinc-900 text-white rounded-lg px-4 py-2 hover:bg-zinc-700">
           保存
         </button>
       </div>

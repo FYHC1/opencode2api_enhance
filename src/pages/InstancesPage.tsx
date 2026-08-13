@@ -26,6 +26,20 @@ export default function InstancesPage({
   const [refreshing, setRefreshing] = useState(false)
   // 手动刷新进度：{ done: 已检查数量, total: 实例总数 }，null = 不在刷新
   const [refreshProgress, setRefreshProgress] = useState<{ done: number; total: number } | null>(null)
+  // 健康巡检（main 功能 M2）：周期探测实例 API 端口，连续失败达阈值自动重启
+  const [healthInterval, setHealthInterval] = useState(0)
+  const [healthThreshold, setHealthThreshold] = useState(0)
+
+// 首次加载时拉取健康巡检配置（生效默认值填充）
+  useEffect(() => {
+    api
+      .configGet()
+      .then((c) => {
+        setHealthInterval(c.health_check_interval_sec)
+        setHealthThreshold(c.health_restart_threshold)
+      })
+      .catch(() => {})
+  }, [])
 
   const load = useCallback(async (silent = true) => {
     try {
@@ -265,6 +279,18 @@ if (kind === 'delete' && !confirm(`确定释放选中的 ${names.length} 个实�
     }
   }
 
+  // 保存健康巡检配置（main 功能 M2）
+  const handleSaveHealth = async () => {
+    try {
+      await api.configSet('health_check_interval_sec', String(healthInterval))
+      await api.configSet('health_restart_threshold', String(healthThreshold))
+      toast('健康巡检配置已保存', true)
+    } catch (e) {
+      console.error('保存健康巡检失败', e)
+      toast('保存失败', false)
+    }
+  }
+
   return (
     <div className="p-6 space-y-4">
       {/* 工具条：标题 + 数量小字，右侧仅刷新 */}
@@ -283,6 +309,42 @@ if (kind === 'delete' && !confirm(`确定释放选中的 ${names.length} 个实�
             {refreshProgress ? `刷新 ${refreshProgress.done} / ${refreshProgress.total}` : '刷新'}
           </button>
         </div>
+      </div>
+
+      {/* 健康巡检（main 功能 M2）：周期探测实例 API 端口，连续失败达阈值自动重启（作用于全部实例，含实例池成员） */}
+      <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm p-5 flex flex-wrap items-end gap-x-10 gap-y-4">
+        <div>
+          <h3 className="text-[14px] font-semibold text-zinc-900 mb-0.5">健康巡检</h3>
+          <p className="text-[12px] text-zinc-400">周期探测实例 API 端口，连续失败达阈值自动重启（0 = 不启用）</p>
+        </div>
+
+        <div className="space-y-1">
+          <label className="block text-[13px] font-medium text-zinc-700">检查间隔（秒）</label>
+          <input
+            type="number"
+            min={0}
+            value={healthInterval}
+            onChange={(e) => setHealthInterval(Number(e.target.value))}
+            className="w-28 px-3 py-2 border rounded-lg text-[13px]"
+          />
+          <p className="text-[11px] text-zinc-400">0 = 不巡检</p>
+        </div>
+
+        <div className="space-y-1">
+          <label className="block text-[13px] font-medium text-zinc-700">连续失败重启阈值</label>
+          <input
+            type="number"
+            min={0}
+            value={healthThreshold}
+            onChange={(e) => setHealthThreshold(Number(e.target.value))}
+            className="w-28 px-3 py-2 border rounded-lg text-[13px]"
+          />
+          <p className="text-[11px] text-zinc-400">0 = 不重启</p>
+        </div>
+
+        <button onClick={() => void handleSaveHealth()} className="bg-zinc-900 text-white rounded-lg px-4 py-2 text-[13px] hover:bg-zinc-700">
+          保存
+        </button>
       </div>
 
       {soloInstances.length > 0 && (
