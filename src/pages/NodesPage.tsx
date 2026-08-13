@@ -25,6 +25,23 @@ export default function NodesPage({
   // 追踪上一次扫描状态：仅在「本次扫描 running → done」时弹出结果弹窗
   const prevScanStatusRef = useRef<string | null>(null)
 
+  // 订阅自动拉取（main 功能 M1）：URL + 间隔 + 一键拉取目标
+  const [subscribeUrl, setSubscribeUrl] = useState('')
+  const [subscribeInterval, setSubscribeInterval] = useState(0)
+  const [subscribeTarget, setSubscribeTarget] = useState<'solo' | 'pool'>('solo')
+  const [subscribeBusy, setSubscribeBusy] = useState(false)
+
+  // 首次加载时拉取订阅配置（生效值填充）
+  useEffect(() => {
+    api
+      .configGet()
+      .then((c) => {
+        setSubscribeUrl(c.subscribe_url)
+        setSubscribeInterval(c.subscribe_interval_min)
+      })
+      .catch(() => {})
+  }, [])
+
   const loadNodes = useCallback(async () => {
     try {
       const [ns, insts] = await Promise.all([api.listNodes(), api.listInstances()])
@@ -34,6 +51,37 @@ export default function NodesPage({
       toast(String(e), false)
     }
   }, [toast])
+
+  // 订阅自动拉取配置（main 功能 M1）
+  const handleSaveSubscribe = async () => {
+    try {
+      await api.configSet('subscribe_url', subscribeUrl.trim())
+      await api.configSet('subscribe_interval_min', String(subscribeInterval))
+      toast('订阅配置已保存（后台按间隔自动拉取并入实例）', true)
+    } catch (e) {
+      console.error('保存订阅配置失败', e)
+      toast('保存失败', false)
+    }
+  }
+
+  // 一键拉取并导入（main 功能 M1）：立即拉取订阅 → 批量建实例（独享 / 进池）
+  const handleSubscribeImport = async () => {
+    if (!subscribeUrl.trim()) {
+      toast('请先填写订阅 URL', false)
+      return
+    }
+    setSubscribeBusy(true)
+    try {
+      const n = await api.subscribeImport(subscribeUrl.trim(), subscribeTarget === 'pool')
+      toast(`订阅拉取成功：批量导入 ${n} 个实例（${subscribeTarget === 'pool' ? '已入池' : '独享'}）`, true)
+      await loadNodes()
+    } catch (e) {
+      console.error('订阅导入失败', e)
+      toast(String(e), false)
+    } finally {
+      setSubscribeBusy(false)
+    }
+  }
 
   // 加载节点 + 轮询扫描进度
 // 加载节点 + 轮询扫描进度（注意：这里是链式 setTimeout，卸载时清理）
@@ -324,6 +372,81 @@ export default function NodesPage({
         </div>
       </div>
 
+      {/* 订阅自动拉取（main 功能 M1）：配置订阅地址 → 后台按间隔拉取并导入为实例 */}
+      <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm p-5 space-y-4">
+        <div className="flex items-start justify-between">
+          <div>
+            <h3 className="text-[14px] font-semibold text-zinc-900">订阅自动拉取</h3>
+            <p className="text-[12px] text-zinc-400">支持 Clash YAML / base64 / v2ray 链接（vmess/vless/trojan/ss/hysteria2），重复节点自动跳过</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void handleSubscribeImport()}
+            disabled={subscribeBusy}
+            className="flex items-center gap-1.5 bg-green-600 text-white rounded-lg px-3 py-1.5 text-[13px] hover:bg-green-700 disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            {subscribeBusy ? <Loader2 size={14} className="animate-spin" /> : <Rss size={14} />}
+            {subscribeBusy ? '拉取中…' : '一键拉取并导入'}
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3">
+          <div className="space-y-1">
+            <label className="block text-[13px] font-medium text-zinc-700">订阅 URL</label>
+            <input
+              type="text"
+              placeholder="https://example.com/sub"
+              value={subscribeUrl}
+              onChange={(e) => setSubscribeUrl(e.target.value)}
+              className="w-full px-3 py-2 border rounded-lg text-[13px]"
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="block text-[13px] font-medium text-zinc-700">自动拉取间隔（分钟，0 = 不自动拉取）</label>
+            <div className="flex items-center gap-3">
+              <input
+                type="number"
+                min={0}
+                value={subscribeInterval}
+                onChange={(e) => setSubscribeInterval(Number(e.target.value))}
+                className="w-28 px-3 py-2 border rounded-lg text-[13px]"
+              />
+              <div className="flex items-center rounded-lg border border-zinc-200 bg-white p-0.5">
+                <button
+                  type="button"
+                  onClick={() => setSubscribeTarget('solo')}
+                  className={clsx(
+                    'px-3 py-1 rounded-md text-[12px] transition-colors',
+                    subscribeTarget === 'solo' ? 'bg-zinc-900 text-white' : 'text-zinc-500 hover:bg-zinc-100',
+                  )}
+                  title="导入为独享实例（一人一实例，默认）"
+                >
+                  独享
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSubscribeTarget('pool')}
+                  className={clsx(
+                    'px-3 py-1 rounded-md text-[12px] transition-colors',
+                    subscribeTarget === 'pool' ? 'bg-zinc-900 text-white' : 'text-zinc-500 hover:bg-zinc-100',
+                  )}
+                  title="导入并标记进实例池（聚合到统一网关）"
+                >
+                  进池
+                </button>
+              </div>
+            </div>
+            <p className="text-[11px] text-zinc-400">「一键拉取并导入」立即拉取并按目标导入；自动拉取按间隔后台执行</p>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end">
+          <button onClick={() => void handleSaveSubscribe()} className="bg-zinc-900 text-white rounded-lg px-4 py-2 text-[13px] hover:bg-zinc-700">
+            保存
+          </button>
+        </div>
+      </div>
+
 {/* 扫描进度条：扫描中实时显示，完成后短暂保留结果 */}
       {scan && (scan.status === 'running' || scan.status === 'stopping' || scan.status === 'done') && (
         <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm p-4 space-y-2">
@@ -352,8 +475,8 @@ export default function NodesPage({
           <p className="text-base mb-2">未发现节点</p>
           <p className="text-[13px]">
             {isDesktop
-              ? '请先在「设置」页配置 Clash 外部控制地址，或使用「订阅导入」'
-              : '请使用「订阅导入」或「订阅自动拉取」添加节点'}
+              ? '请先在「设置」页配置 Clash 外部控制，或在本页使用订阅自动拉取/导入'
+              : '请在本页使用「订阅自动拉取」或「一键拉取并导入」添加节点'}
           </p>
         </div>
       ) : (
