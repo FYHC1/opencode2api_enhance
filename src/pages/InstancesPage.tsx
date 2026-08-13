@@ -317,6 +317,13 @@ if (kind === 'delete' && !confirm(`确定释放选中的 ${names.length} 个实�
               >
                 {testBusy ? <Loader2 size={14} className="animate-spin" /> : <TestTube2 size={14} />} 一键测试
               </button>
+              <button
+                onClick={() => void batch('delete')}
+                disabled={selected.size === 0 || batchBusy}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-red-600 bg-red-50 border border-red-100 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {batchBusy ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />} 批量释放
+              </button>
               <div
                 className={clsx(
                   'relative flex items-center rounded-lg border border-zinc-200 bg-white transition-all duration-200 overflow-hidden',
