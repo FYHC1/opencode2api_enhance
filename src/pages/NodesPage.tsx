@@ -528,7 +528,7 @@ export default function NodesPage({
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
           onClick={() => setSettingsOpen(false)}
         >
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[86vh] overflow-y-auto p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-[722px] max-h-[86vh] overflow-y-auto p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold text-zinc-900">节点池设置</h2>
               <button onClick={() => setSettingsOpen(false)} className="p-1.5 rounded-lg hover:bg-zinc-100">
