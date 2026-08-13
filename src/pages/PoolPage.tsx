@@ -816,73 +816,74 @@ export default function PoolPage({
                   <p className="text-[12px] text-zinc-400">
                     链路级主动探活（经实例出口发真实请求）+ 质量加权路由：坏节点自动降权/剔除，熔断到期自动回归。总开关在路由模式处。
                   </p>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-3">
-                <div className="space-y-1">
-                  <label className="block text-[13px] font-medium text-zinc-700">探活间隔（秒，0=不探活）</label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-2.5 pt-1">
+                <div className="flex items-center gap-3">
+                  <label className="text-[13px] text-zinc-700 w-40 shrink-0">探活间隔（秒，默认 45）</label>
                   <input
                     type="number"
                     min={0}
                     value={poolForm.pool_probe_interval_sec}
                     onChange={(e) => setPoolForm({ ...poolForm, pool_probe_interval_sec: Number(e.target.value) })}
-                    className="w-full px-3 py-2 border rounded-lg text-[13px]"
+                    className="flex-1 min-w-0 px-3 py-2 border rounded-lg text-[13px] text-right"
                   />
-                  <p className="text-[11px] text-zinc-400">默认 45</p>
+                  <span className="text-[11px] text-zinc-400 w-8 shrink-0 text-right">0=关</span>
                 </div>
-                <div className="space-y-1">
-                  <label className="block text-[13px] font-medium text-zinc-700">质量窗口（分钟）</label>
+                <div className="flex items-center gap-3">
+                  <label className="text-[13px] text-zinc-700 w-40 shrink-0">质量窗口（分钟，默认 10）</label>
                   <input
                     type="number"
                     min={1}
                     value={poolForm.pool_quality_window_min}
                     onChange={(e) => setPoolForm({ ...poolForm, pool_quality_window_min: Number(e.target.value) })}
-                    className="w-full px-3 py-2 border rounded-lg text-[13px]"
+                    className="flex-1 min-w-0 px-3 py-2 border rounded-lg text-[13px] text-right"
                   />
-                  <p className="text-[11px] text-zinc-400">默认 10</p>
+                  <span className="w-8 shrink-0" />
                 </div>
-                <div className="space-y-1">
-                  <label className="block text-[13px] font-medium text-zinc-700">熔断阈值（连续失败）</label>
+                <div className="flex items-center gap-3">
+                  <label className="text-[13px] text-zinc-700 w-40 shrink-0">熔断阈值（连续失败，默认 3）</label>
                   <input
                     type="number"
                     min={1}
                     value={poolForm.pool_breaker_threshold}
                     onChange={(e) => setPoolForm({ ...poolForm, pool_breaker_threshold: Number(e.target.value) })}
-                    className="w-full px-3 py-2 border rounded-lg text-[13px]"
+                    className="flex-1 min-w-0 px-3 py-2 border rounded-lg text-[13px] text-right"
                   />
-                  <p className="text-[11px] text-zinc-400">默认 3</p>
+                  <span className="w-8 shrink-0" />
                 </div>
-                <div className="space-y-1">
-                  <label className="block text-[13px] font-medium text-zinc-700">半开间隔（秒）</label>
+                <div className="flex items-center gap-3">
+                  <label className="text-[13px] text-zinc-700 w-40 shrink-0">半开间隔（秒，默认 60）</label>
                   <input
                     type="number"
                     min={1}
                     value={poolForm.pool_halfopen_interval_sec}
                     onChange={(e) => setPoolForm({ ...poolForm, pool_halfopen_interval_sec: Number(e.target.value) })}
-                    className="w-full px-3 py-2 border rounded-lg text-[13px]"
+                    className="flex-1 min-w-0 px-3 py-2 border rounded-lg text-[13px] text-right"
                   />
-                  <p className="text-[11px] text-zinc-400">默认 60</p>
+                  <span className="w-8 shrink-0" />
                 </div>
               </div>
 
               <div className="pt-2 border-t border-zinc-100">
                 <div className="text-[13px] font-medium text-zinc-700 mb-2">并发设置</div>
-                <div className="grid grid-cols-2 md:grid-cols-5 gap-x-6 gap-y-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-2.5">
                   {([
-                    ['pool_race_copies', '竞速并行（1~4）', 1, 4],
-                    ['scan_concurrency', '节点扫描（1~16）', 1, 16],
-                    ['batch_concurrency', '批量启停/释放（1~16）', 1, 16],
-                    ['test_concurrency', '一键测试（1~16）', 1, 16],
-                    ['pool_probe_concurrency', '链路探活（1~16）', 1, 16],
+                    ['pool_race_copies', '竞速并行', 1, 4],
+                    ['scan_concurrency', '节点扫描', 1, 16],
+                    ['batch_concurrency', '批量启停/释放', 1, 16],
+                    ['test_concurrency', '一键测试', 1, 16],
+                    ['pool_probe_concurrency', '链路探活', 1, 16],
                   ] as const).map(([key, label, lo, hi]) => (
-                    <div key={key} className="flex items-center justify-between gap-3">
-                      <label className="text-[12px] text-zinc-600">{label}</label>
+                    <div key={key} className="flex items-center gap-3">
+                      <label className="text-[13px] text-zinc-700 w-40 shrink-0">{label}（{lo}~{hi}）</label>
                       <input
                         type="number"
                         min={lo}
                         max={hi}
                         value={poolForm[key]}
                         onChange={(e) => setPoolForm({ ...poolForm, [key]: Number(e.target.value) })}
-                        className="w-18 px-2 py-1.5 border rounded-lg text-[13px] text-right"
+                        className="flex-1 min-w-0 px-3 py-2 border rounded-lg text-[13px] text-right"
                       />
+                      <span className="w-8 shrink-0" />
                     </div>
                   ))}
                 </div>
@@ -925,80 +926,72 @@ export default function PoolPage({
                   <p className="text-[12px] text-zinc-400">
                     每次请求在区间内随机取超时值，避免固定超时被上游识别为定时扫描；最小值防止过密重试
                   </p>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3">
-                <div className="space-y-1">
-                  <label className="block text-[13px] font-medium text-zinc-700">首字超时 TTFT（毫秒）</label>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="number"
-                      min={1}
-                      value={timeoutForm.timeout_ttft_min_ms}
-                      onChange={(e) => setTimeoutForm({ ...timeoutForm, timeout_ttft_min_ms: Number(e.target.value) })}
-                      className="w-28 px-3 py-2 border rounded-lg text-[13px]"
-                    />
-                    <span className="text-zinc-400">~</span>
-                    <input
-                      type="number"
-                      min={1}
-                      value={timeoutForm.timeout_ttft_max_ms}
-                      onChange={(e) => setTimeoutForm({ ...timeoutForm, timeout_ttft_max_ms: Number(e.target.value) })}
-                      className="w-28 px-3 py-2 border rounded-lg text-[13px]"
-                    />
-                  </div>
-                  <p className="text-[11px] text-zinc-400">建流后等待首个内容块，超时则判定异常并切换。默认 10s</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-2.5 pt-1">
+                <div className="flex items-center gap-3">
+                  <label className="text-[13px] text-zinc-700 w-44 shrink-0">首字超时 TTFT（毫秒，默认 10s）</label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={timeoutForm.timeout_ttft_min_ms}
+                    onChange={(e) => setTimeoutForm({ ...timeoutForm, timeout_ttft_min_ms: Number(e.target.value) })}
+                    className="flex-1 min-w-0 px-2 py-2 border rounded-lg text-[13px] text-right"
+                  />
+                  <span className="text-zinc-400">~</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={timeoutForm.timeout_ttft_max_ms}
+                    onChange={(e) => setTimeoutForm({ ...timeoutForm, timeout_ttft_max_ms: Number(e.target.value) })}
+                    className="flex-1 min-w-0 px-2 py-2 border rounded-lg text-[13px] text-right"
+                  />
                 </div>
-                <div className="space-y-1">
-                  <label className="block text-[13px] font-medium text-zinc-700">块间静默超时（毫秒）</label>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="number"
-                      min={1}
-                      value={timeoutForm.timeout_silence_min_ms}
-                      onChange={(e) => setTimeoutForm({ ...timeoutForm, timeout_silence_min_ms: Number(e.target.value) })}
-                      className="w-28 px-3 py-2 border rounded-lg text-[13px]"
-                    />
-                    <span className="text-zinc-400">~</span>
-                    <input
-                      type="number"
-                      min={1}
-                      value={timeoutForm.timeout_silence_max_ms}
-                      onChange={(e) => setTimeoutForm({ ...timeoutForm, timeout_silence_max_ms: Number(e.target.value) })}
-                      className="w-28 px-3 py-2 border rounded-lg text-[13px]"
-                    />
-                  </div>
-                  <p className="text-[11px] text-zinc-400">两个数据块之间无数据，判定卡死并切换。默认 5s</p>
+                <div className="flex items-center gap-3">
+                  <label className="text-[13px] text-zinc-700 w-44 shrink-0">块间静默超时（毫秒，默认 5s）</label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={timeoutForm.timeout_silence_min_ms}
+                    onChange={(e) => setTimeoutForm({ ...timeoutForm, timeout_silence_min_ms: Number(e.target.value) })}
+                    className="flex-1 min-w-0 px-2 py-2 border rounded-lg text-[13px] text-right"
+                  />
+                  <span className="text-zinc-400">~</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={timeoutForm.timeout_silence_max_ms}
+                    onChange={(e) => setTimeoutForm({ ...timeoutForm, timeout_silence_max_ms: Number(e.target.value) })}
+                    className="flex-1 min-w-0 px-2 py-2 border rounded-lg text-[13px] text-right"
+                  />
                 </div>
-                <div className="space-y-1">
-                  <label className="block text-[13px] font-medium text-zinc-700">切换前并行探测数</label>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="number"
-                      min={1}
-                      value={timeoutForm.failover_probe_min}
-                      onChange={(e) => setTimeoutForm({ ...timeoutForm, failover_probe_min: Number(e.target.value) })}
-                      className="w-28 px-3 py-2 border rounded-lg text-[13px]"
-                    />
-                    <span className="text-zinc-400">~</span>
-                    <input
-                      type="number"
-                      min={1}
-                      value={timeoutForm.failover_probe_max}
-                      onChange={(e) => setTimeoutForm({ ...timeoutForm, failover_probe_max: Number(e.target.value) })}
-                      className="w-28 px-3 py-2 border rounded-lg text-[13px]"
-                    />
-                  </div>
-                  <p className="text-[11px] text-zinc-400">切换前并行探测候选节点数量。默认 2~3</p>
+                <div className="flex items-center gap-3">
+                  <label className="text-[13px] text-zinc-700 w-44 shrink-0">切换前并行探测数（默认 2~3）</label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={timeoutForm.failover_probe_min}
+                    onChange={(e) => setTimeoutForm({ ...timeoutForm, failover_probe_min: Number(e.target.value) })}
+                    className="flex-1 min-w-0 px-2 py-2 border rounded-lg text-[13px] text-right"
+                  />
+                  <span className="text-zinc-400">~</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={timeoutForm.failover_probe_max}
+                    onChange={(e) => setTimeoutForm({ ...timeoutForm, failover_probe_max: Number(e.target.value) })}
+                    className="flex-1 min-w-0 px-2 py-2 border rounded-lg text-[13px] text-right"
+                  />
                 </div>
-                <div className="space-y-1">
-                  <label className="block text-[13px] font-medium text-zinc-700">调用日志保留上限</label>
+                <div className="flex items-center gap-3">
+                  <label className="text-[13px] text-zinc-700 w-44 shrink-0">调用日志保留上限（默认 5000）</label>
                   <input
                     type="number"
                     min={100}
                     value={timeoutForm.call_log_max}
                     onChange={(e) => setTimeoutForm({ ...timeoutForm, call_log_max: Number(e.target.value) })}
-                    className="w-28 px-3 py-2 border rounded-lg text-[13px]"
+                    className="flex-1 min-w-0 px-3 py-2 border rounded-lg text-[13px] text-right"
                   />
-                  <p className="text-[11px] text-zinc-400">日志页最多保留的请求记录数。默认 5000</p>
+                  <span className="w-5 shrink-0" />
+                  <span className="w-5 shrink-0" />
                 </div>
               </div>
 

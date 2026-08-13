@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import clsx from 'clsx'
-import { Loader2, Network, Radar, RefreshCw, Rss, Square, Trash2, User, Settings2, X } from 'lucide-react'
+import { Loader2, Network, Radar, RefreshCw, Rss, Square, Trash2, User, Settings2, X, ChevronDown } from 'lucide-react'
 import { api, type NodeView, type ProbeResult, type ScanProgress } from '../lib/api'
 import { isDesktop } from '../lib/env'
 import ResultModal from '../components/ResultModal'
@@ -32,6 +32,8 @@ export default function NodesPage({
   const [subscribeBusy, setSubscribeBusy] = useState(false)
   // 页面设置弹窗（订阅自动拉取，收进右上角齿轮）
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // 订阅刷新设置折叠面板（默认收起）
+  const [subOpen, setSubOpen] = useState(false)
 
   // 首次加载时拉取订阅配置（生效值填充）
   useEffect(() => {
@@ -527,12 +529,25 @@ export default function NodesPage({
           onClick={() => setSettingsOpen(false)}
         >
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[86vh] overflow-y-auto p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between">
+                        <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold text-zinc-900">节点池设置</h2>
               <button onClick={() => setSettingsOpen(false)} className="p-1.5 rounded-lg hover:bg-zinc-100">
                 <X size={18} />
               </button>
             </div>
+
+            {/* 订阅刷新设置（折叠面板，默认收起） */}
+            <section className="border border-zinc-200 rounded-xl overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setSubOpen(!subOpen)}
+                className={clsx('w-full flex items-center justify-between px-4 py-3 text-left hover:bg-zinc-50', subOpen && 'border-b border-zinc-200')}
+              >
+                <span className="text-[14px] font-semibold text-zinc-900">订阅刷新设置</span>
+                <ChevronDown size={16} className={clsx('text-zinc-400 transition-transform', !subOpen && '-rotate-90')} />
+              </button>
+              {subOpen && (
+                <div className="p-4 space-y-4">
             <p className="text-[12px] text-zinc-400">支持 Clash YAML / base64 / v2ray 链接（vmess/vless/trojan/ss/hysteria2），重复节点自动跳过</p>
 
             <div className="space-y-1">
@@ -598,6 +613,9 @@ export default function NodesPage({
                 保存
               </button>
             </div>
+                </div>
+              )}
+            </section>
           </div>
         </div>
       )}
