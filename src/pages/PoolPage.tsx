@@ -187,7 +187,7 @@ export default function PoolPage({
     setKeyBusy(true)
     try {
       await api.configSet('gateway_key', keyValue.trim())
-      toast(keyValue.trim() ? '网关自定义密钥已设置并生效' : '网关密钥已重置为默认', true)
+      toast(keyValue.trim() ? '网关自定义密钥已设置（下次网关同步生效）' : '网关密钥已重置为默认（下次网关同步生效）', true)
       setKeyOpen(false)
       setKeyValue('')
       await load()
