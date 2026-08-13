@@ -3,7 +3,7 @@ import clsx from 'clsx'
 import { RefreshCw, Play, Square, Trash2, TestTube2, Copy, Loader2, Search, Server, Activity } from 'lucide-react'
 import { api, type Instance, type TestResult, type PoolQualityRecord, type PoolQualityLevel } from '../lib/api'
 
-/** 链路质量徽标（与实例池页一致）：质量分 + 等级 + 延迟 + 连续失败次数 */
+/** 链路质量徽标（与实例池页一致）：质量分 + 等级 + 延迟（无记录显示"未探测"） */
 function qualityBadge(r?: PoolQualityRecord) {
   const levelMap: Record<PoolQualityLevel, [string, string]> = {
     healthy: ['bg-green-50 text-green-700', '健康'],
@@ -20,15 +20,10 @@ function qualityBadge(r?: PoolQualityRecord) {
   }
   const [cls, label] = levelMap[r.level] ?? levelMap.healthy
   return (
-    <div className="inline-flex flex-col items-start gap-0.5">
-      <span className={clsx('inline-block px-2 py-0.5 rounded-full text-[11px] font-medium whitespace-nowrap', cls)}>
-        {r.score} 分 · {label}
-        {r.avg_latency_ms > 0 ? ` · ${r.avg_latency_ms}ms` : ''}
-      </span>
-      {r.consecutive_failures > 0 && (
-        <span className="inline-block text-[11px] text-red-500 whitespace-nowrap">连续失败 {r.consecutive_failures} 次</span>
-      )}
-    </div>
+    <span className={clsx('inline-block px-2 py-0.5 rounded-full text-[11px] font-medium whitespace-nowrap', cls)}>
+      {r.score} 分 · {label}
+      {r.avg_latency_ms > 0 ? ` · ${r.avg_latency_ms}ms` : ''}
+    </span>
   )
 }
 
