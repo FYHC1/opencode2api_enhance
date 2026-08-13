@@ -33,7 +33,8 @@ RUN mkdir -p /out/bin && \
 # ---------- 阶段 3：运行（精简） ----------
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates tzdata && \
-    addgroup -S app && adduser -S -G app -h /app app
+    addgroup -S app && adduser -S -G app -h /app app && \
+    mkdir -p /data && chown app:app /data
 WORKDIR /app
 # 布局：管理二进制与 sing-box 出口子程序同放 /app/bin（关于页「二进制目录」可两者检出）；
 # 前端 dist 放 /app/dist（cwd=/app 可被 frontendDistDir 找到）。
