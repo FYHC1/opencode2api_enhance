@@ -94,7 +94,15 @@ jobs:
           ls -lh bin/
 
       # tauri.conf 的 resources 引用 WebView2Loader.dll 仅 Windows 需要；
-      # 非 Windows 构建前放占位文件，避免 resources 缺失报错（产物不含该 dll 逻辑）。
+      # Windows 用仓库内 src-tauri/WebView2Loader.dll（已验证版本），非 Windows 放占位文件
+      # 避免 resources 缺失报错（产物不含该 dll 逻辑）。
+      - name: Prepare WebView2Loader.dll (Windows)
+        if: matrix.win_dll == true
+        shell: bash
+        run: |
+          mkdir -p src-tauri/target/release
+          cp src-tauri/WebView2Loader.dll src-tauri/target/release/WebView2Loader.dll
+
       - name: Placeholder WebView2Loader.dll (non-Windows)
         if: matrix.win_dll == false
         run: |
