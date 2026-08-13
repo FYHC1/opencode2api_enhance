@@ -331,6 +331,15 @@ export type SubscribeResult = {
   count: number
 }
 
+// T3: 订阅源（多条列表：URL / 自动拉取间隔 / 导入目标）
+export type SubscriptionSource = {
+  url: string
+  interval_min: number
+  target: 'solo' | 'pool' | 'pool-only'
+}
+
+export type SubscriptionTargetLabel = 'solo' | 'pool' | 'pool-only'
+
 // ─── 健康巡检（main 功能迁移 M2） ─────────────────────────────────────────────
 
 export type HealthRecord = {
@@ -467,6 +476,15 @@ export const api = {
     req<{ status: string; imported: number }>('POST', '/subscribe/import', { url, join_gateway: joinGateway ?? undefined }),
   subscribeImportPool: (url: string) =>
     req<{ status: string; imported: number }>('POST', '/subscribe/import-pool', { url }),
+
+  // T3: 订阅源列表管理（多条订阅：新增/删除/立即拉取 + 列表）
+  subscriptionsList: () => req<{ subscriptions: SubscriptionSource[] }>('GET', '/subscriptions'),
+  subscriptionsAdd: (url: string, intervalMin: number, target: SubscriptionTargetLabel) =>
+    req<void>('POST', '/subscriptions/add', { url, interval_min: intervalMin, target }),
+  subscriptionsDelete: (url: string) =>
+    req<{ status: string; removed: boolean; group: string }>('POST', '/subscriptions/delete', { url }),
+  subscriptionsImport: (url: string) =>
+    req<{ status: string; imported: number; target: string }>('POST', '/subscriptions/import', { url }),
 
   // 开机自启：由 Go core 承载（写 Windows 注册表），经 HTTP 调用
   autostartGet: async (): Promise<boolean> => {

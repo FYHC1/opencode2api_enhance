@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import clsx from 'clsx'
-import { Loader2, Network, Radar, RefreshCw, Rss, Square, Trash2, User, Settings2, X, ChevronDown } from 'lucide-react'
-import { api, type NodeView, type ProbeResult, type ScanProgress } from '../lib/api'
+import { Loader2, Network, Radar, RefreshCw, Rss, Square, Trash2, User, X, ChevronDown } from 'lucide-react'
+import { api, type NodeView, type ProbeResult, type ScanProgress, type SubscriptionSource } from '../lib/api'
 import { isDesktop } from '../lib/env'
 import ResultModal from '../components/ResultModal'
 
@@ -28,70 +28,132 @@ export default function NodesPage({
   const stopAckRef = useRef(false)
   const [stopBusy, setStopBusy] = useState(false)
 
-  // 订阅自动拉取（main 功能 M1）：URL + 间隔 + 一键拉取目标
-  const [subscribeUrl, setSubscribeUrl] = useState('')
-  const [subscribeInterval, setSubscribeInterval] = useState(0)
-  const [subscribeTarget, setSubscribeTarget] = useState<'solo' | 'pool'>('solo')
-  const [subscribeBusy, setSubscribeBusy] = useState(false)
-  // 页面设置弹窗（订阅自动拉取，收进右上角齿轮）
-  const [settingsOpen, setSettingsOpen] = useState(false)
-  // 订阅刷新设置折叠面板（默认收起）
-  const [subOpen, setSubOpen] = useState(false)
+  // T3: 订阅源列表管理（多条订阅：新增/删除/立即拉取）
+  const [subs, setSubs] = useState<SubscriptionSource[]>([])
+  const [subOpen, setSubOpen] = useState(false) // 订阅管理弹窗
+  const [subBusy, setSubBusy] = useState(false) // 弹窗内动作忙态
+  const [importingUrl, setImportingUrl] = useState<string | null>(null) // 正在拉取的订阅
+  const [deletingUrl, setDeletingUrl] = useState<string | null>(null) // 正在删除的订阅
+  // 删除订阅释放进度：{active, done, total}
+  const [subDeleteProgress, setSubDeleteProgress] = useState<{ active: boolean; done: number; total: number }>({
+    active: false,
+    done: 0,
+    total: 0,
+  })
+  // 新增订阅表单
+  const [addOpen, setAddOpen] = useState(false)
+  const [addUrl, setAddUrl] = useState('')
+  const [addInterval, setAddInterval] = useState(30)
+  const [addTarget, setAddTarget] = useState<'solo' | 'pool' | 'pool-only'>('solo')
 
-  // 首次加载时拉取订阅配置（生效值填充）
+  // 首次加载订阅源列表
   useEffect(() => {
     api
-      .configGet()
-      .then((c) => {
-        setSubscribeUrl(c.subscribe_url)
-        setSubscribeInterval(c.subscribe_interval_min)
-      })
+      .subscriptionsList()
+      .then((r) => setSubs(r.subscriptions ?? []))
       .catch(() => {})
   }, [])
 
-  const loadNodes = useCallback(async () => {
+  const loadSubs = useCallback(async () => {
     try {
-      const [ns, insts] = await Promise.all([api.listNodes(), api.listInstances()])
-      setNodes(ns)
-      setInstanceNodes(new Map(insts.map((i) => [i.node, i.join_gateway])))
+      const r = await api.subscriptionsList()
+      setSubs(r.subscriptions ?? [])
+    } catch {
+      /* 静默 */
+    }
+  }, [])
+
+  // T3: 新增订阅
+  const handleAddSubscription = async () => {
+    if (!addUrl.trim()) {
+      toast('请填写订阅 URL', false)
+      return
+    }
+    setSubBusy(true)
+    try {
+      await api.subscriptionsAdd(addUrl.trim(), addInterval, addTarget)
+      toast('订阅已添加', true)
+      setAddOpen(false)
+      setAddUrl('')
+      setAddInterval(30)
+      setAddTarget('solo')
+      await loadSubs()
     } catch (e) {
       toast(String(e), false)
-    }
-  }, [toast])
-
-  // 订阅自动拉取配置（main 功能 M1）
-  const handleSaveSubscribe = async () => {
-    try {
-      await api.configSet('subscribe_url', subscribeUrl.trim())
-      await api.configSet('subscribe_interval_min', String(subscribeInterval))
-      toast('订阅配置已保存（后台按间隔自动拉取并入实例）', true)
-    } catch (e) {
-      console.error('保存订阅配置失败', e)
-      toast('保存失败', false)
+    } finally {
+      setSubBusy(false)
     }
   }
 
-  // 一键拉取并导入（main 功能 M1）：立即拉取订阅 → 批量建实例（独享 / 进池）
-  const handleSubscribeImport = async () => {
-    if (!subscribeUrl.trim()) {
-      toast('请先填写订阅 URL', false)
-      return
-    }
-    setSubscribeBusy(true)
+  // T3: 立即拉取该订阅（按源目标导入）
+  const handleImportSub = async (url: string) => {
+    setImportingUrl(url)
     try {
-      const n = await api.subscribeImport(subscribeUrl.trim(), subscribeTarget === 'pool')
-      toast(`订阅拉取成功：批量导入 ${n} 个实例（${subscribeTarget === 'pool' ? '已入池' : '独享'}）`, true)
+      const r = await api.subscriptionsImport(url)
+      toast(`订阅拉取成功：导入 ${r.imported} 个节点（${r.target}）`, true)
       await loadNodes()
+      await loadSubs()
     } catch (e) {
-      console.error('订阅导入失败', e)
       toast(String(e), false)
     } finally {
-      setSubscribeBusy(false)
+      setImportingUrl(null)
+    }
+  }
+
+  // T3: 删除订阅——先释放其节点实例（带全局进度），再删除源
+  const handleDeleteSub = async (url: string) => {
+    if (!confirm('确定删除该订阅？将释放该订阅已创建的实例。')) return
+    setDeletingUrl(url)
+    setSubDeleteProgress({ active: true, done: 0, total: 1 })
+    try {
+      // 删除订阅源（后端返回该订阅分组名，用于定位实例）
+      const r = await api.subscriptionsDelete(url)
+      if (!r.removed) {
+        toast('订阅源未找到，可能已删除', false)
+        setSubDeleteProgress({ active: false, done: 0, total: 0 })
+        await loadSubs()
+        return
+      }
+      // 按分组名定位并释放实例（该订阅导入的实例）
+      let names: string[] = []
+      if (r.group) {
+        const insts = await api.listInstances()
+        const nodes = await api.listNodes()
+        const subNodes = nodes.filter((n) => n.group === r.group)
+        names = insts.filter((i) => subNodes.some((n) => n.name === i.node)).map((i) => i.name)
+      }
+      setSubDeleteProgress({ active: true, done: 0, total: Math.max(names.length, 1) })
+      // 分块并发释放（与实例池释放一致：4 并发）
+      let done = 0
+      for (let i = 0; i < names.length; i += 4) {
+        const chunk = names.slice(i, i + 4)
+        await Promise.allSettled(chunk.map((n) => api.removeInstance(n)))
+        done += chunk.length
+        setSubDeleteProgress({ active: true, done, total: names.length })
+      }
+      toast(`已删除订阅${names.length > 0 ? `，并释放 ${names.length} 个实例` : ''}`, true)
+      await loadSubs()
+      await loadNodes()
+    } catch (e) {
+      toast(String(e), false)
+    } finally {
+      setDeletingUrl(null)
+      setSubDeleteProgress({ active: false, done: 0, total: 0 })
     }
   }
 
   // 加载节点 + 轮询扫描进度
 // 加载节点 + 轮询扫描进度（注意：这里是链式 setTimeout，卸载时清理）
+  const loadNodes = useCallback(async () => {
+    try {
+      const [ns, insts] = await Promise.all([api.listNodes(), api.listInstances()])
+      setNodes(ns)
+      setInstanceNodes(new Map(insts.map((i) => [i.node, i.join_gateway])))
+    } catch {
+      /* 静默 */
+    }
+  }, [])
+
   useEffect(() => {
     loadNodes()
     let alive = true
@@ -288,25 +350,9 @@ export default function NodesPage({
             <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
             {refreshing ? '刷新中…' : '刷新'}
           </button>
-          {/* 订阅导入（main 功能 M1）：URL → preview → 入订阅缓存 → 刷新节点列表 */}
+          {/* T3: 订阅导入 → 打开订阅管理弹窗（列表 + 新增 + 拉取 + 删除） */}
           <button
-            onClick={async () => {
-              const url = window.prompt('输入订阅地址（Clash YAML / base64 / v2ray 链接）')
-              if (!url || !url.trim()) return
-              try {
-                const p = await api.subscribePreview(url.trim())
-                if (p.count === 0) {
-                  toast('订阅中未解析到任何节点', false)
-                  return
-                }
-                if (!window.confirm(`订阅解析到 ${p.count} 个节点（如 ${p.nodes[0]?.name} 等），导入节点池？`)) return
-                const r = await api.subscribeImportPool(url.trim())
-                toast(`已导入 ${r.imported} 个订阅节点到节点池`, true)
-                await loadNodes()
-              } catch (e) {
-                toast(String(e), false)
-              }
-            }}
+            onClick={() => setSubOpen(true)}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-zinc-700 bg-white border border-zinc-200 hover:bg-zinc-50"
           >
             <Rss size={14} />
@@ -388,13 +434,6 @@ export default function NodesPage({
             title={selected.size === 0 ? '请先勾选节点' : `添加勾选的 ${selected.size} 个节点为独享`}
           >
             {acting ? <Loader2 size={14} className="animate-spin" /> : <User size={14} />} 独享
-          </button>
-          <button
-            onClick={() => setSettingsOpen(true)}
-            title="节点池设置（订阅自动拉取）"
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-zinc-700 bg-white border border-zinc-200 hover:bg-zinc-50"
-          >
-            <Settings2 size={14} /> 设置
           </button>
         </div>
       </div>
@@ -538,98 +577,146 @@ export default function NodesPage({
 
     </div>
 
-      {/* 页面设置弹窗（右上角齿轮）：订阅自动拉取 */}
-      {settingsOpen && (
+      {/* T3: 订阅管理弹窗（列表 + 新增 + 拉取 + 删除） */}
+      {subOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-          onClick={() => setSettingsOpen(false)}
+          onClick={() => setSubOpen(false)}
         >
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-[722px] max-h-[86vh] overflow-y-auto p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
-                        <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-zinc-900">节点池设置</h2>
-              <button onClick={() => setSettingsOpen(false)} className="p-1.5 rounded-lg hover:bg-zinc-100">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-zinc-900">订阅管理</h2>
+              <button onClick={() => setSubOpen(false)} className="p-1.5 rounded-lg hover:bg-zinc-100">
                 <X size={18} />
               </button>
             </div>
+            <p className="text-[12px] text-zinc-400">支持 Clash YAML / base64 / v2ray 链接（vmess/vless/trojan/ss/hysteria2），重复节点自动跳过。后台按每条订阅自己的间隔自动拉取。</p>
 
-            {/* 订阅刷新设置（折叠面板，默认收起） */}
-            <section className="border border-zinc-200 rounded-xl overflow-hidden">
-              <button
-                type="button"
-                onClick={() => setSubOpen(!subOpen)}
-                className={clsx('w-full flex items-center justify-between px-4 py-3 text-left hover:bg-zinc-50', subOpen && 'border-b border-zinc-200')}
-              >
-                <span className="text-[14px] font-semibold text-zinc-900">订阅刷新设置</span>
-                <ChevronDown size={16} className={clsx('text-zinc-400 transition-transform', !subOpen && '-rotate-90')} />
-              </button>
-              {subOpen && (
-                <div className="p-4 space-y-4">
-            <p className="text-[12px] text-zinc-400">支持 Clash YAML / base64 / v2ray 链接（vmess/vless/trojan/ss/hysteria2），重复节点自动跳过</p>
-
-            <div className="flex items-center gap-3">
-              <label className="text-[13px] text-zinc-700 flex-1 min-w-0 whitespace-nowrap">订阅 URL</label>
-              <input
-                type="text"
-                placeholder="https://example.com/sub"
-                value={subscribeUrl}
-                onChange={(e) => setSubscribeUrl(e.target.value)}
-                className="flex-1 min-w-0 px-3 py-2 border rounded-lg text-[13px]"
-              />
-            </div>
-
-            <div className="flex items-center gap-3">
-              <label className="text-[13px] text-zinc-700 flex-1 min-w-0 whitespace-nowrap">自动拉取间隔（分钟）</label>
-              <input
-                type="number"
-                min={0}
-                value={subscribeInterval}
-                onChange={(e) => setSubscribeInterval(Number(e.target.value))}
-                className="w-28 shrink-0 px-3 py-2 border rounded-lg text-[13px]"
-              />
-              <div className="flex items-center rounded-lg border border-zinc-200 bg-white p-0.5 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setSubscribeTarget('solo')}
-                  className={clsx(
-                    'px-3 py-1 rounded-md text-[12px] transition-colors',
-                    subscribeTarget === 'solo' ? 'bg-zinc-900 text-white' : 'text-zinc-500 hover:bg-zinc-100',
-                  )}
-                  title="导入为独享实例（一人一实例，默认）"
-                >
-                  独享
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSubscribeTarget('pool')}
-                  className={clsx(
-                    'px-3 py-1 rounded-md text-[12px] transition-colors',
-                    subscribeTarget === 'pool' ? 'bg-zinc-900 text-white' : 'text-zinc-500 hover:bg-zinc-100',
-                  )}
-                  title="导入并标记进实例池（聚合到统一网关）"
-                >
-                  进池
-                </button>
+            {/* 新增订阅 */}
+            <button
+              type="button"
+              onClick={() => setAddOpen(!addOpen)}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-[13px] text-zinc-700 bg-white border border-zinc-200 hover:bg-zinc-50"
+            >
+              <ChevronDown size={14} />
+              新增订阅
+            </button>
+            {addOpen && (
+              <div className="border border-zinc-200 rounded-xl p-4 space-y-4">
+                <div className="flex items-center gap-3">
+                  <label className="text-[13px] text-zinc-700 flex-1 min-w-0 whitespace-nowrap">订阅 URL</label>
+                  <input
+                    type="text"
+                    placeholder="https://example.com/sub"
+                    value={addUrl}
+                    onChange={(e) => setAddUrl(e.target.value)}
+                    className="flex-1 min-w-0 px-3 py-2 border rounded-lg text-[13px]"
+                  />
+                </div>
+                <div className="flex items-center gap-3">
+                  <label className="text-[13px] text-zinc-700 flex-1 min-w-0 whitespace-nowrap">自动拉取间隔（分钟，0=不自动）</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={addInterval}
+                    onChange={(e) => setAddInterval(Number(e.target.value))}
+                    className="w-28 shrink-0 px-3 py-2 border rounded-lg text-[13px]"
+                  />
+                </div>
+                <div className="flex items-center gap-3">
+                  <label className="text-[13px] text-zinc-700 flex-1 min-w-0 whitespace-nowrap">导入目标</label>
+                  <div className="flex items-center rounded-lg border border-zinc-200 bg-white p-0.5 shrink-0">
+                    {([
+                      ['solo', '独享'],
+                      ['pool', '进池'],
+                      ['pool-only', '仅节点池'],
+                    ] as const).map(([v, label]) => (
+                      <button
+                        key={v}
+                        type="button"
+                        onClick={() => setAddTarget(v)}
+                        className={clsx(
+                          'px-3 py-1 rounded-md text-[12px] transition-colors',
+                          addTarget === v ? 'bg-zinc-900 text-white' : 'text-zinc-500 hover:bg-zinc-100',
+                        )}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex items-center gap-3 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => void handleAddSubscription()}
+                    disabled={subBusy}
+                    className="flex items-center gap-1.5 bg-green-600 text-white rounded-lg px-4 py-2 text-[13px] hover:bg-green-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    {subBusy ? <Loader2 size={14} className="animate-spin" /> : null}
+                    确定
+                  </button>
+                  <button onClick={() => setAddOpen(false)} className="px-4 py-2 rounded-lg text-[13px] text-zinc-600 hover:bg-zinc-100">
+                    取消
+                  </button>
+                </div>
               </div>
-            </div>
-            <p className="text-[11px] text-zinc-400">0 = 不自动拉取；「一键拉取并导入」立即拉取并按目标导入，自动拉取按间隔后台执行</p>
+            )}
 
-            <div className="flex items-center gap-3 pt-1">
-              <button
-                type="button"
-                onClick={() => void handleSubscribeImport()}
-                disabled={subscribeBusy}
-                className="flex items-center gap-1.5 bg-green-600 text-white rounded-lg px-4 py-2 text-[13px] hover:bg-green-700 disabled:opacity-60 disabled:cursor-not-allowed"
-              >
-                {subscribeBusy ? <Loader2 size={14} className="animate-spin" /> : <Rss size={14} />}
-                {subscribeBusy ? '拉取中…' : '一键拉取并导入'}
-              </button>
-              <button onClick={() => void handleSaveSubscribe()} className="bg-zinc-900 text-white rounded-lg px-4 py-2 text-[13px] hover:bg-zinc-700">
-                保存
-              </button>
-            </div>
+            {/* 订阅列表 */}
+            <div className="border border-zinc-200 rounded-xl overflow-hidden">
+              <div className="px-4 py-2.5 bg-zinc-50 border-b border-zinc-100 text-[12px] text-zinc-500 flex items-center justify-between">
+                <span>我的订阅（{subs.length}）</span>
+                <span className="text-[11px] text-zinc-400">间隔 0 = 不自动拉取</span>
+              </div>
+              {subs.length === 0 ? (
+                <div className="py-10 text-center text-[12px] text-zinc-400">暂无订阅，点「新增订阅」添加</div>
+              ) : (
+                <div className="divide-y divide-zinc-100">
+                  {subs.map((s) => (
+                    <div key={s.url} className="px-4 py-3 flex items-center gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[13px] text-zinc-800 truncate">{s.url}</div>
+                        <div className="text-[11px] text-zinc-400 mt-0.5">
+                          每{s.interval_min > 0 ? `${s.interval_min} 分钟` : '不自动拉取'} · {s.target === 'solo' ? '独享' : s.target === 'pool' ? '进池' : '仅节点池'}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => void handleImportSub(s.url)}
+                        disabled={importingUrl === s.url}
+                        className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-[12px] text-teal-700 bg-teal-50 border border-teal-100 hover:bg-teal-100 disabled:opacity-60"
+                      >
+                        {importingUrl === s.url ? <Loader2 size={12} className="animate-spin" /> : <Rss size={12} />}
+                        {importingUrl === s.url ? '拉取中…' : '拉取'}
+                      </button>
+                      <button
+                        onClick={() => void handleDeleteSub(s.url)}
+                        disabled={deletingUrl === s.url}
+                        className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-[12px] text-red-600 bg-red-50 hover:bg-red-100 disabled:opacity-60"
+                      >
+                        <Trash2 size={12} /> 删除
+                      </button>
+                    </div>
+                  ))}
                 </div>
               )}
-            </section>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* T3: 全局删除进度悬浮面板（释放订阅实例，不阻塞其他操作） */}
+      {subDeleteProgress.active && (
+        <div className="fixed bottom-4 right-4 z-[70] w-60 bg-white/95 backdrop-blur rounded-xl border border-zinc-200 shadow-lg px-4 py-3">
+          <div className="text-[12px] font-medium text-zinc-700 mb-1">正在释放订阅实例…</div>
+          <div className="flex items-center justify-between text-[12px] text-zinc-500 mb-1.5">
+            <span>{subDeleteProgress.done} / {subDeleteProgress.total}</span>
+            <span>{subDeleteProgress.total > 0 ? Math.round((subDeleteProgress.done / subDeleteProgress.total) * 100) : 0}%</span>
+          </div>
+          <div className="h-1.5 bg-zinc-100 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-red-500 transition-all duration-200"
+              style={{ width: `${subDeleteProgress.total > 0 ? (subDeleteProgress.done / subDeleteProgress.total) * 100 : 0}%` }}
+            />
           </div>
         </div>
       )}
