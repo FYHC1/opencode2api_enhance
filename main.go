@@ -237,6 +237,7 @@ func registerHTTPRoutes(mux *http.ServeMux, managerInst *manager.Manager) {
 	mux.HandleFunc("/api/admin/subscribe/import-pool", loggingMiddleware(requireAuth(managerInst.SubscribeImportPoolHandler())))
 	// T3: 订阅源列表管理（新增/删除/立即拉取）+ 列表查看。
 	mux.HandleFunc("/api/admin/subscriptions", loggingMiddleware(requireAuth(managerInst.SubscriptionsListHandler())))
+	mux.HandleFunc("/api/admin/subscriptions/count", loggingMiddleware(requireAuth(managerInst.SubscriptionsCountHandler())))
 	mux.HandleFunc("/api/admin/subscriptions/add", loggingMiddleware(requireAuth(managerInst.SubscriptionsAddHandler())))
 	mux.HandleFunc("/api/admin/subscriptions/delete", loggingMiddleware(requireAuth(managerInst.SubscriptionsDeleteHandler())))
 	mux.HandleFunc("/api/admin/subscriptions/import", loggingMiddleware(requireAuth(managerInst.SubscriptionsImportHandler())))

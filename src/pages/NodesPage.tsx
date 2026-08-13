@@ -100,21 +100,30 @@ export default function NodesPage({
     }
   }
 
-  // T3: 删除订阅——先释放其节点实例（带全局进度），再删除源
+  // T3/V2: 删除订阅——先查使用中实例数并确认，再停止+释放（右下角进度面板）
   const handleDeleteSub = async (url: string) => {
-    if (!confirm('确定删除该订阅？将释放该订阅已创建的实例。')) return
     setDeletingUrl(url)
-    setSubDeleteProgress({ active: true, done: 0, total: 1 })
     try {
-      // 删除订阅源（后端返回该订阅分组名，用于定位实例）
+      // 1) 查询该订阅使用中实例数
+      const cnt = await api.subscriptionsCount(url)
+      const usingTotal = cnt.running + cnt.stopped
+      const msg =
+        usingTotal > 0
+          ? `该订阅正在使用 ${usingTotal} 个节点（运行中 ${cnt.running}、已停止 ${cnt.stopped}）。删除订阅将停止并释放这些实例，是否继续？`
+          : '该订阅没有已创建的实例，删除订阅源即可，是否继续？'
+      if (!confirm(msg)) {
+        setDeletingUrl(null)
+        return
+      }
+      // 2) 删除订阅源（返回分组名）
       const r = await api.subscriptionsDelete(url)
       if (!r.removed) {
         toast('订阅源未找到，可能已删除', false)
-        setSubDeleteProgress({ active: false, done: 0, total: 0 })
         await loadSubs()
+        setDeletingUrl(null)
         return
       }
-      // 按分组名定位并释放实例（该订阅导入的实例）
+      // 3) 按分组名定位实例并停止（运行中的先停，再全部释放）
       let names: string[] = []
       if (r.group) {
         const insts = await api.listInstances()
@@ -122,16 +131,22 @@ export default function NodesPage({
         const subNodes = nodes.filter((n) => n.group === r.group)
         names = insts.filter((i) => subNodes.some((n) => n.name === i.node)).map((i) => i.name)
       }
-      setSubDeleteProgress({ active: true, done: 0, total: Math.max(names.length, 1) })
+      const total = Math.max(names.length, 1)
+      setSubDeleteProgress({ active: true, done: 0, total })
+      // 停止全部实例（已停止的幂等跳过），再释放
+      if (names.length > 0) {
+        await api.batchStop([...names]).catch(() => {})
+        setSubDeleteProgress({ active: true, done: 0, total })
+      }
       // 分块并发释放（与实例池释放一致：4 并发）
       let done = 0
       for (let i = 0; i < names.length; i += 4) {
         const chunk = names.slice(i, i + 4)
         await Promise.allSettled(chunk.map((n) => api.removeInstance(n)))
         done += chunk.length
-        setSubDeleteProgress({ active: true, done, total: names.length })
+        setSubDeleteProgress({ active: true, done, total })
       }
-      toast(`已删除订阅${names.length > 0 ? `，并释放 ${names.length} 个实例` : ''}`, true)
+      toast(`已删除订阅，并释放 ${names.length} 个实例`, true)
       await loadSubs()
       await loadNodes()
     } catch (e) {

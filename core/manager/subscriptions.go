@@ -218,7 +218,28 @@ func (m *Manager) SubscriptionsAddHandler() http.HandlerFunc {
 	}
 }
 
-// SubscriptionsDeleteHandler POST {url} → 删除订阅源；返回该订阅分组名（供前端释放实例）。
+// SubscriptionsCountHandler GET ?url= → 返回该订阅使用中实例数（运行中/停止）。
+// 用于删除确认弹窗（告知"正在使用的节点有 X 个是否仍删除"）。
+func (m *Manager) SubscriptionsCountHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !requireMethodOK(w, r, http.MethodGet) {
+			return
+		}
+		url := r.URL.Query().Get("url")
+		if url == "" {
+			writeErr(w, http.StatusBadRequest, "url 必填")
+			return
+		}
+		group := ""
+		if _, meta, err := fetchSubscriptionWithMeta(url); err == nil {
+			group = m.groupNameFor(url, meta)
+		}
+		running, stopped := m.countInstancesForGroup(group)
+		writeJSON(w, map[string]any{"group": group, "running": running, "stopped": stopped})
+	}
+}
+
+// SubscriptionsDeleteHandler POST {url} → 删除订阅源；返回该订阅分组名 + 该分组使用中实例数。
 // 删除前先拉取一次该 URL 的元信息以获得分组名（失败则返回空 group，仅删源不释放）。
 func (m *Manager) SubscriptionsDeleteHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -236,13 +257,39 @@ func (m *Manager) SubscriptionsDeleteHandler() http.HandlerFunc {
 		if _, meta, err := fetchSubscriptionWithMeta(req.URL); err == nil {
 			group = m.groupNameFor(req.URL, meta)
 		}
+		// 统计该分组使用中实例数（订阅缓存节点名 → 实例 Node 匹配）
+		running, stopped := m.countInstancesForGroup(group)
 		removed, err := m.RemoveSubscription(req.URL)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, map[string]any{"status": "ok", "removed": removed, "group": group})
+		writeJSON(w, map[string]any{"status": "ok", "removed": removed, "group": group, "running": running, "stopped": stopped})
 	}
+}
+
+// countInstancesForGroup 统计某订阅分组名下的实例数（按订阅缓存节点名匹配实例 Node）。
+// group 为空时返回 0/0（调用方不释放）。
+func (m *Manager) countInstancesForGroup(group string) (running, stopped int) {
+	if group == "" {
+		return 0, 0
+	}
+	nodeNames := map[string]bool{}
+	for _, n := range m.loadSubscriptionCache() {
+		if n.Group == group {
+			nodeNames[n.Name] = true
+		}
+	}
+	for _, inst := range m.ListInstances() {
+		if nodeNames[inst.Node] {
+			if inst.Status.State == "Running" {
+				running++
+			} else {
+				stopped++
+			}
+		}
+	}
+	return running, stopped
 }
 
 // SubscriptionsImportHandler POST {url} → 立即拉取该订阅源（按源目标导入）。

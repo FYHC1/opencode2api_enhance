@@ -160,3 +160,36 @@ func TestSubscriptionsListHandlerHTTP(t *testing.T) {
 		t.Fatalf("after add = %+v", m.loadSubscriptions())
 	}
 }
+
+// V2: 删除订阅前统计使用中实例数（按订阅缓存节点名匹配实例 Node）。
+func TestCountInstancesForGroup(t *testing.T) {
+	m := New(t.TempDir())
+	// 订阅缓存：分组 "机场A" 两个节点 + 分组 "机场B" 一个节点
+	_ = m.saveSubscriptionCache([]SubscribeNode{
+		{Name: "HK-01", Group: "机场A"},
+		{Name: "JP-02", Group: "机场A"},
+		{Name: "US-03", Group: "机场B"},
+	})
+	// 未运行（Stopped）实例也属于"使用中"（占着节点）
+	_ = m.AddInstance(Instance{Name: "hk1", Node: "HK-01", Port: 28101, JoinGateway: false})
+	_ = m.AddInstance(Instance{Name: "jp2", Node: "JP-02", Port: 28102, JoinGateway: false})
+	_ = m.AddInstance(Instance{Name: "us3", Node: "US-03", Port: 28103, JoinGateway: false})
+	// jp2 置为运行中
+	if inst, ok := m.FindInstance("jp2"); ok {
+		inst.Status = StatusRunning()
+		_ = m.UpdateInstance(inst)
+	}
+
+	running, stopped := m.countInstancesForGroup("机场A")
+	if running != 1 || stopped != 1 {
+		t.Fatalf("机场A running=%d stopped=%d, want 1/1", running, stopped)
+	}
+	running, stopped = m.countInstancesForGroup("机场B")
+	if running != 0 || stopped != 1 {
+		t.Fatalf("机场B running=%d stopped=%d, want 0/1", running, stopped)
+	}
+	running, stopped = m.countInstancesForGroup("不存在")
+	if running != 0 || stopped != 0 {
+		t.Fatalf("不存在 running=%d stopped=%d, want 0/0", running, stopped)
+	}
+}

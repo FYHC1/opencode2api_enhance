@@ -479,10 +479,12 @@ export const api = {
 
   // T3: 订阅源列表管理（多条订阅：新增/删除/立即拉取 + 列表）
   subscriptionsList: () => req<{ subscriptions: SubscriptionSource[] }>('GET', '/subscriptions'),
+  subscriptionsCount: (url: string) =>
+    req<{ group: string; running: number; stopped: number }>('GET', `/subscriptions/count?url=${encodeURIComponent(url)}`),
   subscriptionsAdd: (url: string, intervalMin: number, target: SubscriptionTargetLabel) =>
     req<void>('POST', '/subscriptions/add', { url, interval_min: intervalMin, target }),
   subscriptionsDelete: (url: string) =>
-    req<{ status: string; removed: boolean; group: string }>('POST', '/subscriptions/delete', { url }),
+    req<{ status: string; removed: boolean; group: string; running: number; stopped: number }>('POST', '/subscriptions/delete', { url }),
   subscriptionsImport: (url: string) =>
     req<{ status: string; imported: number; target: string }>('POST', '/subscriptions/import', { url }),
 
