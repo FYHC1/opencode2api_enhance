@@ -39,8 +39,6 @@ export default function SettingsPage({
   // 一键拉取目标：独享 / 进池（main 功能 M1）
   const [subscribeTarget, setSubscribeTarget] = useState<'solo' | 'pool'>('solo')
   const [subscribeBusy, setSubscribeBusy] = useState(false)
-  // 统一网关密钥（main 功能 M6）
-  const [gatewayKey, setGatewayKey] = useState('')
   // 健康巡检（main 功能 M2）
   const [healthInterval, setHealthInterval] = useState(0)
   const [healthThreshold, setHealthThreshold] = useState(0)
@@ -213,24 +211,7 @@ export default function SettingsPage({
     }
   }
 
-  // 统一网关密钥（main 功能 M6）
-  const handleSaveGatewayKey = async () => {
-    const v = gatewayKey.trim()
-    if (v && v.length < 8) {
-      toast('网关密钥至少 8 个字符', false)
-      return
-    }
-    try {
-      await api.configSet('gateway_key', v)
-      setGatewayKey('')
-      const cfg = await api.configGet()
-      setConfig(cfg)
-      toast(v ? '网关密钥已更新（重启网关后生效）' : '网关密钥已重置为默认', true)
-    } catch (e) {
-      console.error('保存网关密钥失败', e)
-      toast('保存失败', false)
-    }
-  }
+  // 统一网关密钥（main 功能 M6）已在实例池页提供（同一 gateway_key，避免两处重复入口）——此处不再保留
 
   // 健康巡检（main 功能 M2）
   const handleSaveHealth = async () => {
@@ -585,27 +566,6 @@ export default function SettingsPage({
         </div>
 
         <button onClick={handleSaveSubscribe} className="bg-zinc-900 text-white rounded-lg px-4 py-2 hover:bg-zinc-700">
-          保存
-        </button>
-      </div>
-
-      {/* 统一网关密钥（main 功能 M6） */}
-      <div className="bg-white rounded-2xl border p-5 space-y-4">
-        <h2 className="text-lg font-medium text-zinc-900">统一网关密钥</h2>
-        <p className="text-zinc-500 text-xs">
-          客户端访问统一网关（实例池地址）时使用的 API 密钥{config.has_gateway_key ? '（当前已设置，留空则不修改）' : '（默认 sk-unified-local）'}
-        </p>
-        <div className="space-y-2">
-          <label className="block text-sm font-medium text-zinc-700">新密钥（至少 8 字符，留空 = 重置为默认）</label>
-          <input
-            type="password"
-            placeholder={config.has_gateway_key ? '输入新密钥以更换' : ''}
-            value={gatewayKey}
-            onChange={(e) => setGatewayKey(e.target.value)}
-            className="w-full px-3 py-2 border rounded-lg"
-          />
-        </div>
-        <button onClick={handleSaveGatewayKey} className="bg-zinc-900 text-white rounded-lg px-4 py-2 hover:bg-zinc-700">
           保存
         </button>
       </div>
