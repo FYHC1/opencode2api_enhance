@@ -1180,7 +1180,10 @@ function qualityBadge(r?: PoolQualityRecord) {
   }
   const [cls, label] = levelMap[r.level] ?? levelMap.healthy
   return (
-    <span className={clsx('inline-block px-2 py-0.5 rounded-full text-[11px] font-medium whitespace-nowrap', cls)}>
+    <span
+      className={clsx('inline-block px-2 py-0.5 rounded-full text-[11px] font-medium whitespace-nowrap', cls)}
+      title={`成功率 ${(r.success_rate * 100).toFixed(0)}% · 平均延迟 ${r.avg_latency_ms}ms · 连续失败 ${r.consecutive_failures} 次`}
+    >
       {r.score} 分 · {label}
       {r.avg_latency_ms > 0 ? ` · ${r.avg_latency_ms}ms` : ''}
     </span>
