@@ -41,7 +41,7 @@ COPY --from=build /out/opencode2api /app/bin/opencode2api
 COPY --from=build /out/bin /app/bin
 COPY --from=build /out/dist /app/dist
 ENV OPCODE2API_DATA_DIR=/data
-EXPOSE 40000 18080
+EXPOSE 40000 40080
 VOLUME ["/data"]
 USER app
 ENTRYPOINT ["/app/bin/opencode2api"]

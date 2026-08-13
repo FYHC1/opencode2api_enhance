@@ -15,8 +15,9 @@ import (
 // unifiedGatewayKey 统一网关本地 API 密钥（Rust gateway.rs 同值）。
 const unifiedGatewayKey = "sk-unified-local"
 
-// unifiedGatewayPort 统一网关进程默认端口（release；debug 21080 由壳层处理）。
-const unifiedGatewayPort = 18080
+// unifiedGatewayPort 统一网关进程默认端口（与槽位表一致：release 40080；
+// dev/便携/web-dev 槽位由壳层按 OPCODE2API_GATEWAY_PORT 注入覆盖）。
+const unifiedGatewayPort = 40080
 
 // httpStatusLine 解析 HTTP 响应首行得出状态码。
 func httpStatusLine(line string) (int, error) {

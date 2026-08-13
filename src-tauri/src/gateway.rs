@@ -374,7 +374,7 @@ fn fetch_gateway_models(port: u16, password: &str) -> Result<Vec<String>> {
 mod tests {
     use super::*;
 
-    /// 网关端口三环境隔离：debug 构建（tauri dev）用 21080，release 构建用生产 18080
+    /// 网关端口三环境隔离：debug 构建（tauri dev）用 44180，release 构建用生产 40080
     #[test]
     fn gateway_port_isolated_by_build() {
         #[cfg(debug_assertions)]

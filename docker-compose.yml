@@ -7,11 +7,11 @@ services:
     environment:
       # 数据目录（卷挂载持久化）；端口三件套按需覆盖
       OPCODE2API_DATA_DIR: /data
-      OPCODE2API_GATEWAY_PORT: "18080"
+      OPCODE2API_GATEWAY_PORT: "40080"
       OPCODE2API_INSTANCE_BASE_PORT: "48100"
     ports:
       - "44000:40000" # 管理面板（本地验证避开正式版 40000；服务器部署可按需改回）
-      - "18080:18080" # 统一网关（客户端接入）
+      - "44080:40080" # 统一网关（客户端接入；宿主 44080 避正式版 40080）
     # 生产务必修改默认密码（123456），或保持无鉴权 + 前置反向代理：
     # command: ["-port", "40000", "-listen", "0.0.0.0", "-password", "换成你的密钥"]
     # 默认无鉴权启动（-password ""，与桌面版一致；前端为无登录页的六页 UI，公网需反向代理保护）

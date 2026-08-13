@@ -384,7 +384,7 @@ export default function PoolPage({
               className="flex items-center gap-1 text-teal-700 hover:underline"
               title="点击复制"
             >
-              <code className="text-[13px]">{gw?.address ?? (import.meta.env.DEV ? 'http://127.0.0.1:21080/v1' : 'http://127.0.0.1:18080/v1')}</code>
+              <code className="text-[13px]">{gw?.address ?? (import.meta.env.DEV ? 'http://127.0.0.1:44180/v1' : 'http://127.0.0.1:40080/v1')}</code>
               <Copy size={12} />
             </button>
             <div className="mt-1 text-[11px] text-zinc-400">

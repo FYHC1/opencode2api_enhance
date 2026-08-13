@@ -55,7 +55,7 @@ type Gateway struct {
 }
 
 // managerGatewayPort 网关端口：优先环境变量 OPCODE2API_GATEWAY_PORT（debug/release 隔离），
-// 其次 config.gateway_port，否则默认 unifiedGatewayPort（release 18080）。
+// 其次 config.gateway_port，否则默认 unifiedGatewayPort（release 40080）。
 func (m *Manager) managerGatewayPort() uint16 {
 	if s := os.Getenv("OPCODE2API_GATEWAY_PORT"); s != "" {
 		if n := parsePositiveInt(s); n > 0 && n < 65536 {
