@@ -1,11 +1,15 @@
 name: build-and-release
 
-# 触发：push 到 main / feat/desktop-app，且提交信息含「CI」时自动打包
+# 触发：
+#   - push 到 main / feat/desktop-app，且提交信息含「CI」时自动打包（产物=artifacts）
+#   - push 版本 tag（v*）时自动打包 + 发布 GitHub Release（产物=Release 附件）
 on:
   push:
     branches:
       - main
       - feat/desktop-app
+    tags:
+      - 'v*'
 
 jobs:
   build:
@@ -37,7 +41,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
-    if: contains(github.event.head_commit.message, 'CI')
+    if: contains(github.event.head_commit.message, 'CI') || startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v4
 
@@ -115,3 +119,24 @@ jobs:
             src-tauri/target/release/bundle/deb/*.deb
             src-tauri/target/release/bundle/appimage/*.AppImage
             src-tauri/target/release/bundle/dmg/*.dmg
+
+  # GitHub Release：仅 tag（v*）触发时执行——汇总三平台产物并发布（首次新建，幂等）。
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/**/*
+          generate_release_notes: true
+          name: opencode2api ${{ github.ref_name }}
+          fail_on_unmatched_files: false
