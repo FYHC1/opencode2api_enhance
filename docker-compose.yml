@@ -18,6 +18,9 @@ services:
     command: ["-port", "40000", "-listen", "0.0.0.0", "-password", ""]
     volumes:
       - manager-data:/data
+    extra_hosts:
+      # 容器内访问宿主机（Clash 外部控制/本地订阅源）：host.docker.internal -> 宿主机
+      - "host.docker.internal:host-gateway"
 
 volumes:
   manager-data:
