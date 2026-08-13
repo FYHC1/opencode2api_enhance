@@ -8,6 +8,8 @@
 
 特别感谢[FYHC1](https://github.com/FYHC1)——v1.0.2 修复了两个关键问题：sing-box 生成配置含非法 `transport {type:tcp}` 导致扫描时 sing-box 启动即退出，以及统一网关进程工作目录错位导致统计界面读不到网关流量（含按节点拆分 token 统计明细）。这两项修复直接消除了日常使用中的两个「硬伤」：节点扫描后 sing-box 不再一启动就崩，统一网关的 token 消耗在统计界面实时可见、并能按节点下钻到用量明细——每个节点的流量消耗一目了然。
 
+特别感谢[383827453-max](https://github.com/383827453-max)（383827453@qq.com）——发现了订阅/Clash 解析中 WS `Host` 头丢失导致部分节点 **403 无法连接**的深坑，并完整修复：VLESS 订阅 `host` 参数不再被误当 `path`，YAML / mihomo API / 订阅三种解析路径统一带出 Host 头，连老式扁平 `ws-headers` 写法也兼容。这直接解决了靠前置代理节点"看着能用、一连接就 403"的困扰，让大量节点真正可连。
+
 - Go 代理核心源于 [`6Kmfi6HP/opencode2api`](https://github.com/6Kmfi6HP/opencode2api)
 - 前端设计样式参考 Windsurf Account Manager
 
