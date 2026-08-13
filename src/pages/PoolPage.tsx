@@ -818,7 +818,7 @@ export default function PoolPage({
                   <p className="text-[12px] text-zinc-400">
                     链路级主动探活（经实例出口发真实请求）+ 质量加权路由：坏节点自动降权/剔除，熔断到期自动回归。总开关在路由模式处。
                   </p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-2.5 pt-1">
+              <div className="space-y-2.5 pt-1">
                 <div className="flex items-center gap-3">
                   <label className="text-[13px] text-zinc-700 w-40 shrink-0">探活间隔（秒，默认 45）</label>
                   <input
@@ -867,7 +867,7 @@ export default function PoolPage({
 
               <div className="pt-2 border-t border-zinc-100">
                 <div className="text-[13px] font-medium text-zinc-700 mb-2">并发设置</div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-2.5">
+                <div className="space-y-2.5">
                   {([
                     ['pool_race_copies', '竞速并行', 1, 4],
                     ['scan_concurrency', '节点扫描', 1, 16],
@@ -928,7 +928,7 @@ export default function PoolPage({
                   <p className="text-[12px] text-zinc-400">
                     每次请求在区间内随机取超时值，避免固定超时被上游识别为定时扫描；最小值防止过密重试
                   </p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-2.5 pt-1">
+              <div className="space-y-2.5 pt-1">
                 <div className="flex items-center gap-3">
                   <label className="text-[13px] text-zinc-700 w-44 shrink-0">首字超时 TTFT（毫秒，默认 10s）</label>
                   <input

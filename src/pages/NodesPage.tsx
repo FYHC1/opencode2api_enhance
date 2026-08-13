@@ -550,54 +550,52 @@ export default function NodesPage({
                 <div className="p-4 space-y-4">
             <p className="text-[12px] text-zinc-400">支持 Clash YAML / base64 / v2ray 链接（vmess/vless/trojan/ss/hysteria2），重复节点自动跳过</p>
 
-            <div className="space-y-1">
-              <label className="block text-[13px] font-medium text-zinc-700">订阅 URL</label>
+            <div className="flex items-center gap-3">
+              <label className="text-[13px] text-zinc-700 w-40 shrink-0">订阅 URL</label>
               <input
                 type="text"
                 placeholder="https://example.com/sub"
                 value={subscribeUrl}
                 onChange={(e) => setSubscribeUrl(e.target.value)}
-                className="w-full px-3 py-2 border rounded-lg text-[13px]"
+                className="flex-1 min-w-0 px-3 py-2 border rounded-lg text-[13px]"
               />
             </div>
 
-            <div className="space-y-1">
-              <label className="block text-[13px] font-medium text-zinc-700">自动拉取间隔（分钟，0 = 不自动拉取）</label>
-              <div className="flex items-center gap-3">
-                <input
-                  type="number"
-                  min={0}
-                  value={subscribeInterval}
-                  onChange={(e) => setSubscribeInterval(Number(e.target.value))}
-                  className="w-28 px-3 py-2 border rounded-lg text-[13px]"
-                />
-                <div className="flex items-center rounded-lg border border-zinc-200 bg-white p-0.5">
-                  <button
-                    type="button"
-                    onClick={() => setSubscribeTarget('solo')}
-                    className={clsx(
-                      'px-3 py-1 rounded-md text-[12px] transition-colors',
-                      subscribeTarget === 'solo' ? 'bg-zinc-900 text-white' : 'text-zinc-500 hover:bg-zinc-100',
-                    )}
-                    title="导入为独享实例（一人一实例，默认）"
-                  >
-                    独享
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSubscribeTarget('pool')}
-                    className={clsx(
-                      'px-3 py-1 rounded-md text-[12px] transition-colors',
-                      subscribeTarget === 'pool' ? 'bg-zinc-900 text-white' : 'text-zinc-500 hover:bg-zinc-100',
-                    )}
-                    title="导入并标记进实例池（聚合到统一网关）"
-                  >
-                    进池
-                  </button>
-                </div>
+            <div className="flex items-center gap-3">
+              <label className="text-[13px] text-zinc-700 w-40 shrink-0">自动拉取间隔（分钟）</label>
+              <input
+                type="number"
+                min={0}
+                value={subscribeInterval}
+                onChange={(e) => setSubscribeInterval(Number(e.target.value))}
+                className="flex-1 min-w-0 px-3 py-2 border rounded-lg text-[13px]"
+              />
+              <div className="flex items-center rounded-lg border border-zinc-200 bg-white p-0.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setSubscribeTarget('solo')}
+                  className={clsx(
+                    'px-3 py-1 rounded-md text-[12px] transition-colors',
+                    subscribeTarget === 'solo' ? 'bg-zinc-900 text-white' : 'text-zinc-500 hover:bg-zinc-100',
+                  )}
+                  title="导入为独享实例（一人一实例，默认）"
+                >
+                  独享
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSubscribeTarget('pool')}
+                  className={clsx(
+                    'px-3 py-1 rounded-md text-[12px] transition-colors',
+                    subscribeTarget === 'pool' ? 'bg-zinc-900 text-white' : 'text-zinc-500 hover:bg-zinc-100',
+                  )}
+                  title="导入并标记进实例池（聚合到统一网关）"
+                >
+                  进池
+                </button>
               </div>
-              <p className="text-[11px] text-zinc-400">「一键拉取并导入」立即拉取并按目标导入；自动拉取按间隔后台执行</p>
             </div>
+            <p className="text-[11px] text-zinc-400">0 = 不自动拉取；「一键拉取并导入」立即拉取并按目标导入，自动拉取按间隔后台执行</p>
 
             <div className="flex items-center gap-3 pt-1">
               <button
