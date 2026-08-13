@@ -200,7 +200,8 @@ export default function SettingsPage({
       </div>
       )}
 
-      {/* 开机自启 */}
+      {/* 开机自启（仅桌面端：桌面临近登录自启；Web/Docker/Linux 服务器 headless 端隐藏，服务器用 systemd/容器编排管理） */}
+      {isDesktop && (
       <div className="bg-white rounded-2xl border p-5 space-y-4">
         <h2 className="text-lg font-medium text-zinc-900">开机自启</h2>
         
@@ -216,8 +217,9 @@ export default function SettingsPage({
           </label>
           <span className="text-sm text-zinc-700">开机时自动启动管理器</span>
         </div>
-        <p className="text-zinc-500 text-xs">Windows 注册表</p>
+        <p className="text-zinc-500 text-xs">Windows 注册表 / Linux .desktop / macOS LaunchAgent</p>
       </div>
+      )}
 
       {/* 残留进程清理（孤儿实例 / 探针残留） */}
       <div className="bg-white rounded-2xl border p-5 space-y-4">
