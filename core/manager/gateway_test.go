@@ -4,6 +4,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -188,6 +189,61 @@ func TestRestartPoolStartsMembersThenGateway(t *testing.T) {
 	}
 	if lastIdx != len(run.starts)-1 {
 		t.Fatalf("gateway should be last start (idx %d of %d)", lastIdx, len(run.starts))
+	}
+	if res.Error != "" {
+		t.Fatalf("restart error: %s", res.Error)
+	}
+}
+
+// T1: 仅重启「运行中」的池成员——已停止的池成员与独享实例不参与。
+func TestRestartPoolOnlyRunningMembers(t *testing.T) {
+	m := newTestManager(t)
+	run := &fakeRunner{}
+	ln1, ln2 := occupyPort(t, 27911), occupyPort(t, 27911+singboxPortOffset)
+	defer ln1.Close()
+	defer ln2.Close()
+	// 运行中的池成员 r1
+	runningInstanceHeld(t, m, run, "r1", 27911, true, ln1, ln2)
+	// 已停止的池成员 s1（JoinGateway=true 但状态 Stopped）
+	_ = m.AddInstance(Instance{
+		Name: "s1", Port: 27912, Node: "stopped-node", Password: genSkKey(),
+		SingboxPort: 27912 + singboxPortOffset, JoinGateway: true,
+	})
+	// 独享实例 solo（JoinGateway=false，运行中也不应被动）
+	ln3, ln4 := occupyPort(t, 27913), occupyPort(t, 27913+singboxPortOffset)
+	defer ln3.Close()
+	defer ln4.Close()
+	runningInstanceHeld(t, m, run, "solo", 27913, false, ln3, ln4)
+
+	gw := NewGateway(m, 20091)
+	// 记录重启前已 start 过的进程集合（solo 是运行中 held，start 计数已含它）
+	preStart := len(run.starts)
+	res := m.RestartPool(run, gw)
+	if res.Stopped != 1 {
+		t.Fatalf("stopped = %d, want 1 (仅 r1)", res.Stopped)
+	}
+	if res.Started != 1 {
+		t.Fatalf("started = %d, want 1", res.Started)
+	}
+	// 期间不应新增对 s1（已停止池成员，端口 27912）或 solo（独享，端口 27913）的实例启动
+	memberStartPort := func(spec ExecSpec) int {
+		for i, a := range spec.Args {
+			if a == "-port" && i+1 < len(spec.Args) {
+				if p, e := strconv.Atoi(spec.Args[i+1]); e == nil {
+					return p
+				}
+			}
+		}
+		return 0
+	}
+	for _, spec := range run.starts[preStart:] {
+		if hasGatewayStart([]ExecSpec{spec}) {
+			continue // 网关进程不算
+		}
+		p := memberStartPort(spec)
+		if p == 27912 || p == 27913 {
+			t.Fatalf("restart must not touch port %d (got %+v)", p, spec.Args)
+		}
 	}
 	if res.Error != "" {
 		t.Fatalf("restart error: %s", res.Error)

@@ -1,49 +1,41 @@
-// 一键重启实例池（Rust commands.rs restart_pool 移植）。
-// 顺序：停网关 → 全停实例（含残留）→ 等 300ms → 强清池端口+网关端口 → 等 200ms →
-// 并行启动全部池成员 → 同步网关（自动拉起）。
+// 一键重启实例池（Rust commands.rs restart_pool 移植，T1 语义修正）。
+// 仅重启「运行中」的池成员：并行 stop → 短暂等待 → 并行 start → 同步网关（自动拉起）。
+// 独享实例与已停止的池成员一律不碰；启动失败如实返回（触发启动即算完成，不做多余补救）。
 package manager
 
 import "time"
 
-// RestartPool 一键重启池。gw 为 nil 时跳过网关步骤。
+// RestartPool 一键重启池：仅对 Running 状态的池成员做 stop→start。
+// gw 为 nil 时跳过网关步骤。
 func (m *Manager) RestartPool(runner Runner, gw *Gateway) RestartPoolResult {
 	res := RestartPoolResult{Stopped: 0, Started: 0, FreedPorts: []uint16{}}
 	if runner == nil {
 		runner = &realRunner{}
 	}
 
-	// 1) 停统一网关
+	// 1) 停统一网关（调度员先停，避免重启期间请求打到正在被重启的成员）
 	if gw != nil {
 		gw.stop(runner)
 	}
 
-	// 2) 全停实例（含残留 pid 的僵尸进程）；stopped 计数仅统计池成员（对齐 Rust pool_names.len()）
-	m.StopAllInstances(runner)
+	// 2) 仅收集「运行中」的池成员；独享实例、已停止的池成员不参与
+	var targets []string
+	for _, inst := range m.ListInstances() {
+		if inst.JoinGateway && inst.Status.State == "Running" {
+			targets = append(targets, inst.Name)
+		}
+	}
+	res.Stopped = len(targets)
+
+	// 3) 并行停止这些成员（含运行中判定，幂等）
+	if len(targets) > 0 {
+		_ = m.BatchStop(runner, targets)
+	}
 	time.Sleep(300 * time.Millisecond)
 
-	// 3) 收集池成员端口 + 网关端口，强清占用
-	poolNames := []string{}
-	memberPorts := []uint16{}
-	for _, inst := range m.ListInstances() {
-		if inst.JoinGateway {
-			poolNames = append(poolNames, inst.Name)
-			memberPorts = append(memberPorts, inst.SingboxPort)
-		}
-	}
-	res.Stopped = len(poolNames)
-	allPorts := append(append([]uint16(nil), memberPorts...), m.managerGatewayPort())
-	for _, p := range allPorts {
-		if !isPortFree(p) {
-			if freed := m.ForceFreePort(runner, p); len(freed) > 0 {
-				res.FreedPorts = append(res.FreedPorts, p)
-			}
-		}
-	}
-	time.Sleep(200 * time.Millisecond)
-
-	// 4) 并行启动全部池成员
-	if len(poolNames) > 0 {
-		results := m.BatchStart(runner, poolNames)
+	// 4) 并行启动这些成员；失败如实记录（触发启动即算完成）
+	if len(targets) > 0 {
+		results := m.BatchStart(runner, targets)
 		for _, err := range results {
 			if err == nil {
 				res.Started++
@@ -51,7 +43,7 @@ func (m *Manager) RestartPool(runner Runner, gw *Gateway) RestartPoolResult {
 		}
 	}
 
-	// 5) 同步网关
+	// 5) 同步网关（成员已重启，网关需重读配置）
 	if gw != nil {
 		if err := gw.sync(runner); err == nil {
 			res.GatewayRunning = gw.isRunning(runner)
