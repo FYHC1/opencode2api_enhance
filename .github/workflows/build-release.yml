@@ -81,12 +81,24 @@ jobs:
         shell: bash
         run: |
           mkdir -p bin sbx
+          # GitHub release 偶发网络抖动（curl 52 Empty reply）：直连重试 4 次，失败切镜像兜底
+          dl() {
+            local url="$1" out="$2"
+            for base in "" "https://gh-proxy.com/" "https://ghfast.top/"; do
+              local u="${base}${url}"
+              echo "== trying: $u"
+              if curl -fsSL --retry 4 --retry-all-errors --retry-delay 3 -o "$out" "$u"; then
+                return 0
+              fi
+            done
+            return 1
+          }
           if [ "${{ matrix.sb_archive }}" = "zip" ]; then
-            curl -fsSL -o sb.zip "${{ matrix.sb_url }}"
+            dl "${{ matrix.sb_url }}" sb.zip
             unzip -o sb.zip -d sbx
             find sbx -name sing-box.exe -exec cp {} bin/sing-box.exe \;
           else
-            curl -fsSL -o sb.tgz "${{ matrix.sb_url }}"
+            dl "${{ matrix.sb_url }}" sb.tgz
             tar -xzf sb.tgz -C sbx
             find sbx -name sing-box -type f -exec cp {} bin/sing-box \;
             chmod +x bin/sing-box
