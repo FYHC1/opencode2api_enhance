@@ -25,6 +25,15 @@ export default function PoolPage({
   const [qualityBusy, setQualityBusy] = useState(false)
   // 性能模式开关（P2 质量加权路由 + 熔断）
   const [perfMode, setPerfMode] = useState<boolean | null>(null)
+  // S4: 池成员勾选——批量操作按勾选集作用；未勾选时保持"全部"行为
+  const [poolSelected, setPoolSelected] = useState<Set<string>>(new Set())
+  const toggleSelected = (name: string) =>
+    setPoolSelected((prev) => {
+      const n = new Set(prev)
+      if (n.has(name)) n.delete(name)
+      else n.add(name)
+      return n
+    })
   // 性能模式参数（P1/P2/P2b/D3）：探活间隔/窗口 + 熔断/半开 + 并发
   const [poolForm, setPoolForm] = useState({
     pool_probe_interval_sec: 45,
@@ -337,7 +346,9 @@ export default function PoolPage({
   const [releaseMode, setReleaseMode] = useState<'all' | 'running' | null>(null)
   // 一键释放池成员：按所选模式（完全/仅运行中）分块并发删除 + 实时上报进度
   const doReleaseAll = async (mode: 'all' | 'running') => {
-    const targets = mode === 'running' ? members.filter((i) => i.status === 'Running') : members
+    // S4: 有勾选时仅作用于勾选集；无勾选作用于全部成员
+    const base = poolSelected.size > 0 ? members.filter((i) => poolSelected.has(i.name)) : members
+    const targets = mode === 'running' ? base.filter((i) => i.status === 'Running') : base
     setReleaseMode(null)
     if (targets.length === 0) {
       toast(mode === 'running' ? '没有运行中的池成员' : '池中暂无成员')
@@ -401,9 +412,11 @@ export default function PoolPage({
 
   // 全部操作：一键启动 / 一键停止 / 一键测试全部池成员
   const doAll = async (kind: 'start' | 'stop' | 'test') => {
-    const names = members.map((i) => i.name)
+    // S4: 有勾选时仅作用于勾选集；无勾选作用于全部成员
+    const scope = poolSelected.size > 0 ? members.filter((i) => poolSelected.has(i.name)) : members
+    const names = scope.map((i) => i.name)
     if (names.length === 0) {
-      toast('池中暂无成员')
+      toast('没有可操作的池成员')
       return
     }
     setAllBusy(kind)
@@ -418,8 +431,8 @@ export default function PoolPage({
         fail = r.error_count
         skippedCount = kind === 'start' ? (r.skipped_count ?? 0) : 0
       } else {
-        // 测试：仅测试运行中的池成员；未启动计入「跳过」，避免误报失败。
-        const runningNames = members.filter((i) => i.status === 'Running').map((i) => i.name)
+        // 测试：仅测试运行中的成员；未启动计入「跳过」，避免误报失败。
+        const runningNames = scope.filter((i) => i.status === 'Running').map((i) => i.name)
         const skipped = names.length - runningNames.length
         if (runningNames.length === 0) {
           toast(`池成员均未启动（${names.length} 个），无需测试`, false)
@@ -460,8 +473,11 @@ export default function PoolPage({
   const running = gw?.running ?? false
   const freeModels = gw?.free_models ?? []
   const freeModelsError = gw?.free_models_error ?? null
-  // S3: 运行中池成员数（释放确认弹窗用）
-  const runningCount = members.filter((i) => i.status === 'Running').length
+  // S3/S4: 释放确认弹窗基数——有勾选时按勾选集，无勾选按全部
+  const selScope = poolSelected.size > 0 ? members.filter((i) => poolSelected.has(i.name)) : members
+  const selTotal = selScope.length
+  const selRunning = selScope.filter((i) => i.status === 'Running').length
+  const allChecked = members.length > 0 && poolSelected.size === members.length
 
   return (
     <div className="p-6 space-y-4">
@@ -653,6 +669,14 @@ export default function PoolPage({
             <Network size={15} className="text-teal-600" />
             <span className="text-[14px] font-semibold text-zinc-900">池成员</span>
             <span className="text-[12px] text-zinc-400">已入池的实例会聚合到统一网关地址，未入池实例保持独享</span>
+            {poolSelected.size > 0 && (
+              <button
+                onClick={() => setPoolSelected(new Set())}
+                className="text-[11px] px-2 py-0.5 rounded-md bg-zinc-100 text-zinc-600 hover:bg-zinc-200"
+              >
+                已选 {poolSelected.size} · 清除
+              </button>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -660,21 +684,24 @@ export default function PoolPage({
               disabled={members.length === 0 || !!allBusy}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-white bg-green-600 hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {allBusy === 'start' ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />} 全部启动
+                            {allBusy === 'start' ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
+              {poolSelected.size > 0 ? `启动已选（${poolSelected.size}）` : '全部启动'}
             </button>
             <button
               onClick={() => void doAll('stop')}
               disabled={members.length === 0 || !!allBusy}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-zinc-700 bg-white border border-zinc-200 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {allBusy === 'stop' ? <Loader2 size={14} className="animate-spin" /> : <Square size={14} />} 全部停止
+              {allBusy === 'stop' ? <Loader2 size={14} className="animate-spin" /> : <Square size={14} />}
+              {poolSelected.size > 0 ? `停止已选（${poolSelected.size}）` : '全部停止'}
             </button>
             <button
               onClick={() => void doAll('test')}
               disabled={members.length === 0 || !!allBusy}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-teal-700 bg-teal-50 border border-teal-100 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {allBusy === 'test' ? <Loader2 size={14} className="animate-spin" /> : <TestTube2 size={14} />} 一键测试
+              {allBusy === 'test' ? <Loader2 size={14} className="animate-spin" /> : <TestTube2 size={14} />}
+              {poolSelected.size > 0 ? `测试已选（${poolSelected.size}）` : '一键测试'}
             </button>
             <button
               onClick={() => setReleaseMode('all')}
@@ -682,7 +709,7 @@ export default function PoolPage({
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-red-600 bg-red-50 border border-red-100 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-40"
             >
               {releaseAllBusy ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
-              {releaseAllBusy ? '释放中…' : '一键释放'}
+              {releaseAllBusy ? '释放中…' : poolSelected.size > 0 ? `释放已选（${poolSelected.size}）` : '一键释放'}
             </button>
             <div
               className={clsx(
@@ -709,7 +736,16 @@ export default function PoolPage({
           <table className="w-full text-[13px]">
             <thead>
               <tr className="text-left text-zinc-400 border-b border-zinc-100">
-                <th className="py-3 pl-4">名称 / 节点 IP</th>
+                <th className="py-3 pl-4 w-8">
+                  <input
+                    type="checkbox"
+                    checked={allChecked}
+                    onChange={() => setPoolSelected(allChecked ? new Set() : new Set(members.map((i) => i.name)))}
+                    className="accent-zinc-900"
+                    title="全选/取消全选"
+                  />
+                </th>
+                <th className="py-3 pl-2">名称 / 节点 IP</th>
                 <th className="py-3 pl-2">端口</th>
                 <th className="py-3 pl-2">健康状态</th>
                 <th className="py-3 pl-2">链路质量</th>
@@ -721,7 +757,15 @@ export default function PoolPage({
                 const [cls, label] = statusBadge(i.status)
                 return (
                   <tr key={i.name} className="border-b border-zinc-50 hover:bg-zinc-50/50">
-                    <td className="py-2.5 pl-4">
+                    <td className="py-2.5 pl-4 w-8">
+                      <input
+                        type="checkbox"
+                        checked={poolSelected.has(i.name)}
+                        onChange={() => toggleSelected(i.name)}
+                        className="accent-zinc-900"
+                      />
+                    </td>
+                    <td className="py-2.5 pl-2">
                       <div className="font-medium text-zinc-800">{i.node}</div>
                       <div className="text-[11px] text-zinc-400">
                         {i.ip ? (
@@ -806,22 +850,27 @@ export default function PoolPage({
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-lg font-semibold text-zinc-900">释放实例</h3>
             <p className="text-[13px] text-zinc-600">
-              池成员共 <b className="text-zinc-900">{members.length}</b> 个，其中运行中{' '}
-              <b className="text-zinc-900">{runningCount}</b> 个。选择释放范围（将关闭并删除实例定义）：
+              池成员共 <b className="text-zinc-900">{members.length}</b> 个
+              {poolSelected.size > 0 && (
+                <>
+                  ，勾选 <b className="text-zinc-900">{selTotal}</b> 个
+                </>
+              )}
+              ，其中运行中 <b className="text-zinc-900">{selRunning}</b> 个。选择释放范围（将关闭并删除实例定义）：
             </p>
             <div className="grid grid-cols-2 gap-3">
               <button
                 onClick={() => void doReleaseAll('running')}
-                disabled={runningCount === 0}
+                disabled={selRunning === 0}
                 className="flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg text-[13px] text-amber-700 bg-amber-50 border border-amber-100 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-40"
               >
-                <Power size={14} /> 仅释放运行中（{runningCount}）
+                <Power size={14} /> 仅释放运行中（{selRunning}）
               </button>
               <button
                 onClick={() => void doReleaseAll('all')}
                 className="flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg text-[13px] text-red-600 bg-red-50 border border-red-100 hover:bg-red-100"
               >
-                <Trash2 size={14} /> 完全释放（{members.length}）
+                <Trash2 size={14} /> 完全释放（{selTotal}）
               </button>
             </div>
             <div className="flex justify-end">
