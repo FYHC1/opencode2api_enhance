@@ -44,6 +44,8 @@ type Config struct {
 	PoolProbeTimeoutSec  int   `json:"pool_probe_timeout_sec,omitempty"`
 	PoolQualityWindowMin int   `json:"pool_quality_window_min,omitempty"`
 	PoolProbeEnabled     *bool `json:"pool_probe_enabled,omitempty"`
+	// ProbeSoloEnabled 是否对独享实例（未入池）也做链路质量探测（默认 true；false = 只探测池成员）。
+	ProbeSoloEnabled *bool `json:"probe_solo_enabled,omitempty"`
 
 	// 性能模式（P2）：熔断阈值（连续失败达该次数 → open）、半开间隔（秒）、开关。
 	// PoolBreakerThreshold/PoolHalfOpenIntervalSec <=0 用默认值（3 / 60）；
@@ -155,6 +157,8 @@ func (m *Manager) ConfigGet(key string) (string, error) {
 		return strconv.Itoa(cfg.PoolQualityWindowMin), nil
 	case "pool_probe_enabled":
 		return strconv.FormatBool(poolProbeEnabled(cfg)), nil
+	case "probe_solo_enabled":
+		return strconv.FormatBool(probeSoloEnabled(cfg)), nil
 	case "pool_breaker_threshold":
 		return strconv.Itoa(cfg.PoolBreakerThreshold), nil
 	case "pool_halfopen_interval_sec":
@@ -321,6 +325,12 @@ func (m *Manager) ConfigSet(key, value string) error {
 			return fmt.Errorf("invalid boolean for pool_probe_enabled: %s", value)
 		}
 		cfg.PoolProbeEnabled = &b
+	case "probe_solo_enabled":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("invalid boolean for probe_solo_enabled: %s", value)
+		}
+		cfg.ProbeSoloEnabled = &b
 	case "pool_breaker_threshold":
 		v, err := parseInt()
 		if err != nil {
@@ -462,6 +472,7 @@ type ConfigView struct {
 	PoolProbeTimeoutSec     int    `json:"pool_probe_timeout_sec"`
 	PoolQualityWindowMin    int    `json:"pool_quality_window_min"`
 	PoolProbeEnabled        bool   `json:"pool_probe_enabled"`
+	ProbeSoloEnabled        bool   `json:"probe_solo_enabled"`
 	PoolBreakerThreshold    int    `json:"pool_breaker_threshold"`
 	PoolHalfOpenIntervalSec int    `json:"pool_halfopen_interval_sec"`
 	PoolPerformanceMode     bool   `json:"pool_performance_mode"`
@@ -507,6 +518,7 @@ func (m *Manager) ConfigViewOf() ConfigView {
 		PoolProbeTimeoutSec:     int(poolProbeTimeout(cfg).Seconds()),
 		PoolQualityWindowMin:    int(poolQualityWindowSec(cfg) / 60),
 		PoolProbeEnabled:        poolProbeEnabled(cfg),
+		ProbeSoloEnabled:        probeSoloEnabled(cfg),
 		PoolBreakerThreshold:    poolBreakerThresholdOf(cfg),
 		PoolHalfOpenIntervalSec: poolHalfOpenIntervalOf(cfg),
 		PoolPerformanceMode:     poolPerfModeEnabled(cfg),

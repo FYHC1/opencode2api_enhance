@@ -125,6 +125,7 @@ export type ConfigView = {
   pool_probe_timeout_sec: number
   pool_quality_window_min: number
   pool_probe_enabled: boolean
+  probe_solo_enabled: boolean
   /** 性能模式熔断/半开（P2） */
   pool_breaker_threshold: number
   pool_halfopen_interval_sec: number

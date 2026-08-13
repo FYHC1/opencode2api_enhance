@@ -1163,7 +1163,7 @@ export default function PoolPage({
 }
 
 /** 测试结果徽章：✓ 通过+延迟+详情 / ✗ 失败+原因（无结果返回 null 不占位） */
-/** 链路质量徽标（P1 探活评分）：质量分 + 等级 + 平均延迟（无记录显示"未探测"） */
+/** 链路质量徽标（P1 探活评分）：质量分 + 等级 + 平均延迟 + 连续失败次数（无记录显示"未探测"） */
 function qualityBadge(r?: PoolQualityRecord) {
   const levelMap: Record<PoolQualityLevel, [string, string]> = {
     healthy: ['bg-green-50 text-green-700', '健康'],
@@ -1180,13 +1180,15 @@ function qualityBadge(r?: PoolQualityRecord) {
   }
   const [cls, label] = levelMap[r.level] ?? levelMap.healthy
   return (
-    <span
-      className={clsx('inline-block px-2 py-0.5 rounded-full text-[11px] font-medium whitespace-nowrap', cls)}
-      title={`成功率 ${(r.success_rate * 100).toFixed(0)}% · 平均延迟 ${r.avg_latency_ms}ms · 连续失败 ${r.consecutive_failures} 次`}
-    >
-      {r.score} 分 · {label}
-      {r.avg_latency_ms > 0 ? ` · ${r.avg_latency_ms}ms` : ''}
-    </span>
+    <div className="inline-flex flex-col items-start gap-0.5">
+      <span className={clsx('inline-block px-2 py-0.5 rounded-full text-[11px] font-medium whitespace-nowrap', cls)}>
+        {r.score} 分 · {label}
+        {r.avg_latency_ms > 0 ? ` · ${r.avg_latency_ms}ms` : ''}
+      </span>
+      {r.consecutive_failures > 0 && (
+        <span className="inline-block text-[11px] text-red-500 whitespace-nowrap">连续失败 {r.consecutive_failures} 次</span>
+      )}
+    </div>
   )
 }
 

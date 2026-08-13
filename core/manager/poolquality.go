@@ -106,6 +106,14 @@ func poolProbeEnabled(cfg Config) bool {
 	return true
 }
 
+// probeSoloEnabled 独享实例探测开关生效值（未显式设置默认开启）。
+func probeSoloEnabled(cfg Config) bool {
+	if cfg.ProbeSoloEnabled != nil {
+		return *cfg.ProbeSoloEnabled
+	}
+	return true
+}
+
 // poolBreakerThresholdOf 熔断阈值生效值（连续失败达该次数 → open，<=0 用默认 3）。
 func poolBreakerThresholdOf(cfg Config) int {
 	if cfg.PoolBreakerThreshold > 0 {
@@ -329,9 +337,11 @@ func (m *Manager) RunPoolQualityOnce(runner Runner) PoolQualitySummary {
 		byName[rec.Name] = &rec
 	}
 
+	// 探测目标：运行中的实例；独享探测关闭时只保留池成员（JoinGateway=true）
+	probeSolo := probeSoloEnabled(cfg)
 	var running []Instance
 	for _, inst := range m.ListInstances() {
-		if inst.Status.State == "Running" {
+		if inst.Status.State == "Running" && (probeSolo || inst.JoinGateway) {
 			running = append(running, inst)
 		}
 	}
@@ -383,7 +393,9 @@ func (m *Manager) StartPoolQualityLoop() {
 	go func() {
 		for {
 			cfg := m.loadConfig()
-			if !poolProbeEnabled(cfg) || poolProbeInterval(cfg) <= 0 {
+			// V5: 性能模式关闭 → 不再做质量探测（路由沿用用户所选模式，不加权/熔断）；
+			// pool_probe_enabled 作为性能模式内的二级开关。
+			if !poolPerfModeEnabled(cfg) || !poolProbeEnabled(cfg) || poolProbeInterval(cfg) <= 0 {
 				time.Sleep(30 * time.Second)
 				continue
 			}

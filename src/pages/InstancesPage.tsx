@@ -1,7 +1,36 @@
 import { useCallback, useEffect, useState } from 'react'
 import clsx from 'clsx'
-import { RefreshCw, Play, Square, Trash2, TestTube2, Copy, Loader2, Search, Server } from 'lucide-react'
-import { api, type Instance, type TestResult } from '../lib/api'
+import { RefreshCw, Play, Square, Trash2, TestTube2, Copy, Loader2, Search, Server, Activity } from 'lucide-react'
+import { api, type Instance, type TestResult, type PoolQualityRecord, type PoolQualityLevel } from '../lib/api'
+
+/** 链路质量徽标（与实例池页一致）：质量分 + 等级 + 延迟 + 连续失败次数 */
+function qualityBadge(r?: PoolQualityRecord) {
+  const levelMap: Record<PoolQualityLevel, [string, string]> = {
+    healthy: ['bg-green-50 text-green-700', '健康'],
+    degraded: ['bg-amber-50 text-amber-700', '较慢'],
+    flaky: ['bg-orange-50 text-orange-600', '抖动'],
+    down: ['bg-red-50 text-red-600', '不可用'],
+  }
+  if (!r) {
+    return (
+      <span className="inline-block px-2 py-0.5 rounded-full text-[11px] font-medium bg-zinc-100 text-zinc-400 whitespace-nowrap">
+        未探测
+      </span>
+    )
+  }
+  const [cls, label] = levelMap[r.level] ?? levelMap.healthy
+  return (
+    <div className="inline-flex flex-col items-start gap-0.5">
+      <span className={clsx('inline-block px-2 py-0.5 rounded-full text-[11px] font-medium whitespace-nowrap', cls)}>
+        {r.score} 分 · {label}
+        {r.avg_latency_ms > 0 ? ` · ${r.avg_latency_ms}ms` : ''}
+      </span>
+      {r.consecutive_failures > 0 && (
+        <span className="inline-block text-[11px] text-red-500 whitespace-nowrap">连续失败 {r.consecutive_failures} 次</span>
+      )}
+    </div>
+  )
+}
 
 function statusBadge(st: Instance['status']): [string, string] {
   if (st === 'Running') return ['bg-green-50 text-green-700', '运行中']
@@ -20,6 +49,10 @@ export default function InstancesPage({
   const [selected, setSelected] = useState<Set<string>>(new Set())
   // 测试结果（行内徽章正反馈）：name → TestResult
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({})
+  // 链路质量（V4）：按实例名匹配；探活开关状态
+  const [quality, setQuality] = useState<PoolQualityRecord[] | null>(null)
+  const [probeSolo, setProbeSolo] = useState(true)
+  const [qualityBusy, setQualityBusy] = useState(false)
   const [search, setSearch] = useState('')
   const [searchFocus, setSearchFocus] = useState(false)
   const [filter, setFilter] = useState<'all' | 'running' | 'stopped'>('all')
@@ -29,11 +62,40 @@ export default function InstancesPage({
 
   const load = useCallback(async (silent = true) => {
     try {
-      setInstances(await api.listInstances())
+      const [ins, q, c] = await Promise.all([api.listInstances(), api.poolQuality(), api.configGet()])
+      setInstances(ins)
+      setQuality(q.records ?? null)
+      setProbeSolo(c.probe_solo_enabled)
     } catch (e) {
       if (!silent) toast(String(e), false)
     }
   }, [toast])
+
+  // 独享实例探测开关（V4）：控制是否对独享实例做链路质量检查
+  const doToggleProbeSolo = async () => {
+    const next = !probeSolo
+    try {
+      await api.configSet('probe_solo_enabled', String(next))
+      setProbeSolo(next)
+      toast(next ? '已开启独享实例链路探测' : '已关闭独享实例链路探测（只探测池成员）', true)
+    } catch (e) {
+      toast(String(e), false)
+    }
+  }
+
+  // 立即探测（V4）：手动触发一轮链路探活
+  const doProbeNow = async () => {
+    setQualityBusy(true)
+    try {
+      const q = await api.poolQualityProbe()
+      setQuality(q.records ?? null)
+      toast(`链路探活完成：healthy ${q.healthy} · degraded ${q.degraded} · flaky ${q.flaky} · down ${q.down}`, q.down === 0)
+    } catch (e) {
+      toast(String(e), false)
+    } finally {
+      setQualityBusy(false)
+    }
+  }
 
   // 首次加载查询一次实例状态，之后不自动轮询，由用户点击刷新按钮手动刷新
   useEffect(() => {
@@ -88,6 +150,10 @@ export default function InstancesPage({
 
   // 独享实例 = 未入池（页面边界：本页只显示独享，池成员在实例池页）
   const soloInstances = instances.filter((i) => !i.join_gateway)
+
+  // 链路质量按实例名索引
+  const qualityByName = new Map<string, PoolQualityRecord>()
+  if (quality) for (const r of quality) qualityByName.set(r.name, r)
 
   // 前端过滤：搜索（名称/节点/IP/端口）+ 状态筛选
   const filtered = soloInstances.filter((i) => {
@@ -276,6 +342,29 @@ if (kind === 'delete' && !confirm(`确定释放选中的 ${names.length} 个实�
           <span className="text-[12px] text-zinc-400">{soloInstances.length} 个</span>
         </div>
         <div className="flex items-center gap-2">
+          {/* V4: 独享实例链路探测开关 + 立即探测 */}
+          <div className="flex items-center gap-2 px-2.5 py-1 rounded-lg border border-zinc-200 bg-white" title={probeSolo ? '开启：对所有独享实例做链路质量检查' : '关闭：只探测池成员（实例池页）'}>
+            <span className="text-[12px] text-zinc-600 whitespace-nowrap">链路探测</span>
+            <button
+              onClick={() => void doToggleProbeSolo()}
+              disabled={qualityBusy}
+              className={clsx(
+                'relative inline-flex items-center h-5 w-9 rounded-full transition-colors disabled:opacity-50',
+                probeSolo ? 'bg-teal-600' : 'bg-zinc-300',
+              )}
+              aria-label="独享实例链路探测开关"
+            >
+              <span className={clsx('inline-block w-3.5 h-3.5 rounded-full bg-white shadow transition-transform', probeSolo ? 'translate-x-[18px]' : 'translate-x-1')} />
+            </button>
+          </div>
+          <button
+            onClick={() => void doProbeNow()}
+            disabled={qualityBusy}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-teal-700 bg-teal-50 border border-teal-100 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {qualityBusy ? <Loader2 size={14} className="animate-spin" /> : <Activity size={14} />}
+            {qualityBusy ? '探测中…' : '立即探测'}
+          </button>
           <button
             onClick={() => void doRefresh()}
             disabled={refreshing}
@@ -365,6 +454,7 @@ if (kind === 'delete' && !confirm(`确定释放选中的 ${names.length} 个实�
                 <th className="py-3 pl-2">端口</th>
 
                 <th className="py-3 pl-2">密钥</th>
+                <th className="py-3 pl-2">链路质量</th>
                 <th className="py-3 pl-2">状态</th>
                 <th className="py-3 pl-2 pr-4 text-right">操作</th>
               </tr>
@@ -408,7 +498,8 @@ if (kind === 'delete' && !confirm(`确定释放选中的 ${names.length} 个实�
                         <Copy size={11} />
                       </button>
                     </td>
-<td className="py-2.5 pl-2">
+<td className="py-2.5 pl-2">{qualityBadge(qualityByName.get(i.name))}</td>
+                    <td className="py-2.5 pl-2">
                       <div className="flex flex-col items-start gap-1">
                         <div className="flex items-center gap-1.5">
                           <span className={clsx('inline-block px-2 py-0.5 rounded-full text-xs font-medium', cls)}>{label}</span>
