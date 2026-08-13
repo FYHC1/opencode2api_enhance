@@ -221,6 +221,13 @@ func applyPoolResult(addr string, status int, requestErr error) {
 //   - 质量分：down 剔除、flaky 跳过、degraded 降权、healthy 优先；同档按分排序
 //   - 请求反馈与探活分融合（7:3），失败快速反映到排序
 func pickWeightedProxy(proxies []Socks5Proxy, start int) Socks5Proxy {
+	// S5: 防御性退化——单出口直接返回（调用方 pickHealthyProxy 已前置，此处兜底）。
+	if len(proxies) <= 1 {
+		if len(proxies) == 1 {
+			return proxies[0]
+		}
+		return Socks5Proxy{}
+	}
 	now := time.Now()
 	loadPoolQualityCache()
 
@@ -323,7 +330,8 @@ func raceCandidates(n int) []Socks5Proxy {
 	socks5Mu.RLock()
 	proxies := append([]Socks5Proxy(nil), socks5Proxies...)
 	socks5Mu.RUnlock()
-	if len(proxies) == 0 {
+	// S5: 单出口退化——候选 <2 时竞速无意义（扇出 1 个等于串行），直接走默认请求。
+	if len(proxies) < 2 {
 		return nil
 	}
 

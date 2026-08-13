@@ -209,6 +209,14 @@ var (
 
 // pickHealthyProxy 从 start 位置起轮询，跳过冷却中代理；全冷→返回冷却最早结束的兜底。
 func pickHealthyProxy(proxies []Socks5Proxy, start int) Socks5Proxy {
+	// S5: 单出口退化——池中仅 1 个可用出口时不叠加质量加权/熔断选择，
+	// 直接走默认请求（请求层的健康计数/超时切换兜底），避免聪明逻辑只服务同一个节点。
+	if len(proxies) <= 1 {
+		if len(proxies) == 1 {
+			return proxies[0]
+		}
+		return Socks5Proxy{}
+	}
 	// P2 性能模式：质量加权路由 + 熔断/半开（关闭时走基线逻辑）。
 	if poolPerfMode {
 		return pickWeightedProxy(proxies, start)

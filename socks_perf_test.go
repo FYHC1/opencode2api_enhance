@@ -330,3 +330,28 @@ func TestRaceCandidates(t *testing.T) {
 		t.Fatalf("raceCandidates(4)=%d, want 2 (flaky/down skipped)", len(four))
 	}
 }
+
+// S5: 单出口退化——仅 1 个候选/代理时不竞速、不跑加权，直接取该节点（请求层兜底）。
+func TestSingleCandidateDegrade(t *testing.T) {
+	resetPoolPerfState()
+	socks5Mu.Lock()
+	socks5Proxies = []Socks5Proxy{mkProxy(28201)}
+	socks5Mu.Unlock()
+
+	// 竞速：候选不足 2 个 → 不竞速（返回 nil，调用方走默认请求）
+	if got := raceCandidates(2); len(got) != 0 {
+		t.Fatalf("single proxy should not race, got %+v", got)
+	}
+	// 加权选择：单出口直接返回该代理
+	if p := pickWeightedProxy(socks5Proxies, 0); p.Addr != "127.0.0.1:28201" {
+		t.Fatalf("pickWeightedProxy single=%+v", p)
+	}
+	// 健康选择（性能模式开）：同样退化到直接返回
+	if p := pickHealthyProxy(socks5Proxies, 0); p.Addr != "127.0.0.1:28201" {
+		t.Fatalf("pickHealthyProxy single=%+v", p)
+	}
+	// 空池不 panic 且返回零值
+	if p := pickHealthyProxy(nil, 0); p.Addr != "" {
+		t.Fatalf("empty pool pick=%+v", p)
+	}
+}
