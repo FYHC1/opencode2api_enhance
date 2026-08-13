@@ -820,46 +820,46 @@ export default function PoolPage({
                   </p>
               <div className="space-y-2.5 pt-1">
                 <div className="flex items-center gap-3">
-                  <label className="text-[13px] text-zinc-700 w-40 shrink-0">探活间隔（秒，默认 45）</label>
+                  <label className="text-[13px] text-zinc-700 flex-1 min-w-0 whitespace-nowrap">探活间隔（秒，默认 45）</label>
                   <input
                     type="number"
                     min={0}
                     value={poolForm.pool_probe_interval_sec}
                     onChange={(e) => setPoolForm({ ...poolForm, pool_probe_interval_sec: Number(e.target.value) })}
-                    className="flex-1 min-w-0 px-3 py-2 border rounded-lg text-[13px] text-right"
+                    className="w-28 shrink-0 px-3 py-2 border rounded-lg text-[13px] text-right"
                   />
                   <span className="text-[11px] text-zinc-400 w-8 shrink-0 text-right">0=关</span>
                 </div>
                 <div className="flex items-center gap-3">
-                  <label className="text-[13px] text-zinc-700 w-40 shrink-0">质量窗口（分钟，默认 10）</label>
+                  <label className="text-[13px] text-zinc-700 flex-1 min-w-0 whitespace-nowrap">质量窗口（分钟，默认 10）</label>
                   <input
                     type="number"
                     min={1}
                     value={poolForm.pool_quality_window_min}
                     onChange={(e) => setPoolForm({ ...poolForm, pool_quality_window_min: Number(e.target.value) })}
-                    className="flex-1 min-w-0 px-3 py-2 border rounded-lg text-[13px] text-right"
+                    className="w-28 shrink-0 px-3 py-2 border rounded-lg text-[13px] text-right"
                   />
                   <span className="w-8 shrink-0" />
                 </div>
                 <div className="flex items-center gap-3">
-                  <label className="text-[13px] text-zinc-700 w-40 shrink-0">熔断阈值（连续失败，默认 3）</label>
+                  <label className="text-[13px] text-zinc-700 flex-1 min-w-0 whitespace-nowrap">熔断阈值（连续失败，默认 3）</label>
                   <input
                     type="number"
                     min={1}
                     value={poolForm.pool_breaker_threshold}
                     onChange={(e) => setPoolForm({ ...poolForm, pool_breaker_threshold: Number(e.target.value) })}
-                    className="flex-1 min-w-0 px-3 py-2 border rounded-lg text-[13px] text-right"
+                    className="w-28 shrink-0 px-3 py-2 border rounded-lg text-[13px] text-right"
                   />
                   <span className="w-8 shrink-0" />
                 </div>
                 <div className="flex items-center gap-3">
-                  <label className="text-[13px] text-zinc-700 w-40 shrink-0">半开间隔（秒，默认 60）</label>
+                  <label className="text-[13px] text-zinc-700 flex-1 min-w-0 whitespace-nowrap">半开间隔（秒，默认 60）</label>
                   <input
                     type="number"
                     min={1}
                     value={poolForm.pool_halfopen_interval_sec}
                     onChange={(e) => setPoolForm({ ...poolForm, pool_halfopen_interval_sec: Number(e.target.value) })}
-                    className="flex-1 min-w-0 px-3 py-2 border rounded-lg text-[13px] text-right"
+                    className="w-28 shrink-0 px-3 py-2 border rounded-lg text-[13px] text-right"
                   />
                   <span className="w-8 shrink-0" />
                 </div>
@@ -876,14 +876,14 @@ export default function PoolPage({
                     ['pool_probe_concurrency', '链路探活', 1, 16],
                   ] as const).map(([key, label, lo, hi]) => (
                     <div key={key} className="flex items-center gap-3">
-                      <label className="text-[13px] text-zinc-700 w-40 shrink-0">{label}（{lo}~{hi}）</label>
+                      <label className="text-[13px] text-zinc-700 flex-1 min-w-0 whitespace-nowrap">{label}（{lo}~{hi}）</label>
                       <input
                         type="number"
                         min={lo}
                         max={hi}
                         value={poolForm[key]}
                         onChange={(e) => setPoolForm({ ...poolForm, [key]: Number(e.target.value) })}
-                        className="flex-1 min-w-0 px-3 py-2 border rounded-lg text-[13px] text-right"
+                        className="w-28 shrink-0 px-3 py-2 border rounded-lg text-[13px] text-right"
                       />
                       <span className="w-8 shrink-0" />
                     </div>
@@ -930,13 +930,13 @@ export default function PoolPage({
                   </p>
               <div className="space-y-2.5 pt-1">
                 <div className="flex items-center gap-3">
-                  <label className="text-[13px] text-zinc-700 w-44 shrink-0">首字超时 TTFT（毫秒，默认 10s）</label>
+                  <label className="text-[13px] text-zinc-700 flex-1 min-w-0 whitespace-nowrap">首字超时 TTFT（毫秒，默认 10s）</label>
                   <input
                     type="number"
                     min={1}
                     value={timeoutForm.timeout_ttft_min_ms}
                     onChange={(e) => setTimeoutForm({ ...timeoutForm, timeout_ttft_min_ms: Number(e.target.value) })}
-                    className="flex-1 min-w-0 px-2 py-2 border rounded-lg text-[13px] text-right"
+                    className="w-24 shrink-0 px-2 py-2 border rounded-lg text-[13px] text-right"
                   />
                   <span className="text-zinc-400">~</span>
                   <input
@@ -944,17 +944,17 @@ export default function PoolPage({
                     min={1}
                     value={timeoutForm.timeout_ttft_max_ms}
                     onChange={(e) => setTimeoutForm({ ...timeoutForm, timeout_ttft_max_ms: Number(e.target.value) })}
-                    className="flex-1 min-w-0 px-2 py-2 border rounded-lg text-[13px] text-right"
+                    className="w-24 shrink-0 px-2 py-2 border rounded-lg text-[13px] text-right"
                   />
                 </div>
                 <div className="flex items-center gap-3">
-                  <label className="text-[13px] text-zinc-700 w-44 shrink-0">块间静默超时（毫秒，默认 5s）</label>
+                  <label className="text-[13px] text-zinc-700 flex-1 min-w-0 whitespace-nowrap">块间静默超时（毫秒，默认 5s）</label>
                   <input
                     type="number"
                     min={1}
                     value={timeoutForm.timeout_silence_min_ms}
                     onChange={(e) => setTimeoutForm({ ...timeoutForm, timeout_silence_min_ms: Number(e.target.value) })}
-                    className="flex-1 min-w-0 px-2 py-2 border rounded-lg text-[13px] text-right"
+                    className="w-24 shrink-0 px-2 py-2 border rounded-lg text-[13px] text-right"
                   />
                   <span className="text-zinc-400">~</span>
                   <input
@@ -962,17 +962,17 @@ export default function PoolPage({
                     min={1}
                     value={timeoutForm.timeout_silence_max_ms}
                     onChange={(e) => setTimeoutForm({ ...timeoutForm, timeout_silence_max_ms: Number(e.target.value) })}
-                    className="flex-1 min-w-0 px-2 py-2 border rounded-lg text-[13px] text-right"
+                    className="w-24 shrink-0 px-2 py-2 border rounded-lg text-[13px] text-right"
                   />
                 </div>
                 <div className="flex items-center gap-3">
-                  <label className="text-[13px] text-zinc-700 w-44 shrink-0">切换前并行探测数（默认 2~3）</label>
+                  <label className="text-[13px] text-zinc-700 flex-1 min-w-0 whitespace-nowrap">切换前并行探测数（默认 2~3）</label>
                   <input
                     type="number"
                     min={1}
                     value={timeoutForm.failover_probe_min}
                     onChange={(e) => setTimeoutForm({ ...timeoutForm, failover_probe_min: Number(e.target.value) })}
-                    className="flex-1 min-w-0 px-2 py-2 border rounded-lg text-[13px] text-right"
+                    className="w-24 shrink-0 px-2 py-2 border rounded-lg text-[13px] text-right"
                   />
                   <span className="text-zinc-400">~</span>
                   <input
@@ -980,17 +980,17 @@ export default function PoolPage({
                     min={1}
                     value={timeoutForm.failover_probe_max}
                     onChange={(e) => setTimeoutForm({ ...timeoutForm, failover_probe_max: Number(e.target.value) })}
-                    className="flex-1 min-w-0 px-2 py-2 border rounded-lg text-[13px] text-right"
+                    className="w-24 shrink-0 px-2 py-2 border rounded-lg text-[13px] text-right"
                   />
                 </div>
                 <div className="flex items-center gap-3">
-                  <label className="text-[13px] text-zinc-700 w-44 shrink-0">调用日志保留上限（默认 5000）</label>
+                  <label className="text-[13px] text-zinc-700 flex-1 min-w-0 whitespace-nowrap">调用日志保留上限（默认 5000）</label>
                   <input
                     type="number"
                     min={100}
                     value={timeoutForm.call_log_max}
                     onChange={(e) => setTimeoutForm({ ...timeoutForm, call_log_max: Number(e.target.value) })}
-                    className="flex-1 min-w-0 px-3 py-2 border rounded-lg text-[13px] text-right"
+                    className="w-28 shrink-0 px-3 py-2 border rounded-lg text-[13px] text-right"
                   />
                   <span className="w-5 shrink-0" />
                   <span className="w-5 shrink-0" />

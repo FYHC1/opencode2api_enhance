@@ -551,7 +551,7 @@ export default function NodesPage({
             <p className="text-[12px] text-zinc-400">支持 Clash YAML / base64 / v2ray 链接（vmess/vless/trojan/ss/hysteria2），重复节点自动跳过</p>
 
             <div className="flex items-center gap-3">
-              <label className="text-[13px] text-zinc-700 w-40 shrink-0">订阅 URL</label>
+              <label className="text-[13px] text-zinc-700 flex-1 min-w-0 whitespace-nowrap">订阅 URL</label>
               <input
                 type="text"
                 placeholder="https://example.com/sub"
@@ -562,13 +562,13 @@ export default function NodesPage({
             </div>
 
             <div className="flex items-center gap-3">
-              <label className="text-[13px] text-zinc-700 w-40 shrink-0">自动拉取间隔（分钟）</label>
+              <label className="text-[13px] text-zinc-700 flex-1 min-w-0 whitespace-nowrap">自动拉取间隔（分钟）</label>
               <input
                 type="number"
                 min={0}
                 value={subscribeInterval}
                 onChange={(e) => setSubscribeInterval(Number(e.target.value))}
-                className="flex-1 min-w-0 px-3 py-2 border rounded-lg text-[13px]"
+                className="w-28 shrink-0 px-3 py-2 border rounded-lg text-[13px]"
               />
               <div className="flex items-center rounded-lg border border-zinc-200 bg-white p-0.5 shrink-0">
                 <button
