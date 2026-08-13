@@ -24,6 +24,9 @@ export default function NodesPage({
   const [acting, setActing] = useState(false)
   // 追踪上一次扫描状态：仅在「本次扫描 running → done」时弹出结果弹窗
   const prevScanStatusRef = useRef<string | null>(null)
+  // S1: 停止扫描豁免标志——点击停止后，轮询不再把 stopping/done 进度条回填，避免"点了不生效"
+  const stopAckRef = useRef(false)
+  const [stopBusy, setStopBusy] = useState(false)
 
   // 订阅自动拉取（main 功能 M1）：URL + 间隔 + 一键拉取目标
   const [subscribeUrl, setSubscribeUrl] = useState('')
@@ -99,6 +102,14 @@ export default function NodesPage({
         if (!alive) return
         const prev = prevScanStatusRef.current
         prevScanStatusRef.current = p.status
+        // S1: 已请求停止且后端进入 stopping/done 后，避免把进度条回填回去
+        if (stopAckRef.current) {
+          if (p.status === 'stopping' || p.status === 'done') {
+            stopAckRef.current = false
+            setScanning(false)
+            return
+          }
+        }
         setScan(p)
         setScanning(p.status === 'running' || p.status === 'stopping')
         // 扫描刚完成（running → done）：弹出结果弹窗
@@ -156,12 +167,15 @@ export default function NodesPage({
   }
 
   const stopScan = async () => {
+    setStopBusy(true)
     try {
       await api.scanStop()
-      toast('已停止扫描')
+      stopAckRef.current = true
+      toast('已请求停止扫描')
     } catch (e) {
       toast(String(e), false)
     } finally {
+      setStopBusy(false)
       setScanning(false)
       setScan(null) // 停止后关闭进度条
     }
@@ -327,9 +341,11 @@ export default function NodesPage({
           {scanning ? (
             <button
               onClick={() => void stopScan()}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-white bg-red-600 hover:bg-red-700"
+              disabled={stopBusy}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-white bg-red-600 hover:bg-red-700 disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              <Square size={14} /> 停止扫描
+              {stopBusy ? <Loader2 size={14} className="animate-spin" /> : <Square size={14} />}
+              {stopBusy ? '停止中…' : '停止扫描'}
             </button>
           ) : (
             <button
