@@ -25,6 +25,19 @@ export default function PoolPage({
   const [qualityBusy, setQualityBusy] = useState(false)
   // 性能模式开关（P2 质量加权路由 + 熔断）
   const [perfMode, setPerfMode] = useState<boolean | null>(null)
+  // 性能模式参数（P1/P2/P2b/D3）：探活间隔/窗口 + 熔断/半开 + 并发
+  const [poolForm, setPoolForm] = useState({
+    pool_probe_interval_sec: 45,
+    pool_quality_window_min: 10,
+    pool_breaker_threshold: 3,
+    pool_halfopen_interval_sec: 60,
+    pool_race_copies: 2,
+    scan_concurrency: 8,
+    batch_concurrency: 4,
+    test_concurrency: 4,
+    pool_probe_concurrency: 4,
+  })
+  const [poolProbeEnabled, setPoolProbeEnabled] = useState(true)
   // 测试结果（行内徽章正反馈）：name → TestResult
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({})
   const [stopping, setStopping] = useState(false)
@@ -72,11 +85,25 @@ export default function PoolPage({
     }
   }, [])
 
-  // 性能模式开关初始值（P2）
+  // 性能模式参数初始值（P2）：从配置加载生效默认值，保证输入框有默认填充
   useEffect(() => {
     api
       .configGet()
-      .then((c) => setPerfMode(c.pool_performance_mode))
+      .then((c) => {
+        setPerfMode(c.pool_performance_mode)
+        setPoolProbeEnabled(c.pool_probe_enabled)
+        setPoolForm({
+          pool_probe_interval_sec: c.pool_probe_interval_sec,
+          pool_quality_window_min: c.pool_quality_window_min,
+          pool_breaker_threshold: c.pool_breaker_threshold,
+          pool_halfopen_interval_sec: c.pool_halfopen_interval_sec,
+          pool_race_copies: c.pool_race_copies,
+          scan_concurrency: c.scan_concurrency,
+          batch_concurrency: c.batch_concurrency,
+          test_concurrency: c.test_concurrency,
+          pool_probe_concurrency: c.pool_probe_concurrency,
+        })
+      })
       .catch(() => {})
   }, [])
 
@@ -165,6 +192,45 @@ export default function PoolPage({
       toast(next ? '性能模式已开启：质量加权路由 + 熔断自动恢复' : '性能模式已关闭：回到基线路由行为', true)
     } catch (e) {
       toast(String(e), false)
+    }
+  }
+
+  // 保存性能模式参数（P1/P2/P2b/D3）：探活/质量/熔断/半开/并发/探活开关，热生效
+  const handleSavePool = async () => {
+    const f = poolForm
+    if (f.pool_probe_interval_sec < 0 || f.pool_quality_window_min < 1 ||
+        f.pool_breaker_threshold < 1 || f.pool_halfopen_interval_sec < 1) {
+      toast('性能模式参数不合法：间隔需 ≥0，窗口/熔断/半开需 ≥1', false)
+      return
+    }
+    const concurrency: [string, number, number, number][] = [
+      ['竞速并行（1~4）', f.pool_race_copies, 1, 4],
+      ['节点扫描并发（1~16）', f.scan_concurrency, 1, 16],
+      ['批量启停/释放并发（1~16）', f.batch_concurrency, 1, 16],
+      ['一键测试并发（1~16）', f.test_concurrency, 1, 16],
+      ['链路探活并发（1~16）', f.pool_probe_concurrency, 1, 16],
+    ]
+    for (const [label, v, lo, hi] of concurrency) {
+      if (v < lo || v > hi) {
+        toast(`并发不合法：${label}`, false)
+        return
+      }
+    }
+    try {
+      await api.configSet('pool_probe_interval_sec', String(f.pool_probe_interval_sec))
+      await api.configSet('pool_quality_window_min', String(f.pool_quality_window_min))
+      await api.configSet('pool_breaker_threshold', String(f.pool_breaker_threshold))
+      await api.configSet('pool_halfopen_interval_sec', String(f.pool_halfopen_interval_sec))
+      await api.configSet('pool_probe_enabled', String(poolProbeEnabled))
+      await api.configSet('pool_race_copies', String(f.pool_race_copies))
+      await api.configSet('scan_concurrency', String(f.scan_concurrency))
+      await api.configSet('batch_concurrency', String(f.batch_concurrency))
+      await api.configSet('test_concurrency', String(f.test_concurrency))
+      await api.configSet('pool_probe_concurrency', String(f.pool_probe_concurrency))
+      toast('性能模式配置已保存（热生效）', true)
+    } catch (e) {
+      console.error('保存性能模式配置失败', e)
+      toast('保存失败', false)
     }
   }
 
@@ -489,6 +555,109 @@ export default function PoolPage({
               </button>
             ))}
           </div>
+        </div>
+      </div>
+
+      {/* 实例池性能模式（P1/P2）参数配置卡 */}
+      <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm p-5 space-y-4">
+        <div className="flex items-start justify-between">
+          <div>
+            <h3 className="text-[14px] font-semibold text-zinc-900">实例池性能模式 · 参数</h3>
+            <p className="text-[12px] text-zinc-400">
+              链路级主动探活（经实例出口发真实请求）+ 质量加权路由：坏节点自动降权/剔除，熔断到期自动回归。总开关在上方路由模式。
+            </p>
+          </div>
+          <button onClick={() => void handleSavePool()} className="bg-zinc-900 text-white rounded-lg px-4 py-2 text-[13px] hover:bg-zinc-700">
+            保存
+          </button>
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-3">
+          <div className="space-y-1">
+            <label className="block text-[13px] font-medium text-zinc-700">探活间隔（秒，0=不探活）</label>
+            <input
+              type="number"
+              min={0}
+              value={poolForm.pool_probe_interval_sec}
+              onChange={(e) => setPoolForm({ ...poolForm, pool_probe_interval_sec: Number(e.target.value) })}
+              className="w-full px-3 py-2 border rounded-lg text-[13px]"
+            />
+            <p className="text-[11px] text-zinc-400">默认 45</p>
+          </div>
+          <div className="space-y-1">
+            <label className="block text-[13px] font-medium text-zinc-700">质量窗口（分钟）</label>
+            <input
+              type="number"
+              min={1}
+              value={poolForm.pool_quality_window_min}
+              onChange={(e) => setPoolForm({ ...poolForm, pool_quality_window_min: Number(e.target.value) })}
+              className="w-full px-3 py-2 border rounded-lg text-[13px]"
+            />
+            <p className="text-[11px] text-zinc-400">默认 10</p>
+          </div>
+          <div className="space-y-1">
+            <label className="block text-[13px] font-medium text-zinc-700">熔断阈值（连续失败）</label>
+            <input
+              type="number"
+              min={1}
+              value={poolForm.pool_breaker_threshold}
+              onChange={(e) => setPoolForm({ ...poolForm, pool_breaker_threshold: Number(e.target.value) })}
+              className="w-full px-3 py-2 border rounded-lg text-[13px]"
+            />
+            <p className="text-[11px] text-zinc-400">默认 3</p>
+          </div>
+          <div className="space-y-1">
+            <label className="block text-[13px] font-medium text-zinc-700">半开间隔（秒）</label>
+            <input
+              type="number"
+              min={1}
+              value={poolForm.pool_halfopen_interval_sec}
+              onChange={(e) => setPoolForm({ ...poolForm, pool_halfopen_interval_sec: Number(e.target.value) })}
+              className="w-full px-3 py-2 border rounded-lg text-[13px]"
+            />
+            <p className="text-[11px] text-zinc-400">默认 60</p>
+          </div>
+        </div>
+
+        {/* 并发设置（D3） */}
+        <div className="pt-3 border-t border-zinc-100">
+          <div className="text-[13px] font-medium text-zinc-700 mb-2">并发设置</div>
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-x-6 gap-y-2">
+            {([
+              ['pool_race_copies', '竞速并行（1~4）', 1, 4],
+              ['scan_concurrency', '节点扫描（1~16）', 1, 16],
+              ['batch_concurrency', '批量启停/释放（1~16）', 1, 16],
+              ['test_concurrency', '一键测试（1~16）', 1, 16],
+              ['pool_probe_concurrency', '链路探活（1~16）', 1, 16],
+            ] as const).map(([key, label, lo, hi]) => (
+              <div key={key} className="flex items-center justify-between gap-3">
+                <label className="text-[12px] text-zinc-600">{label}</label>
+                <input
+                  type="number"
+                  min={lo}
+                  max={hi}
+                  value={poolForm[key]}
+                  onChange={(e) => setPoolForm({ ...poolForm, [key]: Number(e.target.value) })}
+                  className="w-18 px-2 py-1.5 border rounded-lg text-[13px] text-right"
+                />
+              </div>
+            ))}
+          </div>
+          <p className="text-[11px] text-zinc-400 mt-1.5">并发过高可能引起进程风暴，建议保持默认</p>
+        </div>
+
+        {/* 探活启用开关 */}
+        <div className="flex items-center space-x-3">
+          <label className="relative inline-flex items-center cursor-pointer">
+            <input
+              type="checkbox"
+              checked={poolProbeEnabled}
+              onChange={(e) => setPoolProbeEnabled(e.target.checked)}
+              className="sr-only peer"
+            />
+            <div className="w-11 h-6 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-zinc-900"></div>
+          </label>
+          <span className="text-sm text-zinc-700">链路主动探活</span>
         </div>
       </div>
 
