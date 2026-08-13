@@ -3,6 +3,7 @@ import clsx from 'clsx'
 import { Loader2, Search, Trash2, LogOut } from 'lucide-react'
 import { api, type OrphanProcess } from '../lib/api'
 import type { ConfigView, BinariesInfo } from '../lib/api'
+import { isDesktop } from '../lib/env'
 
 export default function SettingsPage({
   toast,
@@ -363,7 +364,8 @@ export default function SettingsPage({
     <div className="p-6 space-y-6 max-w-2xl mx-auto">
       <h1 className="text-2xl font-semibold text-zinc-900">设置</h1>
 
-      {/* Clash 外部控制 */}
+      {/* Clash 外部控制（仅桌面端：本机有 Clash 客户端才有意义；Web/Docker/Linux 服务器 headless 端隐藏，走订阅导入） */}
+      {isDesktop && (
       <div className="bg-white rounded-2xl border p-5 space-y-4">
         <h2 className="text-lg font-medium text-zinc-900">Clash 外部控制</h2>
         
@@ -401,6 +403,7 @@ export default function SettingsPage({
           保存
         </button>
       </div>
+      )}
 
       {/* 网关超时切换（区间随机，防上游识别） */}
       <div className="bg-white rounded-2xl border p-5 space-y-4">

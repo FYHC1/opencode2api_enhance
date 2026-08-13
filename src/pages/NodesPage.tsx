@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import clsx from 'clsx'
 import { Loader2, Network, Radar, RefreshCw, Rss, Square, Trash2, User } from 'lucide-react'
 import { api, type NodeView, type ProbeResult, type ScanProgress } from '../lib/api'
+import { isDesktop } from '../lib/env'
 import ResultModal from '../components/ResultModal'
 
 export default function NodesPage({
@@ -349,7 +350,11 @@ export default function NodesPage({
       {nodes.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-24 text-zinc-400">
           <p className="text-base mb-2">未发现节点</p>
-          <p className="text-[13px]">请先在「设置」页配置 Clash 外部控制地址</p>
+          <p className="text-[13px]">
+            {isDesktop
+              ? '请先在「设置」页配置 Clash 外部控制地址，或使用「订阅导入」'
+              : '请使用「订阅导入」或「订阅自动拉取」添加节点'}
+          </p>
         </div>
       ) : (
         <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm divide-y divide-zinc-100">
