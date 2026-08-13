@@ -38,6 +38,18 @@ export default function PoolPage({
     pool_probe_concurrency: 4,
   })
   const [poolProbeEnabled, setPoolProbeEnabled] = useState(true)
+  // 网关超时切换区间（实例池/统一网关请求行为）
+  const [timeoutForm, setTimeoutForm] = useState({
+    timeout_ttft_min_ms: 10000,
+    timeout_ttft_max_ms: 10000,
+    timeout_silence_min_ms: 5000,
+    timeout_silence_max_ms: 5000,
+    failover_probe_min: 2,
+    failover_probe_max: 3,
+    call_log_max: 5000,
+  })
+  // 节点前缀展示开关（默认关闭）
+  const [showNodePrefix, setShowNodePrefix] = useState(false)
   // 测试结果（行内徽章正反馈）：name → TestResult
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({})
   const [stopping, setStopping] = useState(false)
@@ -103,6 +115,16 @@ export default function PoolPage({
           test_concurrency: c.test_concurrency,
           pool_probe_concurrency: c.pool_probe_concurrency,
         })
+        setTimeoutForm({
+          timeout_ttft_min_ms: c.timeout_ttft_min_ms,
+          timeout_ttft_max_ms: c.timeout_ttft_max_ms,
+          timeout_silence_min_ms: c.timeout_silence_min_ms,
+          timeout_silence_max_ms: c.timeout_silence_max_ms,
+          failover_probe_min: c.failover_probe_min,
+          failover_probe_max: c.failover_probe_max,
+          call_log_max: c.call_log_max,
+        })
+        setShowNodePrefix(c.show_node_prefix)
       })
       .catch(() => {})
   }, [])
@@ -231,6 +253,49 @@ export default function PoolPage({
     } catch (e) {
       console.error('保存性能模式配置失败', e)
       toast('保存失败', false)
+    }
+  }
+
+  // 校验区间：min <= max，且为正数
+  const validateRange = (min: number, max: number): boolean => {
+    return min > 0 && max >= min
+  }
+
+  const handleSaveTimeout = async () => {
+    const f = timeoutForm
+    if (!validateRange(f.timeout_ttft_min_ms, f.timeout_ttft_max_ms) ||
+        !validateRange(f.timeout_silence_min_ms, f.timeout_silence_max_ms) ||
+        !validateRange(f.failover_probe_min, f.failover_probe_max)) {
+      toast('区间不合法：最小值需 >0 且 最小值 ≤ 最大值', false)
+      return
+    }
+    if (f.call_log_max < 100) {
+      toast('日志保留上限至少 100 条', false)
+      return
+    }
+    try {
+      await api.configSet('timeout_ttft_min_ms', String(f.timeout_ttft_min_ms))
+      await api.configSet('timeout_ttft_max_ms', String(f.timeout_ttft_max_ms))
+      await api.configSet('timeout_silence_min_ms', String(f.timeout_silence_min_ms))
+      await api.configSet('timeout_silence_max_ms', String(f.timeout_silence_max_ms))
+      await api.configSet('failover_probe_min', String(f.failover_probe_min))
+      await api.configSet('failover_probe_max', String(f.failover_probe_max))
+      await api.configSet('call_log_max', String(f.call_log_max))
+      toast('超时配置已保存（重启网关后生效）', true)
+    } catch (e) {
+      console.error('保存超时配置失败', e)
+      toast('保存失败', false)
+    }
+  }
+
+  const handleShowNodePrefixChange = async (enabled: boolean) => {
+    try {
+      await api.configSet('show_node_prefix', String(enabled))
+      setShowNodePrefix(enabled)
+      toast(enabled ? '已开启节点前缀展示' : '已关闭节点前缀展示', true)
+    } catch (e) {
+      console.error('设置节点前缀失败', e)
+      toast('设置失败', false)
     }
   }
 
@@ -659,6 +724,113 @@ export default function PoolPage({
           </label>
           <span className="text-sm text-zinc-700">链路主动探活</span>
         </div>
+      </div>
+
+      {/* 网关超时切换（区间随机，防上游识别） */}
+      <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm p-5 space-y-4">
+        <h3 className="text-[14px] font-semibold text-zinc-900">网关超时切换</h3>
+        <p className="text-[12px] text-zinc-400">
+          每次请求在区间内随机取超时值，避免固定超时被上游识别为定时扫描；最小值防止过密重试
+        </p>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3">
+          <div className="space-y-1">
+            <label className="block text-[13px] font-medium text-zinc-700">首字超时 TTFT（毫秒）</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min={1}
+                value={timeoutForm.timeout_ttft_min_ms}
+                onChange={(e) => setTimeoutForm({ ...timeoutForm, timeout_ttft_min_ms: Number(e.target.value) })}
+                className="w-28 px-3 py-2 border rounded-lg text-[13px]"
+              />
+              <span className="text-zinc-400">~</span>
+              <input
+                type="number"
+                min={1}
+                value={timeoutForm.timeout_ttft_max_ms}
+                onChange={(e) => setTimeoutForm({ ...timeoutForm, timeout_ttft_max_ms: Number(e.target.value) })}
+                className="w-28 px-3 py-2 border rounded-lg text-[13px]"
+              />
+            </div>
+            <p className="text-[11px] text-zinc-400">建流后等待首个内容块，超时则判定异常并切换。默认 10s</p>
+          </div>
+          <div className="space-y-1">
+            <label className="block text-[13px] font-medium text-zinc-700">块间静默超时（毫秒）</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min={1}
+                value={timeoutForm.timeout_silence_min_ms}
+                onChange={(e) => setTimeoutForm({ ...timeoutForm, timeout_silence_min_ms: Number(e.target.value) })}
+                className="w-28 px-3 py-2 border rounded-lg text-[13px]"
+              />
+              <span className="text-zinc-400">~</span>
+              <input
+                type="number"
+                min={1}
+                value={timeoutForm.timeout_silence_max_ms}
+                onChange={(e) => setTimeoutForm({ ...timeoutForm, timeout_silence_max_ms: Number(e.target.value) })}
+                className="w-28 px-3 py-2 border rounded-lg text-[13px]"
+              />
+            </div>
+            <p className="text-[11px] text-zinc-400">两个数据块之间无数据，判定卡死并切换。默认 5s</p>
+          </div>
+          <div className="space-y-1">
+            <label className="block text-[13px] font-medium text-zinc-700">切换前并行探测数</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min={1}
+                value={timeoutForm.failover_probe_min}
+                onChange={(e) => setTimeoutForm({ ...timeoutForm, failover_probe_min: Number(e.target.value) })}
+                className="w-28 px-3 py-2 border rounded-lg text-[13px]"
+              />
+              <span className="text-zinc-400">~</span>
+              <input
+                type="number"
+                min={1}
+                value={timeoutForm.failover_probe_max}
+                onChange={(e) => setTimeoutForm({ ...timeoutForm, failover_probe_max: Number(e.target.value) })}
+                className="w-28 px-3 py-2 border rounded-lg text-[13px]"
+              />
+            </div>
+            <p className="text-[11px] text-zinc-400">切换前并行探测候选节点数量。默认 2~3</p>
+          </div>
+          <div className="space-y-1">
+            <label className="block text-[13px] font-medium text-zinc-700">调用日志保留上限</label>
+            <input
+              type="number"
+              min={100}
+              value={timeoutForm.call_log_max}
+              onChange={(e) => setTimeoutForm({ ...timeoutForm, call_log_max: Number(e.target.value) })}
+              className="w-28 px-3 py-2 border rounded-lg text-[13px]"
+            />
+            <p className="text-[11px] text-zinc-400">日志页最多保留的请求记录数。默认 5000</p>
+          </div>
+        </div>
+
+        {/* 节点前缀展示开关 */}
+        <div className="flex items-center space-x-3">
+          <label className="relative inline-flex items-center cursor-pointer">
+            <input
+              type="checkbox"
+              checked={showNodePrefix}
+              onChange={(e) => handleShowNodePrefixChange(e.target.checked)}
+              className="sr-only peer"
+            />
+            <div className="w-11 h-6 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-zinc-900"></div>
+          </label>
+          <span className="text-sm text-zinc-700">对话流首段展示「节点 · 模型」前缀</span>
+        </div>
+        <p className="text-[12px] text-zinc-400">开启后每条回复显示由哪个实例/模型回答（切换节点时重新标注）。默认关闭</p>
+
+        <button
+          onClick={() => void handleSaveTimeout()}
+          className="bg-zinc-900 text-white rounded-lg px-4 py-2 text-[13px] hover:bg-zinc-700"
+        >
+          保存超时配置
+        </button>
       </div>
 
       {/* 池成员列表 */}
