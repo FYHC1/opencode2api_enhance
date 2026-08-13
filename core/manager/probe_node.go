@@ -12,6 +12,12 @@ import (
 // probeNode 单节点完整探测。
 func (c *ScanController) probeNode(opts ScanOptions, node ClashNode, pair portPair, workerDir string) ProbeResult {
 	base := ProbeResult{Node: node.Name, NodeType: node.NodeType, Server: node.Server, Port: node.Port}
+	// S1: 停止扫描响应——探测开始前若已收到停止请求，直接放弃该节点（不 spawn 探针进程）。
+	if c.isStopping() {
+		base.Category = "stopped"
+		base.Message = "已中止"
+		return base
+	}
 	budget := time.Duration(opts.TimeoutSec) * time.Second
 	deadline := time.Now().Add(budget)
 	password := c.m.effectiveDefaultPassword()
@@ -87,6 +93,12 @@ func (c *ScanController) probeNode(opts ScanOptions, node ClashNode, pair portPa
 	}
 	if remaining > 12*time.Second {
 		remaining = 12 * time.Second
+	}
+	// S1: 发送 HTTP 探测前响应停止——defer 已注册，探针进程会自动清理。
+	if c.isStopping() {
+		base.Category = "stopped"
+		base.Message = "已中止"
+		return base
 	}
 	status, body, modelCount, httpErr := freeCompletion(pair.api, password, remaining)
 	base.StatusCode = status
