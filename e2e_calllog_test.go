@@ -43,6 +43,15 @@ func TestRecordCallEndToEnd(t *testing.T) {
 			{Type: "all_failed", Detail: "all failed", At: time.Now()},
 		},
 	})
+	// 直连请求（无代理地址）：Nodes/Events 空地址应清洗为「直连」
+	recordCall(CallRecord{
+		ReqID: "e2e-3", TS: time.Now().Format(time.RFC3339),
+		Model: "test-model", Status: "ok",
+		Nodes: []string{""},
+		Events: []CallEvent{
+			{Type: "connect_ok", Detail: "connected", At: time.Now()},
+		},
+	})
 
 	data, err := os.ReadFile(callLogPath)
 	if err != nil {
@@ -53,10 +62,17 @@ func TestRecordCallEndToEnd(t *testing.T) {
 		t.Fatal("call_log.jsonl empty")
 	}
 	// 每行一条 JSON，含 req_id 与 status
-	for _, want := range []string{"e2e-1", "e2e-2", "\"status\":\"ok\"", "\"status\":\"fail\""} {
+	for _, want := range []string{"e2e-1", "e2e-2", "e2e-3", "\"status\":\"ok\"", "\"status\":\"fail\""} {
 		if !containsStr(content, want) {
 			t.Fatalf("missing %q in:\n%s", want, content)
 		}
+	}
+	// 直连清洗：空地址应变为「直连」而非空串
+	if !containsStr(content, "\"nodes\":[\"直连\"]") {
+		t.Fatalf("直连 nodes 未清洗:\n%s", content)
+	}
+	if !containsStr(content, "\"node\":\"直连\"") {
+		t.Fatalf("直连事件 node 未清洗:\n%s", content)
 	}
 	t.Logf("call_log.jsonl 内容:\n%s", content)
 }

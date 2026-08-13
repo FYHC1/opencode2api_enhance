@@ -257,10 +257,22 @@ func initCallLog() {
 	callLog.SetPath(callLogPath)
 }
 
-// recordCall 便捷包装：追加一条调用日志（失败不阻塞请求）
+// recordCall 便捷包装：追加一条调用日志（失败不阻塞请求）。
+// 直连请求（无代理地址）在 Nodes/Events 中显示「直连」，避免空串不可读。
 func recordCall(rec CallRecord) {
 	if !callLogEnabled {
 		return
+	}
+	direct := "直连"
+	for i := range rec.Nodes {
+		if strings.TrimSpace(rec.Nodes[i]) == "" {
+			rec.Nodes[i] = direct
+		}
+	}
+	for i := range rec.Events {
+		if strings.TrimSpace(rec.Events[i].Node) == "" {
+			rec.Events[i].Node = direct
+		}
 	}
 	// callLog 指针可能被热加载替换（setTimeoutConfigFromApp），加锁读取
 	callLogMu.RLock()
