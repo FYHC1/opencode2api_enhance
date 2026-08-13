@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import clsx from 'clsx'
-import { Loader2, Network, Radar, RefreshCw, Rss, Square, Trash2, User } from 'lucide-react'
+import { Loader2, Network, Radar, RefreshCw, Rss, Square, Trash2, User, Settings2, X } from 'lucide-react'
 import { api, type NodeView, type ProbeResult, type ScanProgress } from '../lib/api'
 import { isDesktop } from '../lib/env'
 import ResultModal from '../components/ResultModal'
@@ -30,6 +30,8 @@ export default function NodesPage({
   const [subscribeInterval, setSubscribeInterval] = useState(0)
   const [subscribeTarget, setSubscribeTarget] = useState<'solo' | 'pool'>('solo')
   const [subscribeBusy, setSubscribeBusy] = useState(false)
+  // 页面设置弹窗（订阅自动拉取，收进右上角齿轮）
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   // 首次加载时拉取订阅配置（生效值填充）
   useEffect(() => {
@@ -369,85 +371,19 @@ export default function NodesPage({
           >
             {acting ? <Loader2 size={14} className="animate-spin" /> : <User size={14} />} 独享
           </button>
-        </div>
-      </div>
-
-      {/* 订阅自动拉取（main 功能 M1）：配置订阅地址 → 后台按间隔拉取并导入为实例 */}
-      <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm p-5 space-y-4">
-        <div className="flex items-start justify-between">
-          <div>
-            <h3 className="text-[14px] font-semibold text-zinc-900">订阅自动拉取</h3>
-            <p className="text-[12px] text-zinc-400">支持 Clash YAML / base64 / v2ray 链接（vmess/vless/trojan/ss/hysteria2），重复节点自动跳过</p>
-          </div>
           <button
-            type="button"
-            onClick={() => void handleSubscribeImport()}
-            disabled={subscribeBusy}
-            className="flex items-center gap-1.5 bg-green-600 text-white rounded-lg px-3 py-1.5 text-[13px] hover:bg-green-700 disabled:opacity-60 disabled:cursor-not-allowed"
+            onClick={() => setSettingsOpen(true)}
+            title="节点池设置（订阅自动拉取）"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-zinc-700 bg-white border border-zinc-200 hover:bg-zinc-50"
           >
-            {subscribeBusy ? <Loader2 size={14} className="animate-spin" /> : <Rss size={14} />}
-            {subscribeBusy ? '拉取中…' : '一键拉取并导入'}
-          </button>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3">
-          <div className="space-y-1">
-            <label className="block text-[13px] font-medium text-zinc-700">订阅 URL</label>
-            <input
-              type="text"
-              placeholder="https://example.com/sub"
-              value={subscribeUrl}
-              onChange={(e) => setSubscribeUrl(e.target.value)}
-              className="w-full px-3 py-2 border rounded-lg text-[13px]"
-            />
-          </div>
-          <div className="space-y-1">
-            <label className="block text-[13px] font-medium text-zinc-700">自动拉取间隔（分钟，0 = 不自动拉取）</label>
-            <div className="flex items-center gap-3">
-              <input
-                type="number"
-                min={0}
-                value={subscribeInterval}
-                onChange={(e) => setSubscribeInterval(Number(e.target.value))}
-                className="w-28 px-3 py-2 border rounded-lg text-[13px]"
-              />
-              <div className="flex items-center rounded-lg border border-zinc-200 bg-white p-0.5">
-                <button
-                  type="button"
-                  onClick={() => setSubscribeTarget('solo')}
-                  className={clsx(
-                    'px-3 py-1 rounded-md text-[12px] transition-colors',
-                    subscribeTarget === 'solo' ? 'bg-zinc-900 text-white' : 'text-zinc-500 hover:bg-zinc-100',
-                  )}
-                  title="导入为独享实例（一人一实例，默认）"
-                >
-                  独享
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSubscribeTarget('pool')}
-                  className={clsx(
-                    'px-3 py-1 rounded-md text-[12px] transition-colors',
-                    subscribeTarget === 'pool' ? 'bg-zinc-900 text-white' : 'text-zinc-500 hover:bg-zinc-100',
-                  )}
-                  title="导入并标记进实例池（聚合到统一网关）"
-                >
-                  进池
-                </button>
-              </div>
-            </div>
-            <p className="text-[11px] text-zinc-400">「一键拉取并导入」立即拉取并按目标导入；自动拉取按间隔后台执行</p>
-          </div>
-        </div>
-
-        <div className="flex items-center justify-end">
-          <button onClick={() => void handleSaveSubscribe()} className="bg-zinc-900 text-white rounded-lg px-4 py-2 text-[13px] hover:bg-zinc-700">
-            保存
+            <Settings2 size={14} /> 设置
           </button>
         </div>
       </div>
 
-{/* 扫描进度条：扫描中实时显示，完成后短暂保留结果 */}
+            {/* 订阅自动拉取已收进右上角「设置」弹窗 */}
+
+      {/* 扫描进度条：扫描中实时显示，完成后短暂保留结果 */}
       {scan && (scan.status === 'running' || scan.status === 'stopping' || scan.status === 'done') && (
         <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm p-4 space-y-2">
           <div className="flex items-center justify-between text-[12px] text-zinc-500">
@@ -583,6 +519,88 @@ export default function NodesPage({
       )}
 
     </div>
+
+      {/* 页面设置弹窗（右上角齿轮）：订阅自动拉取 */}
+      {settingsOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => setSettingsOpen(false)}
+        >
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[86vh] overflow-y-auto p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-zinc-900">节点池设置</h2>
+              <button onClick={() => setSettingsOpen(false)} className="p-1.5 rounded-lg hover:bg-zinc-100">
+                <X size={18} />
+              </button>
+            </div>
+            <p className="text-[12px] text-zinc-400">支持 Clash YAML / base64 / v2ray 链接（vmess/vless/trojan/ss/hysteria2），重复节点自动跳过</p>
+
+            <div className="space-y-1">
+              <label className="block text-[13px] font-medium text-zinc-700">订阅 URL</label>
+              <input
+                type="text"
+                placeholder="https://example.com/sub"
+                value={subscribeUrl}
+                onChange={(e) => setSubscribeUrl(e.target.value)}
+                className="w-full px-3 py-2 border rounded-lg text-[13px]"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="block text-[13px] font-medium text-zinc-700">自动拉取间隔（分钟，0 = 不自动拉取）</label>
+              <div className="flex items-center gap-3">
+                <input
+                  type="number"
+                  min={0}
+                  value={subscribeInterval}
+                  onChange={(e) => setSubscribeInterval(Number(e.target.value))}
+                  className="w-28 px-3 py-2 border rounded-lg text-[13px]"
+                />
+                <div className="flex items-center rounded-lg border border-zinc-200 bg-white p-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setSubscribeTarget('solo')}
+                    className={clsx(
+                      'px-3 py-1 rounded-md text-[12px] transition-colors',
+                      subscribeTarget === 'solo' ? 'bg-zinc-900 text-white' : 'text-zinc-500 hover:bg-zinc-100',
+                    )}
+                    title="导入为独享实例（一人一实例，默认）"
+                  >
+                    独享
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSubscribeTarget('pool')}
+                    className={clsx(
+                      'px-3 py-1 rounded-md text-[12px] transition-colors',
+                      subscribeTarget === 'pool' ? 'bg-zinc-900 text-white' : 'text-zinc-500 hover:bg-zinc-100',
+                    )}
+                    title="导入并标记进实例池（聚合到统一网关）"
+                  >
+                    进池
+                  </button>
+                </div>
+              </div>
+              <p className="text-[11px] text-zinc-400">「一键拉取并导入」立即拉取并按目标导入；自动拉取按间隔后台执行</p>
+            </div>
+
+            <div className="flex items-center gap-3 pt-1">
+              <button
+                type="button"
+                onClick={() => void handleSubscribeImport()}
+                disabled={subscribeBusy}
+                className="flex items-center gap-1.5 bg-green-600 text-white rounded-lg px-4 py-2 text-[13px] hover:bg-green-700 disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {subscribeBusy ? <Loader2 size={14} className="animate-spin" /> : <Rss size={14} />}
+                {subscribeBusy ? '拉取中…' : '一键拉取并导入'}
+              </button>
+              <button onClick={() => void handleSaveSubscribe()} className="bg-zinc-900 text-white rounded-lg px-4 py-2 text-[13px] hover:bg-zinc-700">
+                保存
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showResult && (
         <ResultModal

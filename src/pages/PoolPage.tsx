@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import clsx from 'clsx'
-import { Copy, Loader2, Power, RefreshCw, ShieldCheck, Network, Search, Play, Square, TestTube2, Trash2, KeyRound, Pencil, Check, X, Activity } from 'lucide-react'
+import { Copy, Loader2, Power, RefreshCw, ShieldCheck, Network, Search, Play, Square, TestTube2, Trash2, KeyRound, Pencil, Check, X, Activity, Settings2 } from 'lucide-react'
 import { api, type GatewayStatus, type Instance, type TestResult, type PoolQualitySummary, type PoolQualityRecord, type PoolQualityLevel } from '../lib/api'
 
 function statusBadge(st: Instance['status']): [string, string] {
@@ -66,6 +66,8 @@ export default function PoolPage({
   const [keyOpen, setKeyOpen] = useState(false)
   const [keyValue, setKeyValue] = useState('')
   const [keyBusy, setKeyBusy] = useState(false)
+  // 页面设置弹窗（性能模式参数 + 网关超时切换，收进右上角齿轮）
+  const [settingsOpen, setSettingsOpen] = useState(false)
   // 一键释放全部池成员忙态
   const [releaseAllBusy, setReleaseAllBusy] = useState(false)
 
@@ -493,6 +495,13 @@ export default function PoolPage({
             {restarting ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
             {restarting ? '重启中…' : '一键重启'}
           </button>
+          <button
+            onClick={() => setSettingsOpen(true)}
+            title="实例池设置（性能模式参数 / 网关超时切换）"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-zinc-700 bg-white border border-zinc-200 hover:bg-zinc-50"
+          >
+            <Settings2 size={14} /> 设置
+          </button>
         </div>
       </div>
 
@@ -623,215 +632,7 @@ export default function PoolPage({
         </div>
       </div>
 
-      {/* 实例池性能模式（P1/P2）参数配置卡 */}
-      <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm p-5 space-y-4">
-        <div className="flex items-start justify-between">
-          <div>
-            <h3 className="text-[14px] font-semibold text-zinc-900">实例池性能模式 · 参数</h3>
-            <p className="text-[12px] text-zinc-400">
-              链路级主动探活（经实例出口发真实请求）+ 质量加权路由：坏节点自动降权/剔除，熔断到期自动回归。总开关在上方路由模式。
-            </p>
-          </div>
-          <button onClick={() => void handleSavePool()} className="bg-zinc-900 text-white rounded-lg px-4 py-2 text-[13px] hover:bg-zinc-700">
-            保存
-          </button>
-        </div>
-
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-3">
-          <div className="space-y-1">
-            <label className="block text-[13px] font-medium text-zinc-700">探活间隔（秒，0=不探活）</label>
-            <input
-              type="number"
-              min={0}
-              value={poolForm.pool_probe_interval_sec}
-              onChange={(e) => setPoolForm({ ...poolForm, pool_probe_interval_sec: Number(e.target.value) })}
-              className="w-full px-3 py-2 border rounded-lg text-[13px]"
-            />
-            <p className="text-[11px] text-zinc-400">默认 45</p>
-          </div>
-          <div className="space-y-1">
-            <label className="block text-[13px] font-medium text-zinc-700">质量窗口（分钟）</label>
-            <input
-              type="number"
-              min={1}
-              value={poolForm.pool_quality_window_min}
-              onChange={(e) => setPoolForm({ ...poolForm, pool_quality_window_min: Number(e.target.value) })}
-              className="w-full px-3 py-2 border rounded-lg text-[13px]"
-            />
-            <p className="text-[11px] text-zinc-400">默认 10</p>
-          </div>
-          <div className="space-y-1">
-            <label className="block text-[13px] font-medium text-zinc-700">熔断阈值（连续失败）</label>
-            <input
-              type="number"
-              min={1}
-              value={poolForm.pool_breaker_threshold}
-              onChange={(e) => setPoolForm({ ...poolForm, pool_breaker_threshold: Number(e.target.value) })}
-              className="w-full px-3 py-2 border rounded-lg text-[13px]"
-            />
-            <p className="text-[11px] text-zinc-400">默认 3</p>
-          </div>
-          <div className="space-y-1">
-            <label className="block text-[13px] font-medium text-zinc-700">半开间隔（秒）</label>
-            <input
-              type="number"
-              min={1}
-              value={poolForm.pool_halfopen_interval_sec}
-              onChange={(e) => setPoolForm({ ...poolForm, pool_halfopen_interval_sec: Number(e.target.value) })}
-              className="w-full px-3 py-2 border rounded-lg text-[13px]"
-            />
-            <p className="text-[11px] text-zinc-400">默认 60</p>
-          </div>
-        </div>
-
-        {/* 并发设置（D3） */}
-        <div className="pt-3 border-t border-zinc-100">
-          <div className="text-[13px] font-medium text-zinc-700 mb-2">并发设置</div>
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-x-6 gap-y-2">
-            {([
-              ['pool_race_copies', '竞速并行（1~4）', 1, 4],
-              ['scan_concurrency', '节点扫描（1~16）', 1, 16],
-              ['batch_concurrency', '批量启停/释放（1~16）', 1, 16],
-              ['test_concurrency', '一键测试（1~16）', 1, 16],
-              ['pool_probe_concurrency', '链路探活（1~16）', 1, 16],
-            ] as const).map(([key, label, lo, hi]) => (
-              <div key={key} className="flex items-center justify-between gap-3">
-                <label className="text-[12px] text-zinc-600">{label}</label>
-                <input
-                  type="number"
-                  min={lo}
-                  max={hi}
-                  value={poolForm[key]}
-                  onChange={(e) => setPoolForm({ ...poolForm, [key]: Number(e.target.value) })}
-                  className="w-18 px-2 py-1.5 border rounded-lg text-[13px] text-right"
-                />
-              </div>
-            ))}
-          </div>
-          <p className="text-[11px] text-zinc-400 mt-1.5">并发过高可能引起进程风暴，建议保持默认</p>
-        </div>
-
-        {/* 探活启用开关 */}
-        <div className="flex items-center space-x-3">
-          <label className="relative inline-flex items-center cursor-pointer">
-            <input
-              type="checkbox"
-              checked={poolProbeEnabled}
-              onChange={(e) => setPoolProbeEnabled(e.target.checked)}
-              className="sr-only peer"
-            />
-            <div className="w-11 h-6 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-zinc-900"></div>
-          </label>
-          <span className="text-sm text-zinc-700">链路主动探活</span>
-        </div>
-      </div>
-
-      {/* 网关超时切换（区间随机，防上游识别） */}
-      <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm p-5 space-y-4">
-        <h3 className="text-[14px] font-semibold text-zinc-900">网关超时切换</h3>
-        <p className="text-[12px] text-zinc-400">
-          每次请求在区间内随机取超时值，避免固定超时被上游识别为定时扫描；最小值防止过密重试
-        </p>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3">
-          <div className="space-y-1">
-            <label className="block text-[13px] font-medium text-zinc-700">首字超时 TTFT（毫秒）</label>
-            <div className="flex items-center gap-2">
-              <input
-                type="number"
-                min={1}
-                value={timeoutForm.timeout_ttft_min_ms}
-                onChange={(e) => setTimeoutForm({ ...timeoutForm, timeout_ttft_min_ms: Number(e.target.value) })}
-                className="w-28 px-3 py-2 border rounded-lg text-[13px]"
-              />
-              <span className="text-zinc-400">~</span>
-              <input
-                type="number"
-                min={1}
-                value={timeoutForm.timeout_ttft_max_ms}
-                onChange={(e) => setTimeoutForm({ ...timeoutForm, timeout_ttft_max_ms: Number(e.target.value) })}
-                className="w-28 px-3 py-2 border rounded-lg text-[13px]"
-              />
-            </div>
-            <p className="text-[11px] text-zinc-400">建流后等待首个内容块，超时则判定异常并切换。默认 10s</p>
-          </div>
-          <div className="space-y-1">
-            <label className="block text-[13px] font-medium text-zinc-700">块间静默超时（毫秒）</label>
-            <div className="flex items-center gap-2">
-              <input
-                type="number"
-                min={1}
-                value={timeoutForm.timeout_silence_min_ms}
-                onChange={(e) => setTimeoutForm({ ...timeoutForm, timeout_silence_min_ms: Number(e.target.value) })}
-                className="w-28 px-3 py-2 border rounded-lg text-[13px]"
-              />
-              <span className="text-zinc-400">~</span>
-              <input
-                type="number"
-                min={1}
-                value={timeoutForm.timeout_silence_max_ms}
-                onChange={(e) => setTimeoutForm({ ...timeoutForm, timeout_silence_max_ms: Number(e.target.value) })}
-                className="w-28 px-3 py-2 border rounded-lg text-[13px]"
-              />
-            </div>
-            <p className="text-[11px] text-zinc-400">两个数据块之间无数据，判定卡死并切换。默认 5s</p>
-          </div>
-          <div className="space-y-1">
-            <label className="block text-[13px] font-medium text-zinc-700">切换前并行探测数</label>
-            <div className="flex items-center gap-2">
-              <input
-                type="number"
-                min={1}
-                value={timeoutForm.failover_probe_min}
-                onChange={(e) => setTimeoutForm({ ...timeoutForm, failover_probe_min: Number(e.target.value) })}
-                className="w-28 px-3 py-2 border rounded-lg text-[13px]"
-              />
-              <span className="text-zinc-400">~</span>
-              <input
-                type="number"
-                min={1}
-                value={timeoutForm.failover_probe_max}
-                onChange={(e) => setTimeoutForm({ ...timeoutForm, failover_probe_max: Number(e.target.value) })}
-                className="w-28 px-3 py-2 border rounded-lg text-[13px]"
-              />
-            </div>
-            <p className="text-[11px] text-zinc-400">切换前并行探测候选节点数量。默认 2~3</p>
-          </div>
-          <div className="space-y-1">
-            <label className="block text-[13px] font-medium text-zinc-700">调用日志保留上限</label>
-            <input
-              type="number"
-              min={100}
-              value={timeoutForm.call_log_max}
-              onChange={(e) => setTimeoutForm({ ...timeoutForm, call_log_max: Number(e.target.value) })}
-              className="w-28 px-3 py-2 border rounded-lg text-[13px]"
-            />
-            <p className="text-[11px] text-zinc-400">日志页最多保留的请求记录数。默认 5000</p>
-          </div>
-        </div>
-
-        {/* 节点前缀展示开关 */}
-        <div className="flex items-center space-x-3">
-          <label className="relative inline-flex items-center cursor-pointer">
-            <input
-              type="checkbox"
-              checked={showNodePrefix}
-              onChange={(e) => handleShowNodePrefixChange(e.target.checked)}
-              className="sr-only peer"
-            />
-            <div className="w-11 h-6 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-zinc-900"></div>
-          </label>
-          <span className="text-sm text-zinc-700">对话流首段展示「节点 · 模型」前缀</span>
-        </div>
-        <p className="text-[12px] text-zinc-400">开启后每条回复显示由哪个实例/模型回答（切换节点时重新标注）。默认关闭</p>
-
-        <button
-          onClick={() => void handleSaveTimeout()}
-          className="bg-zinc-900 text-white rounded-lg px-4 py-2 text-[13px] hover:bg-zinc-700"
-        >
-          保存超时配置
-        </button>
-      </div>
+      {/* 实例池性能模式参数与网关超时切换已收进右上角「设置」弹窗 */}
 
       {/* 池成员列表 */}
       <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm overflow-hidden">
@@ -983,6 +784,223 @@ export default function PoolPage({
           </div>
         )}
       </div>
+
+      {/* 页面设置弹窗（右上角齿轮）：性能模式参数 + 网关超时切换 */}
+      {settingsOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => setSettingsOpen(false)}
+        >
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[86vh] overflow-y-auto p-6 space-y-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-zinc-900">实例池设置</h2>
+              <button onClick={() => setSettingsOpen(false)} className="p-1.5 rounded-lg hover:bg-zinc-100">
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* 性能模式参数 */}
+            <section className="space-y-4">
+              <h3 className="text-[14px] font-semibold text-zinc-900 border-b border-zinc-100 pb-2">实例池性能模式 · 参数</h3>
+              <p className="text-[12px] text-zinc-400">
+                链路级主动探活（经实例出口发真实请求）+ 质量加权路由：坏节点自动降权/剔除，熔断到期自动回归。总开关在路由模式处。
+              </p>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-3">
+                <div className="space-y-1">
+                  <label className="block text-[13px] font-medium text-zinc-700">探活间隔（秒，0=不探活）</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={poolForm.pool_probe_interval_sec}
+                    onChange={(e) => setPoolForm({ ...poolForm, pool_probe_interval_sec: Number(e.target.value) })}
+                    className="w-full px-3 py-2 border rounded-lg text-[13px]"
+                  />
+                  <p className="text-[11px] text-zinc-400">默认 45</p>
+                </div>
+                <div className="space-y-1">
+                  <label className="block text-[13px] font-medium text-zinc-700">质量窗口（分钟）</label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={poolForm.pool_quality_window_min}
+                    onChange={(e) => setPoolForm({ ...poolForm, pool_quality_window_min: Number(e.target.value) })}
+                    className="w-full px-3 py-2 border rounded-lg text-[13px]"
+                  />
+                  <p className="text-[11px] text-zinc-400">默认 10</p>
+                </div>
+                <div className="space-y-1">
+                  <label className="block text-[13px] font-medium text-zinc-700">熔断阈值（连续失败）</label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={poolForm.pool_breaker_threshold}
+                    onChange={(e) => setPoolForm({ ...poolForm, pool_breaker_threshold: Number(e.target.value) })}
+                    className="w-full px-3 py-2 border rounded-lg text-[13px]"
+                  />
+                  <p className="text-[11px] text-zinc-400">默认 3</p>
+                </div>
+                <div className="space-y-1">
+                  <label className="block text-[13px] font-medium text-zinc-700">半开间隔（秒）</label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={poolForm.pool_halfopen_interval_sec}
+                    onChange={(e) => setPoolForm({ ...poolForm, pool_halfopen_interval_sec: Number(e.target.value) })}
+                    className="w-full px-3 py-2 border rounded-lg text-[13px]"
+                  />
+                  <p className="text-[11px] text-zinc-400">默认 60</p>
+                </div>
+              </div>
+
+              <div className="pt-2 border-t border-zinc-100">
+                <div className="text-[13px] font-medium text-zinc-700 mb-2">并发设置</div>
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-x-6 gap-y-2">
+                  {([
+                    ['pool_race_copies', '竞速并行（1~4）', 1, 4],
+                    ['scan_concurrency', '节点扫描（1~16）', 1, 16],
+                    ['batch_concurrency', '批量启停/释放（1~16）', 1, 16],
+                    ['test_concurrency', '一键测试（1~16）', 1, 16],
+                    ['pool_probe_concurrency', '链路探活（1~16）', 1, 16],
+                  ] as const).map(([key, label, lo, hi]) => (
+                    <div key={key} className="flex items-center justify-between gap-3">
+                      <label className="text-[12px] text-zinc-600">{label}</label>
+                      <input
+                        type="number"
+                        min={lo}
+                        max={hi}
+                        value={poolForm[key]}
+                        onChange={(e) => setPoolForm({ ...poolForm, [key]: Number(e.target.value) })}
+                        className="w-18 px-2 py-1.5 border rounded-lg text-[13px] text-right"
+                      />
+                    </div>
+                  ))}
+                </div>
+                <p className="text-[11px] text-zinc-400 mt-1.5">并发过高可能引起进程风暴，建议保持默认</p>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-3">
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={poolProbeEnabled}
+                      onChange={(e) => setPoolProbeEnabled(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-zinc-900"></div>
+                  </label>
+                  <span className="text-sm text-zinc-700">链路主动探活</span>
+                </div>
+                <button onClick={() => void handleSavePool()} className="bg-zinc-900 text-white rounded-lg px-4 py-2 text-[13px] hover:bg-zinc-700">
+                  保存
+                </button>
+              </div>
+            </section>
+
+            {/* 网关超时切换 */}
+            <section className="space-y-4">
+              <h3 className="text-[14px] font-semibold text-zinc-900 border-b border-zinc-100 pb-2">网关超时切换</h3>
+              <p className="text-[12px] text-zinc-400">
+                每次请求在区间内随机取超时值，避免固定超时被上游识别为定时扫描；最小值防止过密重试
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3">
+                <div className="space-y-1">
+                  <label className="block text-[13px] font-medium text-zinc-700">首字超时 TTFT（毫秒）</label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={1}
+                      value={timeoutForm.timeout_ttft_min_ms}
+                      onChange={(e) => setTimeoutForm({ ...timeoutForm, timeout_ttft_min_ms: Number(e.target.value) })}
+                      className="w-28 px-3 py-2 border rounded-lg text-[13px]"
+                    />
+                    <span className="text-zinc-400">~</span>
+                    <input
+                      type="number"
+                      min={1}
+                      value={timeoutForm.timeout_ttft_max_ms}
+                      onChange={(e) => setTimeoutForm({ ...timeoutForm, timeout_ttft_max_ms: Number(e.target.value) })}
+                      className="w-28 px-3 py-2 border rounded-lg text-[13px]"
+                    />
+                  </div>
+                  <p className="text-[11px] text-zinc-400">建流后等待首个内容块，超时则判定异常并切换。默认 10s</p>
+                </div>
+                <div className="space-y-1">
+                  <label className="block text-[13px] font-medium text-zinc-700">块间静默超时（毫秒）</label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={1}
+                      value={timeoutForm.timeout_silence_min_ms}
+                      onChange={(e) => setTimeoutForm({ ...timeoutForm, timeout_silence_min_ms: Number(e.target.value) })}
+                      className="w-28 px-3 py-2 border rounded-lg text-[13px]"
+                    />
+                    <span className="text-zinc-400">~</span>
+                    <input
+                      type="number"
+                      min={1}
+                      value={timeoutForm.timeout_silence_max_ms}
+                      onChange={(e) => setTimeoutForm({ ...timeoutForm, timeout_silence_max_ms: Number(e.target.value) })}
+                      className="w-28 px-3 py-2 border rounded-lg text-[13px]"
+                    />
+                  </div>
+                  <p className="text-[11px] text-zinc-400">两个数据块之间无数据，判定卡死并切换。默认 5s</p>
+                </div>
+                <div className="space-y-1">
+                  <label className="block text-[13px] font-medium text-zinc-700">切换前并行探测数</label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={1}
+                      value={timeoutForm.failover_probe_min}
+                      onChange={(e) => setTimeoutForm({ ...timeoutForm, failover_probe_min: Number(e.target.value) })}
+                      className="w-28 px-3 py-2 border rounded-lg text-[13px]"
+                    />
+                    <span className="text-zinc-400">~</span>
+                    <input
+                      type="number"
+                      min={1}
+                      value={timeoutForm.failover_probe_max}
+                      onChange={(e) => setTimeoutForm({ ...timeoutForm, failover_probe_max: Number(e.target.value) })}
+                      className="w-28 px-3 py-2 border rounded-lg text-[13px]"
+                    />
+                  </div>
+                  <p className="text-[11px] text-zinc-400">切换前并行探测候选节点数量。默认 2~3</p>
+                </div>
+                <div className="space-y-1">
+                  <label className="block text-[13px] font-medium text-zinc-700">调用日志保留上限</label>
+                  <input
+                    type="number"
+                    min={100}
+                    value={timeoutForm.call_log_max}
+                    onChange={(e) => setTimeoutForm({ ...timeoutForm, call_log_max: Number(e.target.value) })}
+                    className="w-28 px-3 py-2 border rounded-lg text-[13px]"
+                  />
+                  <p className="text-[11px] text-zinc-400">日志页最多保留的请求记录数。默认 5000</p>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-3">
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={showNodePrefix}
+                      onChange={(e) => handleShowNodePrefixChange(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-zinc-900"></div>
+                  </label>
+                  <span className="text-sm text-zinc-700">对话流首段展示「节点 · 模型」前缀</span>
+                </div>
+                <button onClick={() => void handleSaveTimeout()} className="bg-zinc-900 text-white rounded-lg px-4 py-2 text-[13px] hover:bg-zinc-700">
+                  保存超时配置
+                </button>
+              </div>
+            </section>
+          </div>
+        </div>
+      )}
 
       {keyOpen && (
         <div
