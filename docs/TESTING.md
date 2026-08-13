@@ -100,8 +100,24 @@ docker compose up -d          # 启动容器
 ## 五、CI 三平台产物
 
 - 工作流：`.github/workflows/build-release.yml`，三平台矩阵（windows/ubuntu/macos）产出 NSIS / deb+AppImage / dmg 并上传 artifacts；
-- **触发方式**：提交信息**必须含大写 `CI`**（否则工作流不运行，这是防止日常推送浪费 Action 分钟的守卫）；
-- 产物下载：GitHub → Actions → 对应 run → Artifacts。
+- **两种触发方式**：
+  1. **push main 且提交信息含大写 `CI`** → 构建，产物上传到该 run 的 Artifacts（不发布 Release）；
+  2. **push `v*` tag**（如 `git tag v1.3.2 && git push origin v1.3.2`）→ 构建 + **自动发布 GitHub Release**（`softprops/action-gh-release`，自动生成 Release Notes，汇总三平台产物为附件）。
+- 产物下载：GitHub → Actions → 对应 run → Artifacts；或 **GitHub → Releases**（tag 触发时）直接下载附件。
+
+### 各平台选用哪个文件（以 v1.3.2 为例）
+
+| 产物文件 | 适用平台 | 说明 |
+|---|---|---|
+| `opencode2api_xxx_x64-setup.exe` | **Windows** x64 | NSIS perMachine 安装包，日常桌面使用 |
+| `opencode2api_xxx_amd64.deb` | **Linux** Debian/Ubuntu 系（x64） | `sudo dpkg -i` 或 `sudo apt install ./xxx.deb` 安装；桌面版有窗口+托盘，需图形环境 |
+| `opencode2api_xxx_amd64.AppImage` | **Linux** 各发行版（x64） | 免安装：`chmod +x` 后 `./xxx.AppImage` 直接运行，无需 root |
+| `opencode2api_xxx_amd64.dmg` | **macOS** Intel（x64） | 双击挂载后拖入 Applications；Gatekeeper 拦截时右键→打开 |
+| `opencode2api_xxx_aarch64.dmg` | **macOS** Apple Silicon（M 系列） | 同 dmg，为 arm64 架构 |
+| `Source code (zip/tar.gz)` | 任意 | 源码归档，非运行产物 |
+
+> Linux 若兼有 `.deb` 与 `.AppImage`：日常用 `.deb`（更规范，享包管理器更新）；想免安装/跨发行版用 `.AppImage`。
+> macOS 按芯片选：Intel 用 `amd64`，M 系列用 `aarch64`。
 
 ---
 
