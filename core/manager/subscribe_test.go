@@ -10,6 +10,73 @@ import (
 
 // ---------- 解析 ----------
 
+// V1: 公告/信息伪节点过滤（对齐 Rust is_info_pseudo_node）。
+func TestIsInfoPseudoNode(t *testing.T) {
+	cases := []struct {
+		name string
+		want bool
+	}{
+		{"官网：https://t.me/example", true},
+		{"更新时间：2026-08-01", true},
+		{"剩余流量：100GB", true},
+		{"[anytls]官网：xuelian.pro", true},            // 剥离协议标签后仍命中
+		{"电报频道：@abc_news", true},
+		{"节点数：12", true},
+		{"HK-01", false},                              // 常规节点不误伤
+		{"余量：100GB", false},                         // 前缀不在列表
+		{"官网 xuelian.pro", false},                   // 无全角冒号
+		{"[anytls]US-Best", false},                    // 剥离标签后是正常名
+	}
+	for _, c := range cases {
+		if got := isInfoPseudoNode(c.name); got != c.want {
+			t.Errorf("isInfoPseudoNode(%q) = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// V1: parseSubscription 出口统一过滤伪节点（明文链接含公告行）。
+func TestParseSubscriptionFiltersPseudoNodes(t *testing.T) {
+	body := "官网：https://t.me/official\n" +
+		"更新时间：2026-08-01\n" +
+		"vless://uuid@hk.example.com:443?security=tls#HK-01\n" +
+		"vless://uuid@jp.example.com:443?security=tls#JP-02\n"
+	nodes, err := parseSubscription(body)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(nodes) != 2 {
+		t.Fatalf("nodes = %d, want 2 (公告行被过滤)", len(nodes))
+	}
+	for _, n := range nodes {
+		if isInfoPseudoNode(n.Name) {
+			t.Fatalf("pseudo node leaked: %q", n.Name)
+		}
+	}
+}
+
+// V1: Clash YAML 路径同样过滤伪节点。
+func TestParseSubscriptionClashYAMLFiltersPseudo(t *testing.T) {
+	body := `proxies:
+  - name: 官网：xuelian.pro
+    type: trojan
+    server: x.example.com
+    port: 443
+    password: s
+  - name: HK-01
+    type: trojan
+    server: hk.example.com
+    port: 443
+    password: s
+`
+	nodes, err := parseSubscription(body)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(nodes) != 1 || nodes[0].Name != "HK-01" {
+		t.Fatalf("nodes = %+v, want only HK-01", nodes)
+	}
+}
+
 func TestParseSubscriptionClashYAML(t *testing.T) {
 	body := `proxies:
   - name: HK-01

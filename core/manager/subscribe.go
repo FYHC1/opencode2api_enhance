@@ -178,36 +178,54 @@ func (m *Manager) groupNameFor(url string, meta SubscriptionMeta) string {
 }
 
 // parseSubscription 解析订阅内容（自动识别 Clash YAML / sing-box JSON / base64 / 明文链接）。
+// 统一在出口过滤公告/信息伪节点（对齐 Rust is_info_pseudo_node，覆盖全部格式）。
 func parseSubscription(body string) ([]SubscribeNode, error) {
 	trimmed := strings.TrimSpace(strings.TrimPrefix(body, "\uFEFF"))
 	if trimmed == "" {
 		return nil, fmt.Errorf("订阅内容为空")
 	}
-	if strings.HasPrefix(trimmed, "proxies:") || (strings.Contains(trimmed, "proxies:") && strings.Contains(trimmed, "type:")) {
-		nodes, err := parseClashYAML(trimmed)
-		if err != nil {
-			return nil, fmt.Errorf("解析 Clash YAML 失败: %v", err)
+	var nodes []SubscribeNode
+	var err error
+	switch {
+	case strings.HasPrefix(trimmed, "proxies:") || (strings.Contains(trimmed, "proxies:") && strings.Contains(trimmed, "type:")):
+		var clash []ClashNode
+		clash, err = parseClashYAML(trimmed)
+		if err == nil {
+			nodes = make([]SubscribeNode, 0, len(clash))
+			for i := range clash {
+				nodes = append(nodes, subscribeFromClash(clash[i]))
+			}
 		}
-		out := make([]SubscribeNode, 0, len(nodes))
-		for i := range nodes {
-			out = append(out, subscribeFromClash(nodes[i]))
+	case strings.HasPrefix(trimmed, `{"outbounds"`) || strings.HasPrefix(trimmed, "{\n  \"outbounds\""):
+		nodes, err = parseSingboxJSON(trimmed)
+	default:
+		if text, ok := decodeBase64Loose(trimmed); ok {
+			t := strings.TrimSpace(text)
+			if strings.HasPrefix(t, `{"outbounds"`) {
+				nodes, err = parseSingboxJSON(t)
+				break
+			}
+			if strings.Contains(t, "://") {
+				nodes, err = parsePlainLinks(t)
+				break
+			}
 		}
-		return out, nil
+		nodes, err = parsePlainLinks(trimmed)
 	}
-	if strings.HasPrefix(trimmed, `{"outbounds"`) || strings.HasPrefix(trimmed, "{\n  \"outbounds\"") {
-		return parseSingboxJSON(trimmed)
+	if err != nil {
+		return nil, err
 	}
-	if text, ok := decodeBase64Loose(trimmed); ok {
-		t := strings.TrimSpace(text)
-		if strings.HasPrefix(t, `{"outbounds"`) {
-			return parseSingboxJSON(t)
-		}
-		if strings.Contains(t, "://") {
-			// base64 订阅整体解码成功且含协议链接 → 按解码后文本解析
-			return parsePlainLinks(t)
+	// 出口统一过滤公告/伪节点（官网/更新时间/剩余时长…，名称含全角冒号）
+	filtered := nodes[:0]
+	for _, n := range nodes {
+		if !isInfoPseudoNode(n.Name) {
+			filtered = append(filtered, n)
 		}
 	}
-	return parsePlainLinks(trimmed)
+	if len(filtered) == 0 {
+		return nil, fmt.Errorf("订阅内容中未解析到任何可用节点")
+	}
+	return filtered, nil
 }
 
 // subscribeFromClash ClashNode → SubscribeNode。
@@ -321,6 +339,10 @@ func parsePlainLinks(s string) ([]SubscribeNode, error) {
 			// 对齐 Rust：跳过无法解析的行（仅记录，不中断）
 			continue
 		} else if ok {
+			if isInfoPseudoNode(node.Name) {
+				// 对齐 Rust is_info_pseudo_node：公告/信息伪节点（官网/更新时间/剩余时长…）过滤
+				continue
+			}
 			nodes = append(nodes, node)
 		}
 	}
@@ -328,6 +350,32 @@ func parsePlainLinks(s string) ([]SubscribeNode, error) {
 		return nil, fmt.Errorf("订阅内容中未解析到任何可用节点")
 	}
 	return nodes, nil
+}
+
+// infoPseudoPrefixes 订阅头部公告/信息伪节点名称前缀（Rust is_info_pseudo_node 同款）。
+// 这些行伪装成 vless/anytls 链接指向占位服务器，解码后名称不含国家地区且带全角冒号。
+var infoPseudoPrefixes = []string{
+	"官网", "网站", "主页", "更新时间", "更新于", "剩余时长", "剩余流量", "到期时间",
+	"过期时间", "套餐", "订阅", "公告", "通知", "电报", "频道", "群组", "客服", "工单",
+	"说明", "注意", "流量", "账号", "节点数",
+}
+
+// isInfoPseudoNode 判断节点名是否为公告/信息伪节点：
+// 先剥离 `[anytls]` 等协议前缀标签，再匹配公告前缀且名称含全角冒号。
+func isInfoPseudoNode(name string) bool {
+	n := strings.TrimSpace(name)
+	if idx := strings.IndexByte(n, ']'); strings.HasPrefix(n, "[") && idx >= 0 {
+		n = strings.TrimSpace(n[idx+1:])
+	}
+	if !strings.ContainsRune(n, '：') {
+		return false
+	}
+	for _, p := range infoPseudoPrefixes {
+		if strings.HasPrefix(n, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // parseURILink 识别并解析单个 v2ray 风格链接。
