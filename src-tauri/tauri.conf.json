@@ -67,6 +67,7 @@
     "resources": {
       "../dist/index.html": "bin/dist/index.html",
       "../dist/assets/": "bin/dist/assets/",
+      "../dist/app-icon.png": "bin/dist/app-icon.png",
       "target/release/WebView2Loader.dll": "WebView2Loader.dll"
     }
   }

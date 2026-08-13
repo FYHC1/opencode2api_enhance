@@ -584,10 +584,12 @@ export default function PoolPage({
       {/* 路由模式 + 操作提示 */}
       <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm p-5 flex items-center justify-between">
         <div>
-          <h3 className="text-[14px] font-semibold text-zinc-900 mb-0.5">路由模式</h3>
-          <p className="text-[12px] text-zinc-400 max-w-[300px]">
-            smart（默认）：{perfMode ? '质量加权 + ' : ''}故障转移+健康计数+超时切换；failover：失败才切换；round_robin：轮询分发。
-            {perfMode ? ' 性能模式下坏节点按质量分自动降权/剔除，熔断到期自动回归。' : ''}
+          <h3 className="text-[14px] font-semibold text-zinc-900 mb-1.5">路由模式</h3>
+          <p className="text-[12px] text-zinc-400 space-y-1">
+            <span className="block">smart（默认）：{perfMode ? '质量加权 + ' : ''}故障转移 + 健康计数 + 超时切换</span>
+            <span className="block">failover：失败才切换</span>
+            <span className="block">round_robin：轮询分发</span>
+            {perfMode && <span className="block text-teal-600">性能模式：坏节点按质量分自动降权/剔除，熔断到期自动回归</span>}
           </p>
         </div>
         <div className="flex items-center gap-3">
