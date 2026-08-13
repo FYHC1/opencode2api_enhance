@@ -3,7 +3,7 @@
 
 use crate::clash_yaml;
 use crate::config::Config;
-use crate::instance::{no_window, Instance, InstanceManager};
+use crate::instance::{Instance, InstanceManager};
 use crate::probe::{DEFAULT_PROBE_API_PORT, DEFAULT_PROBE_SOCKS_PORT};
 use crate::AppState;
 use serde::{Deserialize, Serialize};
@@ -1436,56 +1436,6 @@ pub fn config_set(
         }
     }
     Ok(())
-}
-
-// ======================== 开机自启（Windows 注册表） ========================
-
-const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
-const RUN_NAME: &str = "opencode2api-manager";
-
-#[cfg(windows)]
-fn autostart_status() -> anyhow::Result<bool> {
-let out = no_window(&mut std::process::Command::new("reg"))
-        .args(["query", RUN_KEY, "/v", RUN_NAME])
-        .output()?;
-    Ok(out.status.success())
-}
-
-#[cfg(not(windows))]
-fn autostart_status() -> anyhow::Result<bool> {
-    anyhow::bail!("仅 Windows 支持开机自启")
-}
-
-#[cfg(windows)]
-fn set_autostart(enabled: bool) -> anyhow::Result<()> {
-    if enabled {
-        let exe = std::env::current_exe().unwrap_or_default();
-        let val = format!("\"{}\"", exe.display());
-no_window(&mut std::process::Command::new("reg"))
-            .args(["add", RUN_KEY, "/v", RUN_NAME, "/t", "REG_SZ", "/d", &val, "/f"])
-            .output()?;
-    } else {
-        // 幂等：值不存在时删除失败也可接受
-let _ = no_window(&mut std::process::Command::new("reg"))
-            .args(["delete", RUN_KEY, "/v", RUN_NAME, "/f"])
-            .output();
-    }
-    Ok(())
-}
-
-#[cfg(not(windows))]
-fn autostart_set(_enabled: bool) -> anyhow::Result<()> {
-    anyhow::bail!("仅 Windows 支持开机自启")
-}
-
-#[tauri::command]
-pub fn autostart_get() -> Result<bool, String> {
-    autostart_status().map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub fn autostart_set(enabled: bool) -> Result<(), String> {
-    set_autostart(enabled).map_err(|e| e.to_string())
 }
 
 // ======================== 二进制信息 ========================

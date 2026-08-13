@@ -75,7 +75,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p bin
-          go build -trimpath -ldflags "-s -w" -o bin/${{ matrix.go_bin }} .
+          go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o bin/${{ matrix.go_bin }} .
 
       - name: Download sing-box (1.13.16, ${{ matrix.os }})
         shell: bash

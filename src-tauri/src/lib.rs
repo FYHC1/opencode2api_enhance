@@ -183,9 +183,7 @@ pub fn run() {
             core_job: Mutex::new(core_job),
         })
         .invoke_handler(tauri::generate_handler![
-            // 大步3：仅保留壳命令（窗口/托盘/自启/二进制）；管理命令已被 HTTP 取代
-            commands::autostart_get,
-            commands::autostart_set,
+            // 大步3：仅保留壳命令（窗口/托盘/二进制）；自启由 Go core 承载（HTTP /autostart，跨平台），管理命令已被 HTTP 取代
             commands::get_binaries_info,
             commands::hide_to_tray,
             commands::toggle_maximize,
