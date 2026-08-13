@@ -426,7 +426,17 @@ func (m *Manager) ConfigSet(key, value string) error {
 	default:
 		return errors.New("Unknown config key: " + key)
 	}
-	return m.saveConfig(cfg)
+	if err := m.saveConfig(cfg); err != nil {
+		return err
+	}
+	// T4: 网关密钥立即生效——更新内存密码并热重启网关进程（若正在运行）；
+	// 不触碰任何实例，也不等待下次网关自然重启。
+	if key == "gateway_key" {
+		if err := m.Gateway().ApplyKey(effectiveGatewayKey(cfg), m.Run()); err != nil {
+			return fmt.Errorf("密钥已保存，但网关热重启失败: %w", err)
+		}
+	}
+	return nil
 }
 
 // ConfigView 是前端 /api/admin/config 的响应形态（密码脱敏）。

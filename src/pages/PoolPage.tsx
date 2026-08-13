@@ -331,7 +331,7 @@ export default function PoolPage({
     setKeyBusy(true)
     try {
       await api.configSet('gateway_key', keyValue.trim())
-      toast(keyValue.trim() ? '网关自定义密钥已设置（下次网关同步生效）' : '网关密钥已重置为默认（下次网关同步生效）', true)
+      toast(keyValue.trim() ? '网关自定义密钥已设置并立即生效' : '网关密钥已重置为默认并立即生效', true)
       setKeyOpen(false)
       setKeyValue('')
       await load()
@@ -564,7 +564,7 @@ export default function PoolPage({
               <button
                 onClick={() => { setKeyValue(''); setKeyOpen(true) }}
                 className="flex items-center gap-1 text-[11px] text-teal-700 hover:underline"
-                title="设置自定义密钥 / 重置默认"
+                title="设置自定义密钥（立即生效）/ 重置默认"
               >
                 <Pencil size={11} /> 自定义
               </button>

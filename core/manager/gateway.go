@@ -78,6 +78,23 @@ func NewGateway(m *Manager, port uint16) *Gateway {
 	return &Gateway{m: m, port: port, password: effectiveGatewayKey(m.loadConfig()), routeMode: "smart"}
 }
 
+// ApplyKey 更新网关密钥并立即生效：更新内存密码，若网关子进程正在运行则热重启
+//（stopChild + startChild 以新密钥拉起；不触碰任何实例）。
+func (g *Gateway) ApplyKey(pwd string, runner Runner) error {
+	if runner == nil {
+		runner = &realRunner{}
+	}
+	g.mu.Lock()
+	g.password = pwd
+	running := g.pid > 0 && pidAlive(g.pid)
+	g.mu.Unlock()
+	if !running {
+		return nil // 未运行时，下次 sync/启动自然用新密钥
+	}
+	g.stopChild(runner)
+	return g.startChild(runner)
+}
+
 // Port 返回网关端口。
 func (g *Gateway) Port() uint16 { return g.port }
 

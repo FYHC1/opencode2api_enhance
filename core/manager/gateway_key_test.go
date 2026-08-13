@@ -49,6 +49,27 @@ func TestNewGatewayUsesConfiguredKey(t *testing.T) {
 	}
 }
 
+// T4: 设置密钥后网关内存密码立即更新（未运行时静默成功；下次启动用新密钥）。
+func TestApplyKeyUpdatesMemoryPassword(t *testing.T) {
+	m := New(t.TempDir())
+	run := &fakeRunner{}
+	gw := NewGateway(m, 0)
+	if err := gw.ApplyKey("new-secret-123", run); err != nil {
+		t.Fatalf("apply when not running: %v", err)
+	}
+	if gw.password != "new-secret-123" {
+		t.Fatalf("password = %q, want new-secret-123", gw.password)
+	}
+	if len(run.starts) != 0 {
+		t.Fatalf("must not start when not running, got %+v", run.starts)
+	}
+	// 经 ConfigSet 保存后，再次构造网关应使用新密钥（落盘生效）
+	_ = m.ConfigSet("gateway_key", "new-secret-123")
+	if k := effectiveGatewayKey(m.loadConfig()); k != "new-secret-123" {
+		t.Fatalf("persisted key = %q", k)
+	}
+}
+
 func TestGatewayKeyHandlerHTTP(t *testing.T) {
 	m := New(t.TempDir())
 	h := m.ConfigSetHandler()
