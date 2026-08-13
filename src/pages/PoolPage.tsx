@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import clsx from 'clsx'
-import { Copy, Loader2, Power, RefreshCw, ShieldCheck, Network, Search, Play, Square, TestTube2, Trash2, KeyRound, Pencil, Check, X, Activity, Settings2 } from 'lucide-react'
+import { Copy, Loader2, Power, RefreshCw, ShieldCheck, Network, Search, Play, Square, TestTube2, Trash2, KeyRound, Pencil, Check, X, Activity, Settings2, ChevronDown } from 'lucide-react'
 import { api, type GatewayStatus, type Instance, type TestResult, type PoolQualitySummary, type PoolQualityRecord, type PoolQualityLevel } from '../lib/api'
 
 function statusBadge(st: Instance['status']): [string, string] {
@@ -68,6 +68,8 @@ export default function PoolPage({
   const [keyBusy, setKeyBusy] = useState(false)
   // 页面设置弹窗（性能模式参数 + 网关超时切换，收进右上角齿轮）
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // 折叠面板：两段默认收起
+  const [openSections, setOpenSections] = useState<{ perf: boolean; timeout: boolean }>({ perf: false, timeout: false })
   // 一键释放全部池成员忙态
   const [releaseAllBusy, setReleaseAllBusy] = useState(false)
 
@@ -791,7 +793,7 @@ export default function PoolPage({
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
           onClick={() => setSettingsOpen(false)}
         >
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[86vh] overflow-y-auto p-6 space-y-6" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-[722px] max-h-[86vh] overflow-y-auto p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold text-zinc-900">实例池设置</h2>
               <button onClick={() => setSettingsOpen(false)} className="p-1.5 rounded-lg hover:bg-zinc-100">
@@ -799,12 +801,21 @@ export default function PoolPage({
               </button>
             </div>
 
-            {/* 性能模式参数 */}
-            <section className="space-y-4">
-              <h3 className="text-[14px] font-semibold text-zinc-900 border-b border-zinc-100 pb-2">实例池性能模式 · 参数</h3>
-              <p className="text-[12px] text-zinc-400">
-                链路级主动探活（经实例出口发真实请求）+ 质量加权路由：坏节点自动降权/剔除，熔断到期自动回归。总开关在路由模式处。
-              </p>
+            {/* 性能模式参数（折叠面板，默认收起） */}
+            <section className="border border-zinc-200 rounded-xl overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setOpenSections((s) => ({ ...s, perf: !s.perf }))}
+                className={clsx('w-full flex items-center justify-between px-4 py-3 text-left hover:bg-zinc-50', openSections.perf && 'border-b border-zinc-200')}
+              >
+                <span className="text-[14px] font-semibold text-zinc-900">实例池性能模式 · 参数</span>
+                <ChevronDown size={16} className={clsx('text-zinc-400 transition-transform', !openSections.perf && '-rotate-90')} />
+              </button>
+              {openSections.perf && (
+                <div className="p-4 space-y-4">
+                  <p className="text-[12px] text-zinc-400">
+                    链路级主动探活（经实例出口发真实请求）+ 质量加权路由：坏节点自动降权/剔除，熔断到期自动回归。总开关在路由模式处。
+                  </p>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-3">
                 <div className="space-y-1">
                   <label className="block text-[13px] font-medium text-zinc-700">探活间隔（秒，0=不探活）</label>
@@ -895,14 +906,25 @@ export default function PoolPage({
                   保存
                 </button>
               </div>
+                </div>
+              )}
             </section>
 
-            {/* 网关超时切换 */}
-            <section className="space-y-4">
-              <h3 className="text-[14px] font-semibold text-zinc-900 border-b border-zinc-100 pb-2">网关超时切换</h3>
-              <p className="text-[12px] text-zinc-400">
-                每次请求在区间内随机取超时值，避免固定超时被上游识别为定时扫描；最小值防止过密重试
-              </p>
+            {/* 网关超时切换（折叠面板，默认收起） */}
+            <section className="border border-zinc-200 rounded-xl overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setOpenSections((s) => ({ ...s, timeout: !s.timeout }))}
+                className={clsx('w-full flex items-center justify-between px-4 py-3 text-left hover:bg-zinc-50', openSections.timeout && 'border-b border-zinc-200')}
+              >
+                <span className="text-[14px] font-semibold text-zinc-900">网关超时切换</span>
+                <ChevronDown size={16} className={clsx('text-zinc-400 transition-transform', !openSections.timeout && '-rotate-90')} />
+              </button>
+              {openSections.timeout && (
+                <div className="p-4 space-y-4">
+                  <p className="text-[12px] text-zinc-400">
+                    每次请求在区间内随机取超时值，避免固定超时被上游识别为定时扫描；最小值防止过密重试
+                  </p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3">
                 <div className="space-y-1">
                   <label className="block text-[13px] font-medium text-zinc-700">首字超时 TTFT（毫秒）</label>
@@ -997,6 +1019,8 @@ export default function PoolPage({
                   保存超时配置
                 </button>
               </div>
+                </div>
+              )}
             </section>
           </div>
         </div>
