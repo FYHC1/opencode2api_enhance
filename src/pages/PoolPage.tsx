@@ -407,11 +407,13 @@ export default function PoolPage({
     try {
       let ok = 0
       let fail = 0
+      let skippedCount = 0
       if (kind === 'start' || kind === 'stop') {
         // 复用 Rust 并行命令（batch_start 4 worker / batch_stop 8 worker），避免前端串行
         const r = kind === 'start' ? await api.batchStart(names) : await api.batchStop(names)
         ok = r.success_count
         fail = r.error_count
+        skippedCount = kind === 'start' ? (r.skipped_count ?? 0) : 0
       } else {
         // 测试：仅测试运行中的池成员；未启动计入「跳过」，避免误报失败。
         const runningNames = members.filter((i) => i.status === 'Running').map((i) => i.name)
@@ -444,7 +446,8 @@ export default function PoolPage({
         if (skipped > 0) toast(`已跳过未启动的 ${skipped} 个池成员`, true)
       }
       const label = kind === 'start' ? '启动' : kind === 'stop' ? '停止' : '测试'
-      toast(`池成员${label}完成：成功 ${ok} 个，失败 ${fail} 个${kind === 'test' ? '' : ''}`, fail === 0)
+      const skippedPart = kind === 'start' && skippedCount > 0 ? `，跳过已运行 ${skippedCount}` : ''
+      toast(`池成员${label}完成：成功 ${ok} 个，失败 ${fail} 个${skippedPart}`, fail === 0)
       await load()
     } finally {
       setAllBusy(null)

@@ -385,6 +385,9 @@ type BatchOpResult struct {
 	Errors       map[string]string `json:"errors"`
 	SuccessCount int               `json:"success_count"`
 	ErrorCount   int               `json:"error_count"`
+	// S2: 批量启动跳过已运行实例
+	Skipped      []string `json:"skipped,omitempty"`
+	SkippedCount int      `json:"skipped_count,omitempty"`
 }
 
 func opResult(res map[string]error) BatchOpResult {
@@ -402,6 +405,8 @@ func opResult(res map[string]error) BatchOpResult {
 }
 
 // BatchStartHandler POST {names}。
+// S2: 启动仅作用于「非运行中」实例——Running/Starting/Stopping 自动跳过并计入 skipped，
+// 不再把这些实例当作启动失败（对齐「一键测试」跳过未启动的语义）。
 func (m *Manager) BatchStartHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !requireMethodOK(w, r, http.MethodPost) {
@@ -414,7 +419,24 @@ func (m *Manager) BatchStartHandler() http.HandlerFunc {
 			writeErr(w, http.StatusBadRequest, "bad body")
 			return
 		}
-		writeJSON(w, opm(m.BatchStart(m.Run(), req.Names)))
+		statusByName := map[string]string{}
+		for _, inst := range m.ListInstances() {
+			statusByName[inst.Name] = inst.Status.State
+		}
+		var toStart []string
+		var skipped []string
+		for _, n := range req.Names {
+			switch statusByName[n] {
+			case "Running", "Starting", "Stopping":
+				skipped = append(skipped, n)
+			default:
+				toStart = append(toStart, n)
+			}
+		}
+		res := opResult(m.BatchStart(m.Run(), toStart))
+		res.Skipped = skipped
+		res.SkippedCount = len(skipped)
+		writeJSON(w, res)
 	}
 }
 

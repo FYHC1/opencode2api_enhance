@@ -62,6 +62,9 @@ export type BatchOpResult = {
   errors: Record<string, string>
   success_count: number
   error_count: number
+  /** S2: 批量启动跳过的已运行实例 */
+  skipped?: string[]
+  skipped_count?: number
 }
 
 export type PortCheckResult = {
