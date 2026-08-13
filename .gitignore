@@ -45,3 +45,6 @@ legacy/opencode2api_enhance/进度.md
 # Debug/test tooling & agent-run work dirs
 .cdp-test/
 .omo/
+
+# portable test package output
+portable-out/
