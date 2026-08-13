@@ -194,8 +194,10 @@ if (kind === 'delete' && !confirm(`确定释放选中的 ${names.length} 个实�
       const fn =
         kind === 'start' ? api.batchStart : kind === 'stop' ? api.batchStop : api.batchDelete
       const r = await fn(names)
+      const skippedPart = kind === 'start' && (r.skipped_count ?? 0) > 0 ? `，跳过已运行 ${r.skipped_count}` : ''
       toast(
         `${kind === 'start' ? '启动' : kind === 'stop' ? '停止' : '释放'}成功 ${r.success_count} 个` +
+          skippedPart +
           (r.error_count ? `，失败 ${r.error_count}` : ''),
         r.error_count === 0,
       )
