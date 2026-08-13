@@ -333,14 +333,17 @@ export default function PoolPage({
     }
   }
 
-  // 一键释放全部池成员：分块并发删除实例 + 实时上报进度（全局悬浮面板显示，跨页面常驻）
-  const doReleaseAll = async () => {
-    const names = members.map((i) => i.name)
-    if (names.length === 0) {
-      toast('池中暂无成员')
+  // S3: 释放确认弹窗模式（null=关闭；'all' 完全释放；'running' 仅释放运行中）
+  const [releaseMode, setReleaseMode] = useState<'all' | 'running' | null>(null)
+  // 一键释放池成员：按所选模式（完全/仅运行中）分块并发删除 + 实时上报进度
+  const doReleaseAll = async (mode: 'all' | 'running') => {
+    const targets = mode === 'running' ? members.filter((i) => i.status === 'Running') : members
+    setReleaseMode(null)
+    if (targets.length === 0) {
+      toast(mode === 'running' ? '没有运行中的池成员' : '池中暂无成员')
       return
     }
-    if (!confirm(`确定一键释放全部 ${names.length} 个池成员？将关闭并删除这些实例。`)) return
+    const names = targets.map((i) => i.name)
     setReleaseAllBusy(true)
     onRelease({ active: true, done: 0, total: names.length })
     try {
@@ -457,6 +460,8 @@ export default function PoolPage({
   const running = gw?.running ?? false
   const freeModels = gw?.free_models ?? []
   const freeModelsError = gw?.free_models_error ?? null
+  // S3: 运行中池成员数（释放确认弹窗用）
+  const runningCount = members.filter((i) => i.status === 'Running').length
 
   return (
     <div className="p-6 space-y-4">
@@ -672,12 +677,12 @@ export default function PoolPage({
               {allBusy === 'test' ? <Loader2 size={14} className="animate-spin" /> : <TestTube2 size={14} />} 一键测试
             </button>
             <button
-              onClick={() => void doReleaseAll()}
+              onClick={() => setReleaseMode('all')}
               disabled={members.length === 0 || !!releaseAllBusy}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-red-600 bg-red-50 border border-red-100 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-40"
             >
               {releaseAllBusy ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
-              {releaseAllBusy ? '释放中…' : '一键释放全部'}
+              {releaseAllBusy ? '释放中…' : '一键释放'}
             </button>
             <div
               className={clsx(
@@ -791,6 +796,42 @@ export default function PoolPage({
           </div>
         )}
       </div>
+
+      {/* S3: 释放确认弹窗（完全 / 仅运行中） */}
+      {releaseMode && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4"
+          onClick={() => setReleaseMode(null)}
+        >
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold text-zinc-900">释放实例</h3>
+            <p className="text-[13px] text-zinc-600">
+              池成员共 <b className="text-zinc-900">{members.length}</b> 个，其中运行中{' '}
+              <b className="text-zinc-900">{runningCount}</b> 个。选择释放范围（将关闭并删除实例定义）：
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={() => void doReleaseAll('running')}
+                disabled={runningCount === 0}
+                className="flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg text-[13px] text-amber-700 bg-amber-50 border border-amber-100 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <Power size={14} /> 仅释放运行中（{runningCount}）
+              </button>
+              <button
+                onClick={() => void doReleaseAll('all')}
+                className="flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg text-[13px] text-red-600 bg-red-50 border border-red-100 hover:bg-red-100"
+              >
+                <Trash2 size={14} /> 完全释放（{members.length}）
+              </button>
+            </div>
+            <div className="flex justify-end">
+              <button onClick={() => setReleaseMode(null)} className="px-4 py-2 rounded-lg text-[13px] text-zinc-600 hover:bg-zinc-100">
+                取消
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 页面设置弹窗（右上角齿轮）：性能模式参数 + 网关超时切换 */}
       {settingsOpen && (
