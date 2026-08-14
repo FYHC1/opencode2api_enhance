@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -534,5 +535,146 @@ func TestRaceCandidatesHighPressureShuffle(t *testing.T) {
 	// shuffle 生效：40 次中首元素不只一种（最高分节点不会永远打头）。
 	if len(firsts) < 2 {
 		t.Fatalf("high pressure should shuffle: first element always %v", firsts)
+	}
+}
+
+// ---- S3：恢复探测进竞速（候选不足时放行 1 个，候选充足时不选不偷） ----
+
+// 候选不足 → 放行 1 个熔断半开放行节点（open 到期未消费探针的）兜底，恢复探测不饿死。
+func TestRaceCandidatesHalfOpenFallback(t *testing.T) {
+	resetPoolPerfState()
+	socks5Mu.Lock()
+	socks5Proxies = []Socks5Proxy{mkProxy(28501), mkProxy(28502)}
+	socks5Mu.Unlock()
+	addr := "127.0.0.1:28501"
+	for i := 0; i < 3; i++ {
+		applyPoolResult(addr, 503, nil)
+	}
+	// 拨到期：半开放行窗口到达，探针未消费。
+	poolBreakerMu.Lock()
+	poolBreakers[addr].openUntil = time.Now().Add(-time.Second)
+	poolBreakerMu.Unlock()
+
+	// 无健康候选（28501 半开、28502 无质量记录）→ 半开放行兜底进候选。
+	got := raceCandidates(2)
+	if len(got) != 1 || got[0].Addr != addr {
+		t.Fatalf("raceCandidates=%+v, want [%s] (half-open fallback)", got, addr)
+	}
+	// 配额已被竞速消费：再查为 open（probeUsed，等待下次结果触发新窗口）。
+	if s := breakerState(addr); s != "open" {
+		t.Fatalf("after race fallback breaker=%s, want open (probe consumed)", s)
+	}
+}
+
+// 候选不足 → 放行 1 个链路类坏池过期节点兜底；账号类永不进竞速兜底。
+func TestRaceCandidatesBadPoolFallback(t *testing.T) {
+	resetPoolPerfState()
+	linkBad := mkProxy(28511)
+	acctBad := mkProxy(28512)
+	other := mkProxy(28513)
+	socks5Mu.Lock()
+	socks5Proxies = []Socks5Proxy{linkBad, acctBad, other}
+	socks5Mu.Unlock()
+	for i := 0; i < 3; i++ {
+		markSocks5Result(linkBad.Addr, http.StatusServiceUnavailable, nil)
+		markSocks5Result(acctBad.Addr, http.StatusTooManyRequests, nil)
+	}
+	// 链路类拨到期；账号类 badUntil 恒零（无法过期，永不放行）。
+	socks5HealthMu.Lock()
+	st := socks5Health[linkBad.Addr]
+	st.badUntil = time.Now().Add(-time.Second)
+	socks5Health[linkBad.Addr] = st
+	socks5HealthMu.Unlock()
+
+	// 无健康候选（其余节点无质量记录）→ 链路类坏池过期节点兜底进候选。
+	got := raceCandidates(2)
+	if len(got) != 1 || got[0].Addr != linkBad.Addr {
+		t.Fatalf("raceCandidates=%+v, want [%s] (link bad-pool fallback)", got, linkBad.Addr)
+	}
+	socks5HealthMu.Lock()
+	probeUsed := socks5Health[linkBad.Addr].badProbeUsed
+	if !probeUsed {
+		t.Fatal("bad-pool probe quota must be consumed after fallback")
+	}
+	socks5HealthMu.Unlock()
+
+	// 链路类配额已消费、账号类永不放行 → 再跑无候选（nil）。
+	if got := raceCandidates(2); len(got) != 0 {
+		t.Fatalf("raceCandidates=%+v, want nil (no probe left, account never released)", got)
+	}
+}
+
+// 候选充足 → 半开放行不参与候选，且不被竞速偷走探针（单发路径恢复不受影响，不回归）。
+func TestRaceCandidatesHalfOpenNotSelected(t *testing.T) {
+	resetPoolPerfState()
+	socks5Mu.Lock()
+	socks5Proxies = []Socks5Proxy{mkProxy(28521), mkProxy(28522), mkProxy(28523)}
+	socks5Mu.Unlock()
+	addr := "127.0.0.1:28521"
+	for i := 0; i < 3; i++ {
+		applyPoolResult(addr, 503, nil)
+	}
+	poolBreakerMu.Lock()
+	poolBreakers[addr].openUntil = time.Now().Add(-time.Second)
+	poolBreakerMu.Unlock()
+	poolQualityPath = writePoolQualityFile(t, map[string]struct {
+		Port  uint16
+		Score int
+		Level string
+	}{
+		"a": {28521, 90, "healthy"},
+		"b": {28522, 90, "healthy"},
+		"c": {28523, 90, "healthy"},
+	})
+
+	got := raceCandidates(2)
+	if len(got) != 2 {
+		t.Fatalf("raceCandidates=%+v, want 2 healthy candidates", got)
+	}
+	for _, p := range got {
+		if p.Addr == addr {
+			t.Fatalf("half-open node must not be selected while candidates sufficient: %+v", got)
+		}
+	}
+	// 探针未被消费：breakerState 仍是 halfopen（单发路径可继续使用）。
+	if s := breakerState(addr); s != "halfopen" {
+		t.Fatalf("breaker=%s, want halfopen (probe must not be stolen)", s)
+	}
+}
+
+// 候选不足 n（非零）→ 补 1 个恢复探针到候选集。
+func TestRaceCandidatesProbeFillsShortfall(t *testing.T) {
+	resetPoolPerfState()
+	socks5Mu.Lock()
+	socks5Proxies = []Socks5Proxy{mkProxy(28531), mkProxy(28532), mkProxy(28533)}
+	socks5Mu.Unlock()
+	half := "127.0.0.1:28531"
+	for i := 0; i < 3; i++ {
+		applyPoolResult(half, 503, nil)
+	}
+	poolBreakerMu.Lock()
+	poolBreakers[half].openUntil = time.Now().Add(-time.Second)
+	poolBreakerMu.Unlock()
+	// 只有 28532 有质量记录：候选 1 < n=3 → 补 1 个半开探针 → 共 2。
+	poolQualityPath = writePoolQualityFile(t, map[string]struct {
+		Port  uint16
+		Score int
+		Level string
+	}{
+		"b": {28532, 90, "healthy"},
+	})
+
+	got := raceCandidates(3)
+	if len(got) != 2 {
+		t.Fatalf("raceCandidates=%+v, want [28532 + half-open probe]", got)
+	}
+	hasHalf := false
+	for _, p := range got {
+		if p.Addr == half {
+			hasHalf = true
+		}
+	}
+	if !hasHalf {
+		t.Fatalf("shortfall must be filled with half-open probe, got %+v", got)
 	}
 }

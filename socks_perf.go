@@ -284,6 +284,44 @@ func breakerState(addr string) string {
 	return "open"
 }
 
+// breakerPeek 非消费式熔断态查看：open / halfopen（到期未消费探针）/ closed。
+// 不消耗半开配额——竞速路径先收集、仅在真正放行时才消费，避免抢走单发路径的探针
+// （S3：熔断节点在竞速路径饿死的根因）。调用方需持有 poolBreakerMu 语义一致（内部加锁）。
+func breakerPeek(addr string) string {
+	poolBreakerMu.Lock()
+	defer poolBreakerMu.Unlock()
+	b := poolBreakers[addr]
+	if b == nil || b.openUntil.IsZero() {
+		return "closed"
+	}
+	if time.Now().Before(b.openUntil) {
+		return "open"
+	}
+	if !b.probeUsed {
+		return "halfopen"
+	}
+	return "open"
+}
+
+// raceProbeFallback 候选不足时放行 1 个恢复探针（熔断半开优先，其次链路类坏池过期），
+// 返回前消费对应配额。探针可能已被其它路径消费 → 返回空（不强行放出已 open 节点）。
+func raceProbeFallback(halfOpen, badPool Socks5Proxy) Socks5Proxy {
+	if halfOpen.Addr != "" && breakerState(halfOpen.Addr) == "halfopen" {
+		return halfOpen
+	}
+	if badPool.Addr == "" {
+		return Socks5Proxy{}
+	}
+	socks5HealthMu.Lock()
+	st := socks5Health[badPool.Addr]
+	released := badPoolProbeRelease(badPool.Addr, &st, time.Now())
+	socks5HealthMu.Unlock()
+	if released {
+		return badPool
+	}
+	return Socks5Proxy{}
+}
+
 // applyPoolResult 请求结果回填：反馈窗口 + 熔断计数。
 // 链路失败（网络错误/5xx/超时）累计连续失败，达阈值 → open；
 // 成功（2xx）→ 熔断复位（closed），自动回归池子。
@@ -323,7 +361,8 @@ func applyPoolResult(addr string, status int, requestErr error) {
 // ---- 质量加权路由 ----
 
 // pickWeightedProxy 性能模式下的节点选择：
-//   - 坏池/冷却中节点剔除（冷却兜底保留，全池不可用时回退）
+//   - 坏池节点：账号类（401/402/429）永久剔除；链路类（如 503）到期放行 1 次探测
+//   - 冷却中节点剔除（冷却兜底保留，全池不可用时回退）
 //   - 熔断中节点剔除；到期后放行 1 个半开探测，成功即恢复
 //   - 质量分：down 剔除、flaky 跳过、degraded 降权、healthy 优先；同档按分排序
 //   - 请求反馈与探活分融合（7:3），失败快速反映到排序
@@ -345,6 +384,7 @@ func pickWeightedProxy(proxies []Socks5Proxy, start int) Socks5Proxy {
 	}
 	var cands []cand
 	var halfOpen Socks5Proxy
+	var badProbe Socks5Proxy
 	var fallback Socks5Proxy
 	var fallbackUntil time.Time
 
@@ -353,7 +393,12 @@ func pickWeightedProxy(proxies []Socks5Proxy, start int) Socks5Proxy {
 		proxy := proxies[(start+offset)%len(proxies)]
 		state := socks5Health[proxy.Addr]
 		if state.badReason != "" {
-			continue // 坏池彻底剔除
+			// 坏池：账号类永久剔除；链路类到期记入探针（结束统一消费，
+			// 避免熔断 halfOpen 优先返回时浪费已消费的坏池配额）。
+			if badProbe.Addr == "" && badPoolProbeReady(state, now) {
+				badProbe = proxy
+			}
+			continue
 		}
 		if !state.until.IsZero() && now.Before(state.until) {
 			if fallback.Addr == "" || state.until.Before(fallbackUntil) {
@@ -362,12 +407,12 @@ func pickWeightedProxy(proxies []Socks5Proxy, start int) Socks5Proxy {
 			}
 			continue // 冷却中
 		}
-		switch breakerState(proxy.Addr) {
+		switch breakerPeek(proxy.Addr) {
 		case "open":
 			continue
 		case "halfopen":
 			if halfOpen.Addr == "" {
-				halfOpen = proxy // 放行 1 个半开探测
+				halfOpen = proxy // 放行 1 个半开探测（配额在 raceProbeFallback 统一消费）
 			}
 			continue
 		}
@@ -402,10 +447,11 @@ func pickWeightedProxy(proxies []Socks5Proxy, start int) Socks5Proxy {
 	}
 	socks5HealthMu.Unlock()
 
-	// 半开探测优先（验证恢复）。
-	if halfOpen.Addr != "" {
-		slog.Info("pool half-open probe", "addr", halfOpen.Addr)
-		return halfOpen
+	// 半开探测优先（验证恢复）：熔断半开 → 链路类坏池到期探针（放行前消费配额，
+	// 被其它路径抢先消费则不放行）。
+	if p := raceProbeFallback(halfOpen, badProbe); p.Addr != "" {
+		slog.Info("pool recovery probe", "addr", p.Addr)
+		return p
 	}
 	if len(cands) > 0 {
 		sort.SliceStable(cands, func(i, j int) bool {
@@ -437,6 +483,8 @@ type raceCandidate struct {
 // S5 候选均衡：in-flight 升序优先（least-in-flight），同 in-flight 按
 // 质量分（score + [0,3) 随机扰动）降序，同分 healthy 优先于 degraded；
 // 高压力（pressure ≥ 2.0）时跳过质量排序、纯随机摊开（负载均衡）。
+// S3 恢复兜底：候选不足 n 时放行 1 个恢复探针（熔断 half-open 或链路类坏池过期节点），
+// 避免恢复探测在竞速路径饿死；候选充足时不消费探针（不偷单发路径的半开放行）。
 // 无任何可用候选时回退一个"冷却最早结束"的节点；n<=1 或池空返回 nil（不竞速）。
 func raceCandidates(n int) []Socks5Proxy {
 	if n <= 1 || !poolPerfMode {
@@ -454,6 +502,8 @@ func raceCandidates(n int) []Socks5Proxy {
 	}
 
 	var cands []raceCandidate
+	var halfOpenProbe Socks5Proxy // 熔断半开放行兜底（候选不足时放行）
+	var badPoolProbe Socks5Proxy  // 链路类坏池过期兜底（候选不足时放行）
 	var fallback Socks5Proxy
 	var fallbackUntil time.Time
 
@@ -461,10 +511,22 @@ func raceCandidates(n int) []Socks5Proxy {
 	for _, proxy := range proxies {
 		state := socks5Health[proxy.Addr]
 		if state.badReason != "" {
+			// S3：链路类坏池已过期 → 记入兜底探针（候选不足时才放行，此处分类型检查
+			// 不消费配额，避免候选充足时抢走单发路径的恢复探测）。账号类永不参与。
+			if badPoolProbe.Addr == "" && badPoolProbeReady(state, now) {
+				badPoolProbe = proxy
+			}
 			continue
 		}
-		if breakerState(proxy.Addr) != "closed" {
-			continue // 熔断中不参与竞速（半开放行语义留给单发路径）
+		switch breakerPeek(proxy.Addr) {
+		case "open":
+			continue
+		case "halfopen":
+			// 不消费配额：先记录，候选不足时才放行（恢复探测不饿死、不偷探针）。
+			if halfOpenProbe.Addr == "" {
+				halfOpenProbe = proxy
+			}
+			continue
 		}
 		if !state.until.IsZero() && now.Before(state.until) {
 			if fallback.Addr == "" || state.until.Before(fallbackUntil) {
@@ -501,6 +563,10 @@ func raceCandidates(n int) []Socks5Proxy {
 	socks5HealthMu.Unlock()
 
 	if len(cands) == 0 {
+		// 候选不足：放行 1 个恢复探针（熔断半开 → 链路类坏池过期）兜底，避免恢复探测饿死。
+		if p := raceProbeFallback(halfOpenProbe, badPoolProbe); p.Addr != "" {
+			return []Socks5Proxy{p}
+		}
 		if fallback.Addr != "" {
 			return []Socks5Proxy{fallback}
 		}
@@ -526,6 +592,12 @@ func raceCandidates(n int) []Socks5Proxy {
 	out := make([]Socks5Proxy, 0, n)
 	for i := 0; i < len(cands) && len(out) < n; i++ {
 		out = append(out, cands[i].proxy)
+	}
+	// 候选仍不足 n → 补 1 个恢复探针（候选充足时不进候选，正常候选均衡不受影响）。
+	if len(out) < n {
+		if p := raceProbeFallback(halfOpenProbe, badPoolProbe); p.Addr != "" {
+			out = append(out, p)
+		}
 	}
 	return out
 }

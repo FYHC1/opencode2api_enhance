@@ -68,6 +68,7 @@ type PoolQualitySummary struct {
 	Degraded   int             `json:"degraded"`
 	Flaky      int             `json:"flaky"`
 	Down       int             `json:"down"`
+	Unknown    int             `json:"unknown"` // 无探活样本（空窗口）节点数，UI 显示「探测中」（S3 正式化）
 	LastScanTS int64           `json:"last_scan_ts"`
 	Records    []QualityRecord `json:"records"`
 }
@@ -130,6 +131,14 @@ func poolHalfOpenIntervalOf(cfg Config) int {
 		return cfg.PoolHalfOpenIntervalSec
 	}
 	return 60
+}
+
+// badPoolResetSecOf 链路类坏池自动恢复间隔生效值（秒，<=0 用默认 300）。
+func badPoolResetSecOf(cfg Config) int {
+	if cfg.BadPoolResetSec > 0 {
+		return cfg.BadPoolResetSec
+	}
+	return 300
 }
 
 // poolPerfModeEnabled 性能模式开关生效值（未显式设置默认开启）。
@@ -316,6 +325,8 @@ func summarizeQuality(recs []QualityRecord, now int64) PoolQualitySummary {
 			summary.Flaky++
 		case qualityDown:
 			summary.Down++
+		case qualityUnknown:
+			summary.Unknown++
 		}
 	}
 	return summary

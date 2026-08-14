@@ -60,6 +60,9 @@ type Config struct {
 	PoolBreakerThreshold    int   `json:"pool_breaker_threshold,omitempty"`
 	PoolHalfOpenIntervalSec int   `json:"pool_halfopen_interval_sec,omitempty"`
 	PoolPerformanceMode     *bool `json:"pool_performance_mode,omitempty"`
+	// 链路类坏池自动恢复间隔（秒，S3，<=0 用默认 300）：链路类坏池（如 503）到期放行
+	// 1 次探测，成功清 / 失败重新坏池；账号类（401/402/429）永久禁用不受此配置影响。
+	BadPoolResetSec int `json:"bad_pool_reset_sec,omitempty"`
 	// 请求级竞速并行数上限（P2b/S5）：一次请求并行扇出 N 个候选出口，首个成功者胜
 	// （<=0 用默认 2；1 = 关闭）。S5 起为上限，实际副本由压力系数动态决定。
 	PoolRaceCopies int `json:"pool_race_copies,omitempty"`
@@ -181,6 +184,8 @@ func (m *Manager) ConfigGet(key string) (string, error) {
 		return strconv.Itoa(cfg.PoolBreakerThreshold), nil
 	case "pool_halfopen_interval_sec":
 		return strconv.Itoa(cfg.PoolHalfOpenIntervalSec), nil
+	case "bad_pool_reset_sec":
+		return strconv.Itoa(cfg.BadPoolResetSec), nil
 	case "pool_performance_mode":
 		return strconv.FormatBool(poolPerfModeEnabled(cfg)), nil
 	case "pool_race_copies":
@@ -378,6 +383,15 @@ func (m *Manager) ConfigSet(key, value string) error {
 			return errors.New("pool_halfopen_interval_sec 需 >= 0")
 		}
 		cfg.PoolHalfOpenIntervalSec = int(v)
+	case "bad_pool_reset_sec":
+		v, err := parseInt()
+		if err != nil {
+			return err
+		}
+		if v < 0 {
+			return errors.New("bad_pool_reset_sec 需 >= 0")
+		}
+		cfg.BadPoolResetSec = int(v)
 	case "pool_performance_mode":
 		b, err := strconv.ParseBool(value)
 		if err != nil {
@@ -527,6 +541,7 @@ type ConfigView struct {
 	ProbeSoloEnabled        bool   `json:"probe_solo_enabled"`
 	PoolBreakerThreshold    int    `json:"pool_breaker_threshold"`
 	PoolHalfOpenIntervalSec int    `json:"pool_halfopen_interval_sec"`
+	BadPoolResetSec         int    `json:"bad_pool_reset_sec"`
 	PoolPerformanceMode     bool   `json:"pool_performance_mode"`
 	PoolRaceCopies          int     `json:"pool_race_copies"`
 	RaceBudgetMS            int     `json:"race_budget_ms"`
@@ -578,6 +593,7 @@ func (m *Manager) ConfigViewOf() ConfigView {
 		ProbeSoloEnabled:        probeSoloEnabled(cfg),
 		PoolBreakerThreshold:    poolBreakerThresholdOf(cfg),
 		PoolHalfOpenIntervalSec: poolHalfOpenIntervalOf(cfg),
+		BadPoolResetSec:         badPoolResetSecOf(cfg),
 		PoolPerformanceMode:     poolPerfModeEnabled(cfg),
 		PoolRaceCopies:          poolRaceCopiesOf(cfg),
 		RaceBudgetMS:            poolRaceBudgetMSOf(cfg),

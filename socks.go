@@ -195,11 +195,60 @@ var badStatusCodes = map[int]string{
 // badThreshold 连续坏状态码次数阈值，达到后节点进入"坏池"（禁用）
 const badThreshold = 3
 
+// badPoolResetSec 链路类坏池自动恢复间隔（秒，默认 300；S3）。
+// 链路类坏池（如 503 服务不可用）到期后放行 1 次探测，成功清状态 / 失败重新坏池；
+// 账号类（401/402/429）不自动恢复（badUntil 零值永久禁用）。
+var badPoolResetSec = 300
+
 type socks5HealthState struct {
 	failures  int
 	until     time.Time
 	badReason string // 非空 = 已进坏池（如 "429：最大额度上限"），不再选用
 	badCount  int    // 连续坏状态码计数
+	// badUntil 链路类坏池到期时间（到期放行 1 次探测）；零值 = 账号类，永久禁用。
+	badUntil time.Time
+	// badProbeUsed 链路类坏池到期后的半开放行配额是否已消费（1 次/quota）。
+	badProbeUsed bool
+}
+
+// badPoolAccountClass 区分坏池分类：
+//   - 账号类 = 额度/认证（401/402/429）：不自动恢复，badUntil 零值永久禁用，
+//     避免反复试探打上游烧额度（用户手动处理 / 重启生效）；
+//   - 链路类 = 其余坏状态码（如 503 服务不可用）：自动恢复，到期放行 1 次探测。
+func badPoolAccountClass(status int) bool {
+	switch status {
+	case http.StatusUnauthorized, http.StatusPaymentRequired, http.StatusTooManyRequests:
+		return true
+	}
+	return false
+}
+
+// badPoolResetDuration 链路类坏池恢复间隔生效时长。
+func badPoolResetDuration() time.Duration {
+	if badPoolResetSec <= 0 {
+		return 300 * time.Second
+	}
+	return time.Duration(badPoolResetSec) * time.Second
+}
+
+// badPoolProbeReady 非消费式检查：链路类坏池已过期且探测配额未消费。
+// 零值 badUntil（账号类）永不放行；调用方需持有 socks5HealthMu。
+func badPoolProbeReady(state socks5HealthState, now time.Time) bool {
+	if state.badReason == "" || state.badUntil.IsZero() {
+		return false
+	}
+	return !now.Before(state.badUntil) && !state.badProbeUsed
+}
+
+// badPoolProbeRelease 放行链路类坏池 1 次探测（消费配额，复用熔断 half-open 语义）。
+// 放行后写回健康表；调用方需持有 socks5HealthMu，且仅对一个节点调用。
+func badPoolProbeRelease(addr string, state *socks5HealthState, now time.Time) bool {
+	if !badPoolProbeReady(*state, now) {
+		return false
+	}
+	state.badProbeUsed = true
+	socks5Health[addr] = *state
+	return true
 }
 
 var (
@@ -229,8 +278,12 @@ func pickHealthyProxy(proxies []Socks5Proxy, start int) Socks5Proxy {
 	for offset := 0; offset < len(proxies); offset++ {
 		proxy := proxies[(start+offset)%len(proxies)]
 		state := socks5Health[proxy.Addr]
-		// 坏池节点（401/402/429/503 连续 badThreshold 次）彻底不选
+		// 坏池节点：账号类永久跳过；链路类到期放行即返回（半开放行语义，
+		// 放行即消费配额，避免配额耗尽后节点被饿死）。
 		if state.badReason != "" {
+			if badPoolProbeRelease(proxy.Addr, &state, now) {
+				return proxy
+			}
 			continue
 		}
 		if state.until.IsZero() || !now.Before(state.until) {
@@ -247,21 +300,32 @@ func pickHealthyProxy(proxies []Socks5Proxy, start int) Socks5Proxy {
 // markSocks5Result 记录代理健康/冷却状态。
 // 失败分类：
 //   - 坏状态码（401/402/429/503，见 badStatusCodes）：立即切换节点并计数，
-//     连续 badThreshold 次 → 标记 badReason 进坏池（彻底禁用）
-//   - 其他失败：临时冷却（连接错→20s、429→45s、连续 3 次→2min）
+//     连续 badThreshold 次 → 标记 badReason 进坏池。S3 分类型：
+//     账号类（401/402/429）永久禁用；链路类（如 503）带 badUntil 到期自动恢复。
+//   - 其他失败：临时冷却（连接错→20s、429→45s、连续 3 次→2min）；
+//     链路类坏池节点探测失败 → 重新坏池（重置计时）。
 func markSocks5Result(addr string, status int, requestErr error) {
 	if addr == "" {
 		return
 	}
 	socks5HealthMu.Lock()
 
-	// 坏状态码：计数 + 达到阈值标记坏池
+	// 坏状态码：计数 + 达到阈值标记坏池。
+	// S3 分类型：账号类（401/402/429）永久禁用（badUntil 零值）；
+	// 链路类（如 503）可自动恢复——badUntil = now + bad_pool_reset_sec，到期放行 1 次探测。
 	if reason, ok := badStatusCodes[status]; ok {
 		state := socks5Health[addr]
 		state.badCount++
 		if state.badCount >= badThreshold {
 			state.badReason = reason
-			slog.Warn("proxy entered bad pool", "addr", addr, "reason", reason, "count", state.badCount)
+			if badPoolAccountClass(status) {
+				state.badUntil = time.Time{}
+			} else {
+				// 重新进坏池也重置计时（失败重新坏池语义）。
+				state.badUntil = time.Now().Add(badPoolResetDuration())
+			}
+			state.badProbeUsed = false
+			slog.Warn("proxy entered bad pool", "addr", addr, "reason", reason, "count", state.badCount, "account", badPoolAccountClass(status))
 		}
 		// 坏状态码也标记临时冷却（后续请求跳过，避免连续踩雷）
 		state.failures++
@@ -282,6 +346,11 @@ func markSocks5Result(addr string, status int, requestErr error) {
 				cooldown = 2 * time.Minute
 			}
 			state.until = time.Now().Add(cooldown)
+			// 链路类坏池节点的探测失败 → 重新坏池（重置计时），避免探针配额耗尽后饿死。
+			if state.badReason != "" && !state.badUntil.IsZero() {
+				state.badUntil = time.Now().Add(badPoolResetDuration())
+				state.badProbeUsed = false
+			}
 			socks5Health[addr] = state
 		}
 	}

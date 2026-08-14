@@ -65,6 +65,10 @@ func applyConfig(cfg AppConfig) {
 	if cfg.PoolHalfOpenIntervalSec > 0 {
 		poolHalfOpenIntervalSec = cfg.PoolHalfOpenIntervalSec
 	}
+	// S3 链路类坏池自动恢复间隔（>0 才覆盖，未配置保持当前值/默认 300）。
+	if cfg.BadPoolResetSec > 0 {
+		badPoolResetSec = cfg.BadPoolResetSec
+	}
 	if cfg.PoolRaceCopies > 0 {
 		poolRaceCopies = cfg.PoolRaceCopies
 	}
