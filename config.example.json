@@ -36,5 +36,6 @@
   "force_disable_thinking": false,
   "pool_performance_mode": true,
   "pool_breaker_threshold": 3,
-  "pool_halfopen_interval_sec": 60
+  "pool_halfopen_interval_sec": 60,
+  "bad_pool_reset_sec": 300
 }

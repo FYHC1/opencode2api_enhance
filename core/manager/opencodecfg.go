@@ -127,6 +127,8 @@ func (m *Manager) buildRouterCfg(singboxPorts []uint16, portNames map[uint16]str
 	// P2 性能模式：熔断阈值 / 半开间隔 / 开关透传（>0 才写，未配置子进程用默认）。
 	applyIf("pool_breaker_threshold", int64(appCfg.PoolBreakerThreshold))
 	applyIf("pool_halfopen_interval_sec", int64(appCfg.PoolHalfOpenIntervalSec))
+	// S3 链路类坏池自动恢复间隔（秒；>0 才写，未配置子进程用默认 300）。
+	applyIf("bad_pool_reset_sec", int64(appCfg.BadPoolResetSec))
 	if appCfg.PoolPerformanceMode != nil {
 		cfg["pool_performance_mode"] = *appCfg.PoolPerformanceMode
 	}

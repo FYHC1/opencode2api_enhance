@@ -67,6 +67,31 @@ func TestConfigSetInvalidValues(t *testing.T) {
 	}
 }
 
+// S3: bad_pool_reset_sec 默认 300，可 Get/Set/View，负值拒绝。
+func TestConfigBadPoolResetSec(t *testing.T) {
+	m := newTestManager(t)
+	if v := m.ConfigViewOf(); v.BadPoolResetSec != 300 {
+		t.Fatalf("default BadPoolResetSec = %d, want 300", v.BadPoolResetSec)
+	}
+	if err := m.ConfigSet("bad_pool_reset_sec", "120"); err != nil {
+		t.Fatalf("set bad_pool_reset_sec: %v", err)
+	}
+	if got, _ := m.ConfigGet("bad_pool_reset_sec"); got != "120" {
+		t.Fatalf("get = %q, want 120", got)
+	}
+	if v := m.ConfigViewOf(); v.BadPoolResetSec != 120 {
+		t.Fatalf("view = %d, want 120", v.BadPoolResetSec)
+	}
+	if err := m.ConfigSet("bad_pool_reset_sec", "-5"); err == nil {
+		t.Fatal("negative bad_pool_reset_sec must error")
+	}
+	// 落盘读回。
+	m2 := New(m.paths.DataDir)
+	if got, _ := m2.ConfigGet("bad_pool_reset_sec"); got != "120" {
+		t.Fatalf("persisted = %q, want 120", got)
+	}
+}
+
 func TestConfigViewMasking(t *testing.T) {
 	m := newTestManager(t)
 	_ = m.ConfigSet("default_password", "hunter2")

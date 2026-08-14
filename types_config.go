@@ -37,6 +37,9 @@ type AppConfig struct {
 	PoolBreakerThreshold int `json:"pool_breaker_threshold,omitempty"`
 	// 半开间隔：熔断节点按该周期（秒）放行 1 个探测请求，成功即恢复（默认 60）。
 	PoolHalfOpenIntervalSec int `json:"pool_halfopen_interval_sec,omitempty"`
+	// 链路类坏池自动恢复间隔（秒，S3，默认 300）：链路类坏池（如 503）到期后放行 1 次
+	// 探测，成功清状态 / 失败重新坏池；账号类（401/402/429）永久禁用不受此配置影响。
+	BadPoolResetSec int `json:"bad_pool_reset_sec,omitempty"`
 	// 请求级竞速并行数上限（P2b/S5）：一次请求并行扇出 N 个候选出口，首个成功者胜
 	// （默认 2；1 = 关闭竞速）。S5 起为上限，实际副本由压力系数动态决定。
 	PoolRaceCopies int `json:"pool_race_copies,omitempty"`

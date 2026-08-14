@@ -28,6 +28,26 @@ func TestComputeQualityEmptyWindow(t *testing.T) {
 	}
 }
 
+// S3: unknown 计数正式化——空窗口节点计入 PoolQualitySummary.Unknown（UI 显示「探测中」）。
+func TestSummarizeQualityUnknownCount(t *testing.T) {
+	recs := []QualityRecord{
+		{Name: "a", Level: qualityUnknown, Samples: nil},
+		{Name: "b", Level: qualityHealthy, Samples: []ProbeSample{{OK: true, TS: 1000}}},
+		{Name: "c", Level: qualityUnknown, Samples: nil},
+		{Name: "d", Level: qualityDown, Samples: []ProbeSample{{OK: false, TS: 1000}}},
+	}
+	s := summarizeQuality(recs, 1000)
+	if s.Total != 4 || s.Probed != 2 {
+		t.Fatalf("total=%d probed=%d, want 4/2", s.Total, s.Probed)
+	}
+	if s.Healthy != 1 || s.Down != 1 || s.Unknown != 2 {
+		t.Fatalf("healthy=%d down=%d unknown=%d, want 1/1/2", s.Healthy, s.Down, s.Unknown)
+	}
+	if s.Degraded != 0 || s.Flaky != 0 {
+		t.Fatalf("degraded=%d flaky=%d, want 0/0", s.Degraded, s.Flaky)
+	}
+}
+
 func TestComputeQualityAllOK(t *testing.T) {
 	samples := []ProbeSample{
 		{OK: true, LatencyMS: 100, TS: 1000},
