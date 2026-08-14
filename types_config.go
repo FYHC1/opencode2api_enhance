@@ -8,6 +8,10 @@ type AppConfig struct {
 	ForceDisableThinking bool              `json:"force_disable_thinking"`
 	Socks5Proxies        []Socks5Proxy     `json:"socks5_proxies,omitempty"`
 	ActiveSocks5         string            `json:"active_socks5,omitempty"`
+	// UpstreamProxy 上游代理出口（E1）：非空时实例/探针的 active_socks5 直接指向该代理
+	// （剥离 socks5:// / http:// 前缀取 host:port），跳过 sing-box 节点出口，绕过本机
+	// 裸连 IP 被上游风控（429/超时）。留空 = 直连（现状）。
+	UpstreamProxy string `json:"upstream_proxy,omitempty"`
 	// RouteMode 网关/代理池路由模式：failover（默认，成功不动游标，失败才切换）| round_robin
 	RouteMode string `json:"route_mode,omitempty"`
 

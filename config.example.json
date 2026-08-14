@@ -1,4 +1,5 @@
 {
+  "upstream_proxy": "",
   "socks5_proxies": [
     {
       "addr": "127.0.0.1:1080",
