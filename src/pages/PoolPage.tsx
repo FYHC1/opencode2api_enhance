@@ -66,6 +66,8 @@ export default function PoolPage({
   const [kickBusy, setKickBusy] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [searchFocus, setSearchFocus] = useState(false)
+  // 状态筛选（U2，对齐独享页）：全部 / 运行中 / 已停止
+  const [filter, setFilter] = useState<'all' | 'running' | 'stopped'>('all')
   // 单行操作忙态；全部操作忙态（start / stop / test）
   const [rowBusy, setRowBusy] = useState<Record<string, 'start' | 'stop' | 'test'>>({})
   const [allBusy, setAllBusy] = useState<'start' | 'stop' | 'test' | null>(null)
@@ -82,7 +84,7 @@ export default function PoolPage({
   // 一键释放全部池成员忙态
   const [releaseAllBusy, setReleaseAllBusy] = useState(false)
 
-  // 池成员 = 已入池（join_gateway=true）的实例；支持前端搜索（名称/节点/IP/端口）
+  // 池成员 = 已入池（join_gateway=true）的实例；支持前端搜索（名称/节点/IP/端口）+ 状态筛选
   const members = instances
     .filter((i) => i.join_gateway)
     .filter((i) => {
@@ -94,6 +96,12 @@ export default function PoolPage({
         (i.ip || '').toLowerCase().includes(q) ||
         String(i.port).includes(q)
       )
+    })
+    .filter((i) => {
+      // 状态筛选：与独享页一致，运行中仅留 Running / 已停止仅留 Stopped
+      if (filter === 'running' && i.status !== 'Running') return false
+      if (filter === 'stopped' && i.status !== 'Stopped') return false
+      return true
     })
 
   const qualityByName = new Map<string, PoolQualityRecord>()
@@ -714,6 +722,22 @@ export default function PoolPage({
               {releaseAllBusy ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
               批量释放{poolSelected.size > 0 ? `（${poolSelected.size}）` : ''}
             </button>
+            <div className="flex items-center gap-2">
+              {(['all', 'running', 'stopped'] as const).map((f) => (
+                <button
+                  key={f}
+                  onClick={() => setFilter(f)}
+                  className={clsx(
+                    'px-2.5 py-1.5 rounded-lg text-[12px] border transition-colors',
+                    filter === f
+                      ? 'bg-zinc-900 text-white border-zinc-900'
+                      : 'text-zinc-600 bg-white border-zinc-200 hover:bg-zinc-50',
+                  )}
+                >
+                  {f === 'all' ? '全部' : f === 'running' ? '运行中' : '已停止'}
+                </button>
+              ))}
+            </div>
             <div
               className={clsx(
                 'relative flex items-center rounded-lg border border-zinc-200 bg-white transition-all duration-200 overflow-hidden',
