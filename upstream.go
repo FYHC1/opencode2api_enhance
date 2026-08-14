@@ -47,6 +47,7 @@ func mainCodeVendor() *opencode.Vendor {
 			Transport:     rootTransport{},
 			AdminPassword: adminPassword,
 			RaceCopies:    poolRaceCopies,
+			RaceBudgetMS:  raceBudgetMS,
 		})
 	})
 	return ocAdapterTarget

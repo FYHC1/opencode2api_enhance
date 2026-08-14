@@ -297,6 +297,14 @@ func (v *Vendor) raceCopies() int {
 	return 1
 }
 
+// raceBudget 返回竞速整体预算（race_budget_ms 配置；0 回退 10s 默认）。
+func (v *Vendor) raceBudget() time.Duration {
+	if v.cfg.RaceBudgetMS > 0 {
+		return time.Duration(v.cfg.RaceBudgetMS) * time.Millisecond
+	}
+	return 10 * time.Second
+}
+
 // prefixReadCloser 在流式响应前拼回竞速阶段已读出的首字节。
 type prefixReadCloser struct {
 	io.Reader
@@ -308,9 +316,11 @@ type raceOutcome struct {
 	resp *http.Response
 	addr string
 	err  error
+	idx  int // 候选下标：赢家锁流后只取消其它候选，保留赢家流
 }
 
 // raceDo 请求级竞速：并行扇出至多 copies 个候选出口，首个 2xx（流式 = 首个 chunk 到达）胜出，其余取消。
+// 整体受 raceBudget 约束：到期（如候选全部挂起）返回非 nil 错误，调用方走单发续写。
 // 返回（nil, "", nil）表示无候选——调用方应退化普通单发。
 func (v *Vendor) raceDo(ctx context.Context, racer contract.Racer, req *http.Request, streaming bool, copies int) (*http.Response, string, error) {
 	clients, addrs := racer.CandidateClients(contract.TierFree, streaming, copies)
@@ -327,35 +337,67 @@ func (v *Vendor) raceDo(ctx context.Context, racer contract.Racer, req *http.Req
 		bodyBytes, _ = io.ReadAll(req.Body)
 		req.Body.Close()
 	}
-	rctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	// 每候选独立 ctx：赢家锁流后只取消其它候选——取消赢家自身的请求上下文会
+	// 中断其已建立的响应流（实测：cancel 后 body Read 立即返回 context canceled）。
+	rctx := make([]context.Context, len(clients))
+	cancels := make([]context.CancelFunc, len(clients))
+	for i := range clients {
+		c, cf := context.WithCancel(ctx)
+		rctx[i], cancels[i] = c, cf
+	}
 
+	firstByteBudget := v.raceBudget()
 	results := make(chan raceOutcome, len(clients))
 	var wg sync.WaitGroup
 	for i := range clients {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			r := req.Clone(rctx)
+			r := req.Clone(rctx[i])
 			if bodyBytes != nil {
 				r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 			}
 			resp, err := clients[i].Do(r)
 			if err != nil {
-				results <- raceOutcome{err: err, addr: addrs[i]}
+				results <- raceOutcome{err: err, addr: addrs[i], idx: i}
 				return
 			}
 			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-				results <- raceOutcome{resp: resp, addr: addrs[i]}
+				results <- raceOutcome{resp: resp, addr: addrs[i], idx: i}
 				return
 			}
 			if streaming {
-				// 等首个 chunk：读 1 字节确认流已开始；读到即锁流。
+				// 流式锁流：首字节等待受预算约束（与整体预算同值），超时关流上报错误；
+				// 锁流后赢家流本身不设限（延续原连接继续读，不受 Client.Timeout 影响）。
 				buf := make([]byte, 1)
-				n, rerr := resp.Body.Read(buf)
-				if rerr != nil && n == 0 {
+				fbDone := make(chan struct{})
+				var n int
+				var rerr error
+				go func() {
+					n, rerr = resp.Body.Read(buf)
+					close(fbDone)
+				}()
+				fbTimer := time.NewTimer(firstByteBudget)
+				select {
+				case <-fbDone:
+					fbTimer.Stop()
+					if rerr != nil && n == 0 {
+						resp.Body.Close()
+						results <- raceOutcome{err: rerr, addr: addrs[i], idx: i}
+						return
+					}
+				case <-rctx[i].Done():
+					// 本候选被取消（他候选已胜出 / 预算到期）：关流收尾，等读 goroutine 退出。
+					fbTimer.Stop()
 					resp.Body.Close()
-					results <- raceOutcome{err: rerr, addr: addrs[i]}
+					<-fbDone
+					results <- raceOutcome{err: rctx[i].Err(), addr: addrs[i], idx: i}
+					return
+				case <-fbTimer.C:
+					// 候选首字节超时：关流解除挂起的读取，等读 goroutine 退出后上报。
+					resp.Body.Close()
+					<-fbDone
+					results <- raceOutcome{err: fmt.Errorf("stream first byte timeout"), addr: addrs[i], idx: i}
 					return
 				}
 				resp.Body = &prefixReadCloser{
@@ -363,30 +405,55 @@ func (v *Vendor) raceDo(ctx context.Context, racer contract.Racer, req *http.Req
 					Closer: resp.Body,
 				}
 			}
-			results <- raceOutcome{resp: resp, addr: addrs[i]}
+			results <- raceOutcome{resp: resp, addr: addrs[i], idx: i}
 		}(i)
+	}
+
+	// S1 整体预算：竞速在任何情况下有界——候选全部挂起时预算到期取消并返回错误，
+	// 上层 retryCount 循环据此走单发路径（streamWithResume 可接手）。
+	budget := v.raceBudget()
+	timer := time.NewTimer(budget)
+	defer timer.Stop()
+
+	// cancelAll 终止全部候选（预算到期 / 全败收尾）。
+	cancelAll := func() {
+		for _, cf := range cancels {
+			cf()
+		}
 	}
 
 	var firstFail *raceOutcome
 	var done int32
 	for {
-		o := <-results
-		if o.err == nil && o.resp != nil && o.resp.StatusCode >= 200 && o.resp.StatusCode < 300 {
-			cancel() // 终止其余候选
-			go raceDrain(&wg, results)
-			return o.resp, o.addr, nil
-		}
-		f := o
-		if firstFail == nil {
-			firstFail = &f
-		}
-		if atomic.AddInt32(&done, 1) == int32(len(clients)) {
-			cancel()
-			go raceDrain(&wg, results)
-			if firstFail.err != nil {
-				return nil, "", firstFail.err
+		select {
+		case o := <-results:
+			if o.err == nil && o.resp != nil && o.resp.StatusCode >= 200 && o.resp.StatusCode < 300 {
+				// 赢家锁流：只取消其余候选，保留赢家的请求上下文（取消会中断赢家流）。
+				for j := range cancels {
+					if j != o.idx {
+						cancels[j]()
+					}
+				}
+				go raceDrain(&wg, results)
+				return o.resp, o.addr, nil
 			}
-			return firstFail.resp, firstFail.addr, nil
+			f := o
+			if firstFail == nil {
+				firstFail = &f
+			}
+			if atomic.AddInt32(&done, 1) == int32(len(clients)) {
+				cancelAll()
+				go raceDrain(&wg, results)
+				if firstFail.err != nil {
+					return nil, "", firstFail.err
+				}
+				return firstFail.resp, firstFail.addr, nil
+			}
+		case <-timer.C:
+			// 预算到期：即使候选全挂也快速失败返回错误（不无限悬着）。
+			cancelAll()
+			go raceDrain(&wg, results)
+			return nil, "", fmt.Errorf("race budget exceeded")
 		}
 	}
 }

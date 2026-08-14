@@ -355,3 +355,74 @@ func TestSingleCandidateDegrade(t *testing.T) {
 		t.Fatalf("empty pool pick=%+v", p)
 	}
 }
+
+// ---- S1 冷启动不竞速：unknown（无探活样本）节点不进候选 ----
+
+// TestRaceCandidatesUnknownExcluded 冷启动不竞速：无质量记录 / unknown（空窗口）
+// 节点不参与竞速候选；全 unknown → nil（退化单发）；探活一轮（有样本）后进入候选。
+func TestRaceCandidatesUnknownExcluded(t *testing.T) {
+	resetPoolPerfState()
+	socks5Mu.Lock()
+	socks5Proxies = []Socks5Proxy{mkProxy(28101), mkProxy(28102), mkProxy(28103)}
+	socks5Mu.Unlock()
+
+	// 场景 1：无质量文件（冷启动，任何节点都无探活样本）→ 不竞速（nil）。
+	poolQualityPath = ""
+	poolQualityStamp = time.Time{}
+	if got := raceCandidates(2); len(got) != 0 {
+		t.Fatalf("no quality file: raceCandidates=%+v, want nil (cold start no race)", got)
+	}
+
+	// 场景 2：28101 已探活（healthy）→ 进候选；28102 无样本（unknown）与
+	// 28103 无记录 → 不进候选。模拟"探活一轮后"只有有探活样本的节点可竞速。
+	poolQualityPath = writePoolQualityFile(t, map[string]struct {
+		Port  uint16
+		Score int
+		Level string
+	}{
+		"a": {28101, 90, "healthy"},
+		"b": {28102, 100, "unknown"},
+	})
+	// 重置缓存时间戳，避免 5s 节流/同 mtime 导致第二个文件不重载。
+	poolQualityStamp = time.Time{}
+	poolQualityLoaded = time.Time{}
+	got := raceCandidates(3)
+	if len(got) != 1 || got[0].Addr != "127.0.0.1:28101" {
+		t.Fatalf("raceCandidates=%+v, want only known healthy 28101", got)
+	}
+
+	// 场景 3：全部 unknown → nil（退化单发，不双倍炸上游）。
+	poolQualityPath = writePoolQualityFile(t, map[string]struct {
+		Port  uint16
+		Score int
+		Level string
+	}{
+		"a": {28101, 100, "unknown"},
+		"b": {28102, 100, "unknown"},
+		"c": {28103, 100, "unknown"},
+	})
+	poolQualityStamp = time.Time{}
+	poolQualityLoaded = time.Time{}
+	if got := raceCandidates(3); len(got) != 0 {
+		t.Fatalf("all unknown: raceCandidates=%+v, want nil", got)
+	}
+}
+
+// TestPickWeightedProxyUnknownStillRoutable 冷启动单发不受影响：unknown 节点仍可被
+// 加权路由选中（不参与竞速 ≠ 彻底剔除，避免冷启动无节点可用）。
+func TestPickWeightedProxyUnknownStillRoutable(t *testing.T) {
+	resetPoolPerfState()
+	proxies := []Socks5Proxy{mkProxy(28101), mkProxy(28102)}
+	poolQualityPath = writePoolQualityFile(t, map[string]struct {
+		Port  uint16
+		Score int
+		Level string
+	}{
+		"a": {28101, 100, "unknown"},
+		"b": {28102, 50, "degraded"},
+	})
+	got := pickWeightedProxy(proxies, 0)
+	if got.Addr != "127.0.0.1:28101" {
+		t.Fatalf("picked %s, want 28101 (unknown routable in single-flight)", got.Addr)
+	}
+}

@@ -68,6 +68,9 @@ func applyConfig(cfg AppConfig) {
 	if cfg.PoolRaceCopies > 0 {
 		poolRaceCopies = cfg.PoolRaceCopies
 	}
+	if cfg.RaceBudgetMS > 0 {
+		raceBudgetMS = cfg.RaceBudgetMS
+	}
 
 	socks5Mu.Lock()
 	proxiesChanged := false

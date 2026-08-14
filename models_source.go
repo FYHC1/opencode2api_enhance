@@ -63,7 +63,10 @@ func (rootTransport) CandidateClients(tier contract.Tier, streaming bool, n int)
 	for _, p := range proxies {
 		c := clientForProxy(p)
 		if streaming {
-			sc := *c // 流式去掉总超时（避免长推理流被切断）
+			// 流式保持无总超时：Client.Timeout 是请求全生命周期上限，会截断赢家
+			// 长推理流；首字节等待预算（race_budget_ms）由 raceDo 在锁流阶段强制，
+			// 锁流后继续沿用本 client 读流，不受预算影响。
+			sc := *c
 			sc.Timeout = 0
 			c = &sc
 		}

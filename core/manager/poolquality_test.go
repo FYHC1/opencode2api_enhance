@@ -19,8 +19,9 @@ import (
 func TestComputeQualityEmptyWindow(t *testing.T) {
 	var rec QualityRecord
 	computeQuality(&rec, nil, 1000, 600)
-	if rec.Score != 100 || rec.Level != qualityHealthy {
-		t.Fatalf("empty window: score=%d level=%s, want 100/healthy", rec.Score, rec.Level)
+	// S1：空窗口（无探活样本）→ unknown，不参与竞速；分数保持乐观 100（单发可用）。
+	if rec.Score != 100 || rec.Level != qualityUnknown {
+		t.Fatalf("empty window: score=%d level=%s, want 100/unknown", rec.Score, rec.Level)
 	}
 	if len(rec.Samples) != 0 {
 		t.Fatalf("samples should be empty, got %d", len(rec.Samples))
@@ -262,6 +263,41 @@ func TestPoolProbeConfigSetGet(t *testing.T) {
 	}
 	if v.PoolProbeEnabled {
 		t.Fatal("view enabled should be false")
+	}
+}
+
+// ---- S1：race_budget_ms 配置 ----
+
+func TestRaceBudgetConfigSetGet(t *testing.T) {
+	m := New(t.TempDir())
+
+	// 默认 10000。
+	if got := poolRaceBudgetMSOf(m.loadConfig()); got != 10000 {
+		t.Fatalf("default budget=%d, want 10000", got)
+	}
+
+	if err := m.ConfigSet("race_budget_ms", "5000"); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if got, _ := m.ConfigGet("race_budget_ms"); got != "5000" {
+		t.Fatalf("get=%s, want 5000", got)
+	}
+	if got := poolRaceBudgetMSOf(m.loadConfig()); got != 5000 {
+		t.Fatalf("effective=%d, want 5000", got)
+	}
+	// 非法值回退（保持原值并报错）。
+	if err := m.ConfigSet("race_budget_ms", "-1"); err == nil {
+		t.Fatal("negative should error")
+	}
+	if got, _ := m.ConfigGet("race_budget_ms"); got != "5000" {
+		t.Fatalf("after invalid set=%s, want 5000", got)
+	}
+	if err := m.ConfigSet("race_budget_ms", "abc"); err == nil {
+		t.Fatal("non-integer should error")
+	}
+	// ConfigViewOf 反映生效值。
+	if v := m.ConfigViewOf(); v.RaceBudgetMS != 5000 {
+		t.Fatalf("view budget=%d, want 5000", v.RaceBudgetMS)
 	}
 }
 
