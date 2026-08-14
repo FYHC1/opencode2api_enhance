@@ -744,22 +744,15 @@ export default function PoolPage({
               {releaseAllBusy ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
               批量释放{poolSelected.size > 0 ? `（${poolSelected.size}）` : ''}
             </button>
-            <div className="flex items-center gap-2">
-              {(['all', 'running', 'stopped'] as const).map((f) => (
-                <button
-                  key={f}
-                  onClick={() => setFilter(f)}
-                  className={clsx(
-                    'px-2.5 py-1.5 rounded-lg text-[12px] border transition-colors',
-                    filter === f
-                      ? 'bg-zinc-900 text-white border-zinc-900'
-                      : 'text-zinc-600 bg-white border-zinc-200 hover:bg-zinc-50',
-                  )}
-                >
-                  {f === 'all' ? '全部' : f === 'running' ? '运行中' : '已停止'}
-                </button>
-              ))}
-            </div>
+            <select
+              value={filter}
+              onChange={(e) => setFilter(e.target.value as typeof filter)}
+              className="px-2.5 py-1.5 rounded-lg border border-zinc-200 bg-white text-[12px] text-zinc-600 outline-none"
+            >
+              <option value="all">全部实例</option>
+              <option value="running">运行中</option>
+              <option value="stopped">已停止</option>
+            </select>
             <div
               className={clsx(
                 'relative flex items-center rounded-lg border border-zinc-200 bg-white transition-all duration-200 overflow-hidden',
@@ -1168,7 +1161,7 @@ export default function PoolPage({
               {openSections.ui && (
                 <div className="p-4 space-y-4">
                   <p className="text-[12px] text-zinc-400">
-                    本页与独享页按此间隔自动刷新实例状态与链路质量（轻量轮询）；深度状态校正仍由「刷新」按钮执行
+                    本页按此间隔自动刷新实例池成员状态与链路质量（轻量轮询）；深度状态校正仍由「刷新」按钮执行
                   </p>
                   <div className="flex items-center gap-3">
                     <label className="text-[13px] text-zinc-700 flex-1 min-w-0 whitespace-nowrap">刷新间隔（秒，默认 5）</label>
