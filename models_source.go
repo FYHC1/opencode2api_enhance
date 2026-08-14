@@ -44,6 +44,28 @@ func (rootTransport) Mark(proxyAddr string, status int, reqErr error) {
 	markSocks5Result(proxyAddr, status, reqErr)
 }
 
+// ---- S5 contract.RaceTracker：每节点 in-flight 上报 + 健康节点规模 ----
+
+// HealthyNodeCount 实现 contract.RaceTracker：可竞速健康节点数（压力系数分母）。
+func (rootTransport) HealthyNodeCount() int {
+	return raceHealthyNodeCount()
+}
+
+// RaceStarted 实现 contract.RaceTracker：候选确定后每节点 in-flight +1。
+// 与 RaceFinished 由 raceDo 的 defer 严格成对（见 chat.go raceDo）。
+func (rootTransport) RaceStarted(addrs []string) {
+	for _, a := range addrs {
+		proxyInflightAdd(a, 1)
+	}
+}
+
+// RaceFinished 实现 contract.RaceTracker：竞速收尾每节点 in-flight -1。
+func (rootTransport) RaceFinished(addrs []string) {
+	for _, a := range addrs {
+		proxyInflightAdd(a, -1)
+	}
+}
+
 // CandidateClients 实现 contract.Racer：质量优先返回至多 n 个竞速候选。
 // 付费层直连无候选；竞速候选空时厂商回退普通 Client。
 func (rootTransport) CandidateClients(tier contract.Tier, streaming bool, n int) ([]*http.Client, []string) {
@@ -131,8 +153,12 @@ func vendorParams(t string) map[string]any {
 	switch t {
 	case "opencode":
 		return map[string]any{
-			opencode.ParamTransport:     rootTransport{},
-			opencode.ParamAdminPassword: adminPassword,
+			opencode.ParamTransport:        rootTransport{},
+			opencode.ParamAdminPassword:    adminPassword,
+			opencode.ParamRaceCopies:       poolRaceCopies,
+			opencode.ParamRaceBudgetMS:     raceBudgetMS,
+			opencode.ParamRacePressureLow:  poolRacePressureLow,
+			opencode.ParamRacePressureHigh: poolRacePressureHigh,
 		}
 	case "windsurf":
 		return map[string]any{}

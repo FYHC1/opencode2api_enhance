@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -19,7 +20,13 @@ func resetPoolPerfState() {
 	poolQualityLoaded = time.Time{}
 	poolFeedback = map[string][]poolFbSample{}
 	poolBreakers = map[string]*poolBreaker{}
-	socks5Health = map[string]socks5HealthState{}
+	poolRacePressureLow = 0.5
+	poolRacePressureHigh = 1.0
+	racePressureFn = racePressure
+	proxyInFlightMu.Lock()
+	proxyInFlight = map[string]*atomic.Int64{}
+	proxyInFlightMu.Unlock()
+	setRaceRandSeed(42) // 固定候选扰动源，保证排序确定性
 	socks5HealthMu.Lock()
 	socks5Health = map[string]socks5HealthState{}
 	socks5HealthMu.Unlock()
@@ -424,5 +431,108 @@ func TestPickWeightedProxyUnknownStillRoutable(t *testing.T) {
 	got := pickWeightedProxy(proxies, 0)
 	if got.Addr != "127.0.0.1:28101" {
 		t.Fatalf("picked %s, want 28101 (unknown routable in single-flight)", got.Addr)
+	}
+}
+
+// ---- S5：least-in-flight 均衡 + 候选随机化 ----
+
+// TestRaceCandidatesLeastInflight 候选均衡：in-flight 3/0 → 新请求优先 in-flight=0 的
+// 节点（least-in-flight 优先于质量分；两者分数相同排除干扰）。
+func TestRaceCandidatesLeastInflight(t *testing.T) {
+	resetPoolPerfState()
+	socks5Mu.Lock()
+	socks5Proxies = []Socks5Proxy{mkProxy(28101), mkProxy(28102)}
+	socks5Mu.Unlock()
+	poolQualityPath = writePoolQualityFile(t, map[string]struct {
+		Port  uint16
+		Score int
+		Level string
+	}{
+		"a": {28101, 100, "healthy"},
+		"b": {28102, 100, "healthy"},
+	})
+	// 28101 已有 3 个在途请求，28102 空闲。
+	proxyInflightAdd("127.0.0.1:28101", 3)
+
+	got := raceCandidates(2)
+	if len(got) != 2 {
+		t.Fatalf("raceCandidates=%+v, want 2 candidates", got)
+	}
+	if got[0].Addr != "127.0.0.1:28102" {
+		t.Fatalf("first=%s, want 28102 (least in-flight wins)", got[0].Addr)
+	}
+}
+
+// TestRaceCandidatesSameInflightScoreOrder 同 in-flight 分数优先：随机扰动（固定 seed）
+// 不破坏排序——分差 >3 的候选顺序恒定（扰动幅度 <3 不会翻转）。
+func TestRaceCandidatesSameInflightScoreOrder(t *testing.T) {
+	resetPoolPerfState()
+	socks5Mu.Lock()
+	socks5Proxies = []Socks5Proxy{mkProxy(28101), mkProxy(28102), mkProxy(28103)}
+	socks5Mu.Unlock()
+	poolQualityPath = writePoolQualityFile(t, map[string]struct {
+		Port  uint16
+		Score int
+		Level string
+	}{
+		"a": {28101, 99, "healthy"},
+		"b": {28102, 60, "healthy"},
+		"c": {28103, 20, "healthy"},
+	})
+	// 三者 in-flight 相同（均 0）→ 按质量分降序；连跑多次仍恒定。
+	for i := 0; i < 5; i++ {
+		setRaceRandSeed(int64(i))
+		got := raceCandidates(3)
+		if len(got) != 3 {
+			t.Fatalf("raceCandidates=%+v, want 3", got)
+		}
+		want := []string{"127.0.0.1:28101", "127.0.0.1:28102", "127.0.0.1:28103"}
+		for j, a := range want {
+			if got[j].Addr != a {
+				t.Fatalf("iter %d cand[%d]=%s, want %s (score desc, jitter must not flip)", i, j, got[j].Addr, a)
+			}
+		}
+	}
+}
+
+// TestRaceCandidatesHighPressureShuffle 高压力（≥2.0）跳过质量排序、纯随机摊开：
+// 多个固定 seed 下首元素不再恒为最高分节点（shuffle 生效），候选集保持完整。
+func TestRaceCandidatesHighPressureShuffle(t *testing.T) {
+	resetPoolPerfState()
+	racePressureFn = func() float64 { return 2.5 } // 构造高压（≥2.0）
+	socks5Mu.Lock()
+	socks5Proxies = []Socks5Proxy{mkProxy(28101), mkProxy(28102), mkProxy(28103), mkProxy(28104)}
+	socks5Mu.Unlock()
+	poolQualityPath = writePoolQualityFile(t, map[string]struct {
+		Port  uint16
+		Score int
+		Level string
+	}{
+		"a": {28101, 100, "healthy"},
+		"b": {28102, 90, "healthy"},
+		"c": {28103, 80, "healthy"},
+		"d": {28104, 70, "healthy"},
+	})
+	all := map[string]bool{
+		"127.0.0.1:28101": true, "127.0.0.1:28102": true,
+		"127.0.0.1:28103": true, "127.0.0.1:28104": true,
+	}
+	firsts := map[string]bool{}
+	for i := 0; i < 40; i++ {
+		setRaceRandSeed(int64(i))
+		got := raceCandidates(4)
+		if len(got) != 4 {
+			t.Fatalf("high pressure raceCandidates=%+v, want all 4", got)
+		}
+		for _, c := range got {
+			if !all[c.Addr] {
+				t.Fatalf("unexpected candidate %s", c.Addr)
+			}
+		}
+		firsts[got[0].Addr] = true
+	}
+	// shuffle 生效：40 次中首元素不只一种（最高分节点不会永远打头）。
+	if len(firsts) < 2 {
+		t.Fatalf("high pressure should shuffle: first element always %v", firsts)
 	}
 }

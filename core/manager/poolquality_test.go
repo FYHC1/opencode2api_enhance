@@ -346,6 +346,64 @@ func TestRaceBudgetConfigSetGet(t *testing.T) {
 	}
 }
 
+// ---- S5：压力阈值与副本上限配置 ----
+
+func TestRacePressureConfigSetGet(t *testing.T) {
+	m := New(t.TempDir())
+
+	// 默认 0.5 / 1.0。
+	if got := poolRacePressureLowOf(m.loadConfig()); got != 0.5 {
+		t.Fatalf("default low=%v, want 0.5", got)
+	}
+	if got := poolRacePressureHighOf(m.loadConfig()); got != 1.0 {
+		t.Fatalf("default high=%v, want 1.0", got)
+	}
+
+	if err := m.ConfigSet("pool_race_pressure_low", "0.3"); err != nil {
+		t.Fatalf("set low: %v", err)
+	}
+	if err := m.ConfigSet("pool_race_pressure_high", "1.5"); err != nil {
+		t.Fatalf("set high: %v", err)
+	}
+	if got, _ := m.ConfigGet("pool_race_pressure_low"); got != "0.3" {
+		t.Fatalf("get low=%s, want 0.3", got)
+	}
+	if got, _ := m.ConfigGet("pool_race_pressure_high"); got != "1.5" {
+		t.Fatalf("get high=%s, want 1.5", got)
+	}
+	// 非法值回退（保持原值并报错）。
+	if err := m.ConfigSet("pool_race_pressure_low", "abc"); err == nil {
+		t.Fatal("non-float should error")
+	}
+	if err := m.ConfigSet("pool_race_pressure_low", "-0.1"); err == nil {
+		t.Fatal("negative should error")
+	}
+	if got, _ := m.ConfigGet("pool_race_pressure_low"); got != "0.3" {
+		t.Fatalf("after invalid set=%s, want 0.3", got)
+	}
+	// ConfigViewOf 反映生效值。
+	if v := m.ConfigViewOf(); v.PoolRacePressureLow != 0.3 || v.PoolRacePressureHigh != 1.5 {
+		t.Fatalf("view low=%v high=%v, want 0.3/1.5", v.PoolRacePressureLow, v.PoolRacePressureHigh)
+	}
+}
+
+// TestRaceCopiesRangeValidation pool_race_copies 值域校验 1~4（1 = 关闭竞速）。
+func TestRaceCopiesRangeValidation(t *testing.T) {
+	m := New(t.TempDir())
+
+	for _, bad := range []string{"0", "5", "-1", "abc"} {
+		if err := m.ConfigSet("pool_race_copies", bad); err == nil {
+			t.Fatalf("copies=%s should error (range 1~4)", bad)
+		}
+	}
+	if err := m.ConfigSet("pool_race_copies", "3"); err != nil {
+		t.Fatalf("copies=3 should be ok: %v", err)
+	}
+	if got, _ := m.ConfigGet("pool_race_copies"); got != "3" {
+		t.Fatalf("get=%s, want 3", got)
+	}
+}
+
 // ---- 持久化 ----
 
 func TestPoolQualityFileRoundtrip(t *testing.T) {

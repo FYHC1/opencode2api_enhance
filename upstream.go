@@ -42,12 +42,14 @@ func mainCodeVendor() *opencode.Vendor {
 	}
 	ocAdapterOnce.Do(func() {
 		ocAdapterTarget = opencode.New(opencode.Config{
-			ID:            "opencode",
-			Name:          "OpenCode",
-			Transport:     rootTransport{},
-			AdminPassword: adminPassword,
-			RaceCopies:    poolRaceCopies,
-			RaceBudgetMS:  raceBudgetMS,
+			ID:                 "opencode",
+			Name:               "OpenCode",
+			Transport:          rootTransport{},
+			AdminPassword:      adminPassword,
+			RaceCopies:         poolRaceCopies,
+			RaceBudgetMS:       raceBudgetMS,
+			RacePressureLow:    poolRacePressureLow,
+			RacePressureHigh:   poolRacePressureHigh,
 		})
 	})
 	return ocAdapterTarget

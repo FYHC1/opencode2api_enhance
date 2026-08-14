@@ -130,10 +130,18 @@ func (m *Manager) buildRouterCfg(singboxPorts []uint16, portNames map[uint16]str
 	if appCfg.PoolPerformanceMode != nil {
 		cfg["pool_performance_mode"] = *appCfg.PoolPerformanceMode
 	}
-	// P2b 请求级竞速：并行扇出数（>0 才写，未配置子进程用默认 2）。
+	// P2b 请求级竞速：并行扇出数上限（>0 才写，未配置子进程用默认 2）。
 	applyIf("pool_race_copies", int64(appCfg.PoolRaceCopies))
 	// S1 竞速整体预算（毫秒；>0 才写，未配置子进程用默认 10000）。
 	applyIf("race_budget_ms", int64(appCfg.RaceBudgetMS))
+	// S5 压力系数分段阈值（float；>0 才写，未配置子进程用默认 0.5/1.0）。
+	applyFloat := func(key string, v float64) {
+		if v > 0 {
+			cfg[key] = v
+		}
+	}
+	applyFloat("pool_race_pressure_low", appCfg.PoolRacePressureLow)
+	applyFloat("pool_race_pressure_high", appCfg.PoolRacePressureHigh)
 	// 透传厂商注册表 + 路由：网关子进程与核心一致，能注册多厂商（如 windsurf）
 	cfg = injectVendorConfig(cfg, appCfg)
 	return json.MarshalIndent(cfg, "", "  ")

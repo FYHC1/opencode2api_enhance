@@ -37,10 +37,15 @@ type AppConfig struct {
 	PoolBreakerThreshold int `json:"pool_breaker_threshold,omitempty"`
 	// 半开间隔：熔断节点按该周期（秒）放行 1 个探测请求，成功即恢复（默认 60）。
 	PoolHalfOpenIntervalSec int `json:"pool_halfopen_interval_sec,omitempty"`
-	// 请求级竞速并行数（P2b）：一次请求并行扇出 N 个候选出口，首个成功者胜（默认 2；1 = 关闭竞速）。
+	// 请求级竞速并行数上限（P2b/S5）：一次请求并行扇出 N 个候选出口，首个成功者胜
+	// （默认 2；1 = 关闭竞速）。S5 起为上限，实际副本由压力系数动态决定。
 	PoolRaceCopies int `json:"pool_race_copies,omitempty"`
 	// 竞速整体预算（毫秒，S1）：一次竞速等待首个成功候选的上限，到期走单发续写（默认 10000）。
 	RaceBudgetMS int `json:"race_budget_ms,omitempty"`
+	// 压力系数分段阈值（S5）：pressure = 活跃请求数/健康节点数，
+	// < Low（默认 0.5）→ 全速竞速；Low ≤ p < High（默认 1.0）→ 温和竞速（2）；≥ High → 单发。
+	PoolRacePressureLow  float64 `json:"pool_race_pressure_low,omitempty"`
+	PoolRacePressureHigh float64 `json:"pool_race_pressure_high,omitempty"`
 	// ShowNodePrefix 是否在对话流首段展示「🤖 节点 · 模型」前缀（默认关闭）
 	ShowNodePrefix *bool `json:"show_node_prefix,omitempty"`
 	// PoolProbeTarget 实例池链路探活目标（空 = 按 base_url 自动拼接；S4 可配）。
