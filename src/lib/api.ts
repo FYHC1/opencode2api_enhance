@@ -106,6 +106,8 @@ export type ConfigView = {
   has_password: boolean
   clash_external_url: string
   has_clash_token: boolean
+  /** E1: 上游代理出口（socks5:// 或 http:// 前缀，留空 = 直连） */
+  upstream_proxy: string
   timeout_ttft_min_ms: number
   timeout_ttft_max_ms: number
   timeout_silence_min_ms: number

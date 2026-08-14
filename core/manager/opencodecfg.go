@@ -4,7 +4,10 @@ package manager
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"sort"
+	"strconv"
+	"strings"
 )
 
 // defaultFreeAliases 免费模型别名（-free 后缀隐藏）。
@@ -29,17 +32,48 @@ func reasoningMap() map[string]string {
 	return map[string]string{"minimal": "low", "medium": "medium", "high": "high"}
 }
 
-// buildOpenCodeCfg 单实例配置：本地 sing-box 作为唯一 SOCKS5 出口。
+// upstreamProxyAddr 把配置的 upstream_proxy 归一化为裸 host:port。
+// socks.go 的 socks5Dial 直接 net.Dial("tcp", addr)，地址不接受带 scheme 的前缀——
+// 因此 socks5:// 与 http:// 前缀在此剥离（Clash mixed-port 同时支持两种协议，统一
+// 存 host:port）。空串 / 无法解析出 host:port（如无端口）返回 ""（回退直连 = 现状）。
+func upstreamProxyAddr(raw string) string {
+	addr := strings.TrimSpace(raw)
+	if i := strings.Index(addr, "://"); i >= 0 {
+		addr = addr[i+len("://"):]
+	}
+	if addr == "" {
+		return ""
+	}
+	if _, port, err := net.SplitHostPort(addr); err != nil {
+		return ""
+	} else if _, err := strconv.ParseUint(port, 10, 16); err != nil {
+		// SplitHostPort 不校验端口数字（如 "7897/path" 也能拆出），
+		// socks5Dial 直接 net.Dial 需要数字端口。
+		return ""
+	}
+	return addr
+}
+
+// buildOpenCodeCfg 单实例配置：默认本地 sing-box 作为唯一 SOCKS5 出口；
+// 配置了上游代理（E1）时出口直接指向该代理（跳过 sing-box）。
 func (m *Manager) buildOpenCodeCfg(singboxPort uint16) ([]byte, error) {
 	appCfg := m.loadConfig()
+	proxyAddr := upstreamProxyAddr(appCfg.UpstreamProxy)
+	proxyName := "singbox"
+	if proxyAddr == "" {
+		// 未配置 / 非法值：保持现状——本地 sing-box 出口。
+		proxyAddr = fmt.Sprintf("127.0.0.1:%d", singboxPort)
+	} else {
+		proxyName = "upstream"
+	}
 	cfg := map[string]any{
 		"model_alias":            aliasMap(),
 		"reasoning_effort_map":   reasoningMap(),
 		"force_disable_thinking": false,
 		"socks5_proxies": []any{map[string]any{
-			"name": "singbox", "addr": fmt.Sprintf("127.0.0.1:%d", singboxPort),
+			"name": proxyName, "addr": proxyAddr,
 		}},
-		"active_socks5":    fmt.Sprintf("127.0.0.1:%d", singboxPort),
+		"active_socks5":    proxyAddr,
 		"show_node_prefix": appCfg.ShowNodePrefix,
 	}
 	// 透传厂商注册表 + 路由：实例子进程与核心一致，能注册多厂商（如 windsurf）

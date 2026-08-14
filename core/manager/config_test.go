@@ -30,6 +30,7 @@ func TestConfigSetGetAllKeys(t *testing.T) {
 		"failover_probe_max":     "4",
 		"call_log_max":           "3333",
 		"show_node_prefix":       "true",
+		"upstream_proxy":         "socks5://127.0.0.1:7897",
 	}
 	for k, v := range cases {
 		if err := m.ConfigSet(k, v); err != nil {
@@ -47,6 +48,9 @@ func TestConfigSetGetAllKeys(t *testing.T) {
 	m2 := New(m.paths.DataDir)
 	if got, _ := m2.ConfigGet("show_node_prefix"); got != "true" {
 		t.Fatalf("persisted show_node_prefix = %q", got)
+	}
+	if got, _ := m2.ConfigGet("upstream_proxy"); got != "socks5://127.0.0.1:7897" {
+		t.Fatalf("persisted upstream_proxy = %q", got)
 	}
 }
 

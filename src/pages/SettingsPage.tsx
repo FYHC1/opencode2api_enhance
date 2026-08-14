@@ -20,6 +20,9 @@ export default function SettingsPage({
   const [clashUrl, setClashUrl] = useState('')
   const [clashToken, setClashToken] = useState('')
 
+  // 代理出口（E1）：上游代理绕过本机裸连 IP 被上游风控
+  const [upstreamProxy, setUpstreamProxy] = useState('')
+
   // 网关超时切换 / 节点前缀 已归位实例池页
   // 订阅自动拉取 已归位节点池页
   // 残留进程清理（孤儿实例 / 探针残留）
@@ -41,6 +44,7 @@ export default function SettingsPage({
         setAutostart(as)
         setBinariesInfo(bin)
         setClashUrl(cfg.clash_external_url)
+        setUpstreamProxy(cfg.upstream_proxy)
       } catch (e) {
         console.error('加载设置失败', e)
         toast('加载设置失败', false)
@@ -60,6 +64,17 @@ export default function SettingsPage({
       const cfg = await api.configGet()
       setConfig(cfg)
       setClashToken('')
+    } catch (e) {
+      console.error('保存失败', e)
+      toast('保存失败', false)
+    }
+  }
+
+  // 代理出口（E1）：保存上游代理配置（留空 = 直连）
+  const handleSaveUpstreamProxy = async () => {
+    try {
+      await api.configSet('upstream_proxy', upstreamProxy)
+      toast('已保存', true)
     } catch (e) {
       console.error('保存失败', e)
       toast('保存失败', false)
@@ -199,6 +214,33 @@ export default function SettingsPage({
         </button>
       </div>
       )}
+
+      {/* 代理出口（E1）：上游代理绕过本机裸连 IP 被上游风控（429/超时） */}
+      <div className="bg-white rounded-2xl border p-5 space-y-4">
+        <h2 className="text-lg font-medium text-zinc-900">代理出口</h2>
+
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-zinc-700">上游代理</label>
+          <input
+            type="text"
+            placeholder="socks5://127.0.0.1:7897"
+            value={upstreamProxy}
+            onChange={(e) => setUpstreamProxy(e.target.value)}
+            className="w-full px-3 py-2 border rounded-lg"
+          />
+          <p className="text-zinc-500 text-xs">
+            填 Clash 等本地代理的 mixed-port（支持 socks5:// 或 http:// 前缀）。配置后所有实例与扫描的出站流量都走该代理出口，绕过本机裸连 IP 被上游风控（频繁 429/超时）；留空 = 直连（现状）。
+          </p>
+          <p className="text-zinc-500 text-xs">改动后需重启实例/网关生效</p>
+        </div>
+
+        <button
+          onClick={handleSaveUpstreamProxy}
+          className="bg-zinc-900 text-white rounded-lg px-4 py-2 hover:bg-zinc-700"
+        >
+          保存
+        </button>
+      </div>
 
       {/* 开机自启（仅桌面端：桌面临近登录自启；Web/Docker/Linux 服务器 headless 端隐藏，服务器用 systemd/容器编排管理） */}
       {isDesktop && (

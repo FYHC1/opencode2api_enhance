@@ -30,6 +30,11 @@ type Config struct {
 	CallLogMax          int64  `json:"call_log_max,omitempty"`
 	ShowNodePrefix      bool   `json:"show_node_prefix,omitempty"`
 
+	// UpstreamProxy 上游代理出口（E1）：非空时实例/探针生成的 active_socks5 指向该代理
+	// （生成时剥离 socks5:// / http:// 前缀取 host:port），跳过 sing-box 出口，绕过本机
+	// 裸连 IP 被上游风控（429/超时）。留空 = 直连（现状）。
+	UpstreamProxy string `json:"upstream_proxy,omitempty"`
+
 	// SubscribeURL 订阅地址；SubscribeIntervalMin 自动拉取间隔（分钟，<=0 不自动拉）。
 	SubscribeURL         string `json:"subscribe_url,omitempty"`
 	SubscribeIntervalMin int    `json:"subscribe_interval_min,omitempty"`
@@ -141,6 +146,8 @@ func (m *Manager) ConfigGet(key string) (string, error) {
 		return strconv.FormatInt(cfg.CallLogMax, 10), nil
 	case "show_node_prefix":
 		return strconv.FormatBool(cfg.ShowNodePrefix), nil
+	case "upstream_proxy":
+		return cfg.UpstreamProxy, nil
 	case "subscribe_url":
 		return cfg.SubscribeURL, nil
 	case "subscribe_interval_min":
@@ -272,6 +279,9 @@ func (m *Manager) ConfigSet(key, value string) error {
 			return fmt.Errorf("invalid boolean for show_node_prefix: %s", value)
 		}
 		cfg.ShowNodePrefix = b
+	case "upstream_proxy":
+		// 原样存储（生成子进程配置时才剥离 scheme / 校验端口，非法值回退直连）。
+		cfg.UpstreamProxy = strings.TrimSpace(value)
 	case "subscribe_url":
 		cfg.SubscribeURL = strings.TrimSpace(value)
 	case "subscribe_interval_min":
@@ -464,6 +474,7 @@ type ConfigView struct {
 	FailoverProbeMax        int64  `json:"failover_probe_max"`
 	CallLogMax              int64  `json:"call_log_max"`
 	ShowNodePrefix          bool   `json:"show_node_prefix"`
+	UpstreamProxy           string `json:"upstream_proxy"`
 	SubscribeURL            string `json:"subscribe_url"`
 	SubscribeIntervalMin    int    `json:"subscribe_interval_min"`
 	HealthCheckIntervalSec  int    `json:"health_check_interval_sec"`
@@ -510,6 +521,7 @@ func (m *Manager) ConfigViewOf() ConfigView {
 		FailoverProbeMax:        def(cfg.FailoverProbeMax, 3),
 		CallLogMax:              def(cfg.CallLogMax, 5000),
 		ShowNodePrefix:          cfg.ShowNodePrefix,
+		UpstreamProxy:           cfg.UpstreamProxy,
 		SubscribeURL:            cfg.SubscribeURL,
 		SubscribeIntervalMin:    cfg.SubscribeIntervalMin,
 		HealthCheckIntervalSec:  cfg.HealthCheckIntervalSec,
