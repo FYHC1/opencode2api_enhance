@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useState, type ReactNode } from 'react'
 import clsx from 'clsx'
 import { BarChart3, ChevronDown, ChevronRight, RefreshCw, RotateCcw, Inbox, CalendarDays, Loader2 } from 'lucide-react'
 import { api, type StatsSummary, type DayStats } from '../lib/api'
@@ -6,21 +6,58 @@ import { api, type StatsSummary, type DayStats } from '../lib/api'
 /** 千分位格式化 */
 const fmt = (n: number) => n.toLocaleString('en-US')
 
+/** 统一网关在统计表中的展示名（与后端 unifiedGatewayName 一致） */
+const GATEWAY_DISPLAY = '统一网关'
+/** 按天趋势条最多展示的天数 */
+const TREND_DAYS = 14
+
+/** 调用日志按天聚合的单个数据点 */
+type DayTrendPoint = {
+  date: string
+  total: number
+  ok: number
+  fail: number
+}
+
+/** 成功/失败迷你条形图：绿=成功、红=失败，按占比宽度；无数据时灰色空态 */
+function MiniBar({ ok, fail }: { ok: number; fail: number }) {
+  const total = ok + fail
+  if (total === 0) {
+    return <div className="h-2 w-32 rounded-full bg-zinc-100" title="暂无调用日志" />
+  }
+  return (
+    <div className="w-32">
+      <div className="flex h-2 w-full overflow-hidden rounded-full bg-zinc-100">
+        <div className="h-full bg-green-500" style={{ width: `${(ok / total) * 100}%` }} title={`成功 ${ok}`} />
+        <div className="h-full bg-red-500" style={{ width: `${(fail / total) * 100}%` }} title={`失败 ${fail}`} />
+      </div>
+      <div className="mt-0.5 flex justify-between text-[10px] tabular-nums">
+        <span className="text-green-600">{ok}</span>
+        <span className="text-red-500">{fail}</span>
+      </div>
+    </div>
+  )
+}
+
 function Card({
   label,
   value,
   accent,
+  children,
 }: {
   label: string
-  value: string
+  value?: string
   accent?: boolean
+  children?: ReactNode
 }) {
   return (
     <div className="flex-1 min-w-[150px] bg-white rounded-[16px] border border-zinc-200 shadow-sm p-4">
       <div className="text-[12px] text-zinc-500 mb-1">{label}</div>
-      <div className={clsx('text-[22px] font-semibold tabular-nums', accent ? 'text-teal-700' : 'text-zinc-900')}>
-        {value}
-      </div>
+      {children ?? (
+        <div className={clsx('text-[22px] font-semibold tabular-nums', accent ? 'text-teal-700' : 'text-zinc-900')}>
+          {value}
+        </div>
+      )}
     </div>
   )
 }
@@ -44,19 +81,52 @@ export default function StatsPage({
   const [day, setDay] = useState('')
   const [dayStats, setDayStats] = useState<DayStats | null>(null)
   const [dayBusy, setDayBusy] = useState(false)
+  // 迷你条图数据（来自调用日志聚合）：每来源成功/失败、按天请求量/成功率
+  const [insOkFail, setInsOkFail] = useState<Record<string, { ok: number; fail: number }>>({})
+  const [dayTrend, setDayTrend] = useState<DayTrendPoint[]>([])
 
-  // 提取调用日志中出现过的日期（新→旧），供按天筛选
+  // 提取调用日志中出现过的日期（新→旧）供按天筛选，同时聚合迷你条图数据
   const loadDates = useCallback(async () => {
     try {
       const recs = await api.getCallLog(5000)
       const s = new Set<string>()
+      const bySrc = new Map<string, { ok: number; fail: number }>()
+      const byDay = new Map<string, { total: number; ok: number }>()
       for (const l of recs) {
         const d = (l.ts || '').slice(0, 10)
         if (d) s.add(d)
+        const ok = l.status === 'ok'
+        // 来源标注：空 = 统一网关；否则为独享实例名
+        const src = (l.source || '').trim() || GATEWAY_DISPLAY
+        const a = bySrc.get(src)
+        if (a) {
+          if (ok) a.ok++
+          else a.fail++
+        } else {
+          bySrc.set(src, ok ? { ok: 1, fail: 0 } : { ok: 0, fail: 1 })
+        }
+        if (d) {
+          const b = byDay.get(d)
+          if (b) {
+            b.total++
+            if (ok) b.ok++
+          } else {
+            byDay.set(d, ok ? { total: 1, ok: 1 } : { total: 1, ok: 0 })
+          }
+        }
       }
       setDates([...s].sort().reverse())
+      setInsOkFail(Object.fromEntries(bySrc))
+      setDayTrend(
+        [...byDay]
+          .map(([date, v]) => ({ date, total: v.total, ok: v.ok, fail: v.total - v.ok }))
+          .sort((x, y) => (x.date < y.date ? 1 : -1))
+          .slice(0, TREND_DAYS),
+      )
     } catch {
-      /* 忽略：无日志时日期为空 */
+      /* 忽略：无日志时日期为空，迷你条图置空 */
+      setInsOkFail({})
+      setDayTrend([])
     }
   }, [])
 
@@ -216,6 +286,58 @@ export default function StatsPage({
         )}
       </div>
 
+      {/* 按天视图：请求量 / 成功率趋势条（纯 CSS 柱状，复用 Card 组件） */}
+      {day && dayStats && (
+        <Card label="请求量 / 成功率趋势（近 14 天）">
+          {dayTrend.length === 0 ? (
+            <p className="text-[12px] text-zinc-400">暂无调用日志</p>
+          ) : (
+            <>
+              {(() => {
+                const maxTotal = dayTrend.reduce((m, p) => Math.max(m, p.total), 0)
+                return (
+                  <div className="flex h-24 items-end gap-1">
+                    {dayTrend.map((p) => {
+                      const okPct = p.total > 0 ? (p.ok / p.total) * 100 : 0
+                      const h = maxTotal > 0 ? (p.total / maxTotal) * 100 : 0
+                      return (
+                        <div
+                          key={p.date}
+                          className="flex h-full min-w-0 flex-1 flex-col justify-end"
+                          title={`${p.date} · ${fmt(p.total)} 请求 · 成功率 ${Math.round(okPct)}%`}
+                        >
+                          {p.total === 0 ? (
+                            <div className="h-[2px] rounded bg-zinc-200" />
+                          ) : (
+                            <div className="w-full overflow-hidden rounded-t-sm" style={{ height: `${h}%` }}>
+                              <div className="flex h-full w-full flex-col-reverse">
+                                <div className="w-full bg-green-500" style={{ height: `${okPct}%` }} />
+                                <div className="w-full bg-red-500" style={{ height: `${100 - okPct}%` }} />
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )
+              })()}
+              <div className="mt-2 flex items-center gap-3 text-[11px] text-zinc-500">
+                <span className="flex items-center gap-1">
+                  <span className="inline-block h-2 w-2 rounded-sm bg-green-500" />
+                  成功
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="inline-block h-2 w-2 rounded-sm bg-red-500" />
+                  失败
+                </span>
+                <span className="text-zinc-400">柱高 = 当日请求量 · 绿/红占比 = 成功率</span>
+              </div>
+            </>
+          )}
+        </Card>
+      )}
+
       {error && !stats && (
         <div className="text-[13px] text-red-600 bg-red-50 border border-red-100 rounded-xl px-4 py-3">
           加载失败：{error}
@@ -299,6 +421,7 @@ export default function StatsPage({
               <tr className="text-left text-[12px] text-zinc-500 border-b border-zinc-100">
                 <th className="py-2 pr-3 font-medium">实例</th>
                 <th className="py-2 pr-3 font-medium text-right">请求数</th>
+                <th className="py-2 pr-3 font-medium">成功/失败</th>
                 <th className="py-2 pr-3 font-medium text-right">输入 Token</th>
                 <th className="py-2 pr-3 font-medium text-right">输出 Token</th>
                 <th className="py-2 pr-3 font-medium text-right">总计</th>
@@ -309,6 +432,9 @@ export default function StatsPage({
               {instances.map((ins) => {
                 const open = expanded.has(ins.name)
                 const hasDetail = (ins.models?.length ?? 0) > 0 || (ins.nodes?.length ?? 0) > 0
+                const of = insOkFail[ins.name]
+                const ok = of?.ok ?? 0
+                const fail = of?.fail ?? 0
                 return (
                   <Fragment key={ins.name}>
                     <tr
@@ -331,6 +457,9 @@ export default function StatsPage({
                         {ins.name}
                       </td>
                       <td className="py-2.5 pr-3 text-right tabular-nums text-zinc-600">{fmt(ins.requests)}</td>
+                      <td className="py-2.5 pr-3">
+                        <MiniBar ok={ok} fail={fail} />
+                      </td>
                       <td className="py-2.5 pr-3 text-right tabular-nums text-zinc-600">{fmt(ins.prompt_tokens)}</td>
                       <td className="py-2.5 pr-3 text-right tabular-nums text-zinc-600">{fmt(ins.completion_tokens)}</td>
                       <td className="py-2.5 pr-3 text-right tabular-nums font-medium text-zinc-900">{fmt(ins.total_tokens)}</td>
@@ -348,7 +477,7 @@ export default function StatsPage({
                     </tr>
                     {open && (
                       <tr key={`${ins.name}-detail`} className="bg-zinc-50/50">
-                        <td colSpan={6} className="py-2 px-4">
+                        <td colSpan={7} className="py-2 px-4">
                           <table className="w-full text-[12px]">
                             <thead>
                               <tr className="text-left text-zinc-400">
