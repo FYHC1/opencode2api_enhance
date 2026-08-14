@@ -213,6 +213,14 @@ func scanConcurrencyOf(cfg Config) int {
 	return 8
 }
 
+// stopScanConcurrencyOf 停止扫描并发生效值（默认 4，N2）。
+func stopScanConcurrencyOf(cfg Config) int {
+	if cfg.StopScanConcurrency > 0 {
+		return cfg.StopScanConcurrency
+	}
+	return 4
+}
+
 // batchConcurrencyOf 批量启停/释放并发生效值（默认 4）。
 func batchConcurrencyOf(cfg Config) int {
 	if cfg.BatchConcurrency > 0 {

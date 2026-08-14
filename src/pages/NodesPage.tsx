@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import clsx from 'clsx'
-import { Loader2, Network, Radar, RefreshCw, Rss, Square, Trash2, User, X, ChevronDown } from 'lucide-react'
+import { Loader2, Network, Radar, RefreshCw, Rss, Settings2, Square, Trash2, User, X, ChevronDown } from 'lucide-react'
 import { api, type NodeView, type ProbeResult, type ScanProgress, type SubscriptionSource } from '../lib/api'
 import { isDesktop } from '../lib/env'
 import ResultModal from '../components/ResultModal'
+
+// N1: 扫描按钮三态状态机（idle 空闲 / scanning 扫描中 / stopping 正在停止中）。
+type ScanPhase = 'idle' | 'scanning' | 'stopping'
 
 export default function NodesPage({
   toast,
@@ -12,7 +15,11 @@ export default function NodesPage({
 }) {
   const [nodes, setNodes] = useState<NodeView[]>([])
   const [scan, setScan] = useState<ScanProgress | null>(null)
-  const [scanning, setScanning] = useState(false)
+  // N1: 扫描按钮三态（idle / scanning / stopping）。phaseRef 供 poll 闭包读取当前相位，
+  // 避免 React stale closure；停止后由 poll 等后端确认 stopping→done 才回 idle，
+  // 杜绝按钮闪烁与进度条 5/10 残留。
+  const [phase, setPhase] = useState<ScanPhase>('idle')
+  const phaseRef = useRef<ScanPhase>('idle')
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [selected, setSelected] = useState<Set<string>>(new Set())
   // 已添加实例的节点：node → 是否入池（join_gateway），用于徽章区分「实例池/独享」
@@ -24,9 +31,16 @@ export default function NodesPage({
   const [acting, setActing] = useState(false)
   // 追踪上一次扫描状态：仅在「本次扫描 running → done」时弹出结果弹窗
   const prevScanStatusRef = useRef<string | null>(null)
-  // S1: 停止扫描豁免标志——点击停止后，轮询不再把 stopping/done 进度条回填，避免"点了不生效"
-  const stopAckRef = useRef(false)
-  const [stopBusy, setStopBusy] = useState(false)
+  // N1: 三态切换（ref 同步：poll 闭包只读 phaseRef，避免 stale closure）。
+  const setScanPhase = (p: ScanPhase) => {
+    phaseRef.current = p
+    setPhase(p)
+  }
+  // N2: 节点扫描配置（按钮 title 并发数与设置面板表单），生效值来自 configGet
+  const [scanConf, setScanConf] = useState({ scan_concurrency: 8, stop_scan_concurrency: 4 })
+  // N2: 节点池设置弹窗（节点扫描配置折叠面板，默认收起）
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [openSections, setOpenSections] = useState<{ scan: boolean }>({ scan: false })
 
   // T3: 订阅源列表管理（多条订阅：新增/删除/立即拉取）
   const [subs, setSubs] = useState<SubscriptionSource[]>([])
@@ -51,6 +65,16 @@ export default function NodesPage({
     api
       .subscriptionsList()
       .then((r) => setSubs(r.subscriptions ?? []))
+      .catch(() => {})
+  }, [])
+
+  // N2: 加载节点扫描配置（按钮 title / 设置面板生效值）
+  useEffect(() => {
+    api
+      .configGet()
+      .then((c) =>
+        setScanConf({ scan_concurrency: c.scan_concurrency, stop_scan_concurrency: c.stop_scan_concurrency }),
+      )
       .catch(() => {})
   }, [])
 
@@ -179,26 +203,37 @@ export default function NodesPage({
         if (!alive) return
         const prev = prevScanStatusRef.current
         prevScanStatusRef.current = p.status
-        // S1: 已请求停止且后端进入 stopping/done 后，避免把进度条回填回去
-        if (stopAckRef.current) {
-          if (p.status === 'stopping' || p.status === 'done') {
-            stopAckRef.current = false
-            setScanning(false)
-            // 不再 return —— 继续走底部 setTimeout(poll, 800) 保持轮询存活
-          } else {
+        // N1 三态状态机：startScan/stopScan 同步置位；poll 只做收尾确认
+        // （stopping→done 回 idle）与页面加载后的状态恢复，不再直接驱动按钮态，
+        // 杜绝闪烁；停止请求后也不回填 scan（进度条立即消失、无 5/10 残留）。
+        if (phaseRef.current === 'stopping') {
+          // 已请求停止：等后端确认 done（停止完成）才回 idle；期间不回填进度条
+          if (p.status === 'done') setScanPhase('idle')
+        } else if (phaseRef.current === 'scanning') {
+          if (p.status === 'running') {
             setScan(p)
-            setScanning(true)
+          } else if (p.status === 'done') {
+            setScan(p) // 结果弹窗依赖 done 快照（ok 数/可用节点列表）
+            // 扫描刚完成（running → done）：弹出结果弹窗
+            if (prev === 'running') setShowResult(true)
+            setScanPhase('idle')
+          } else if (p.status === 'stopping') {
+            // 非本页发起的停止（另一会话/上次请求已到达）：跟随真实状态
+            setScanPhase('stopping')
+          } else {
+            setScanPhase('idle')
           }
-        } else {
+        } else if (p.status === 'running') {
+          // idle：页面加载/刷新后恢复真实后端状态（可能在扫或已停）
           setScan(p)
-          setScanning(p.status === 'running' || p.status === 'stopping')
-          // 扫描刚完成（running → done）：弹出结果弹窗
-          if (p.status === 'done' && prev === 'running') setShowResult(true)
+          setScanPhase('scanning')
+        } else if (p.status === 'stopping') {
+          setScanPhase('stopping')
         }
       } catch {
         /* ignore */
       }
-      // 无论成功失败都继续轮询
+      // 无论成功失败都继续轮询（U1 保活：停止后轮询存活，可再扫）
       if (alive) setTimeout(poll, 800)
     }
     setTimeout(poll, 500)
@@ -236,29 +271,49 @@ export default function NodesPage({
       toast('请先勾选要扫描的节点', false)
       return
     }
-    setScanning(true)
+    setScanPhase('scanning')
     try {
       const p = await api.scanStart({ nodes: names, timeout: 12 })
       setScan(p)
       toast(`开始扫描 ${names.length} 个节点…`)
     } catch (e) {
-      setScanning(false)
+      setScanPhase('idle')
       toast(String(e), false)
     }
   }
 
+  // N1: 停止扫描——点击即同步进入「正在停止中」（禁用态、不闪烁），进度条立即消失；
+  // 后端确认 stopping→done 由 poll 收敛回 idle，之后可重新扫描。
   const stopScan = async () => {
-    setStopBusy(true)
+    setScanPhase('stopping')
+    setScan(null)
     try {
       await api.scanStop()
-      stopAckRef.current = true
       toast('已请求停止扫描')
     } catch (e) {
+      // 请求失败：退回扫描中，由 poll 按后端真实状态校正
+      setScanPhase('scanning')
       toast(String(e), false)
-    } finally {
-      setStopBusy(false)
-      setScanning(false)
-      setScan(null) // 停止后关闭进度条
+    }
+  }
+
+  // N2: 保存节点扫描配置（scan_concurrency / stop_scan_concurrency，1~16 / 1~8）
+  const handleSaveScanConf = async () => {
+    const { scan_concurrency, stop_scan_concurrency } = scanConf
+    if (scan_concurrency < 1 || scan_concurrency > 16) {
+      toast('扫描并发需在 1~16 之间', false)
+      return
+    }
+    if (stop_scan_concurrency < 1 || stop_scan_concurrency > 8) {
+      toast('停止并发需在 1~8 之间', false)
+      return
+    }
+    try {
+      await api.configSet('scan_concurrency', String(scan_concurrency))
+      await api.configSet('stop_scan_concurrency', String(stop_scan_concurrency))
+      toast('节点扫描配置已保存', true)
+    } catch (e) {
+      toast(String(e), false)
     }
   }
 
@@ -302,7 +357,7 @@ export default function NodesPage({
     })
   }
 
-  const scanBtnDisabled = selected.size === 0 || scanning
+  const scanBtnDisabled = selected.size === 0
 
   // 扫描结果中的可用节点（去重：剔除已添加为实例的节点）
   const okNodes = useMemo(() => {
@@ -403,14 +458,24 @@ export default function NodesPage({
             <Trash2 size={14} />
             删除
           </button>
-          {scanning ? (
+          {phase === 'scanning' ? (
             <button
               onClick={() => void stopScan()}
-              disabled={stopBusy}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-white bg-red-600 hover:bg-red-700 disabled:opacity-60 disabled:cursor-not-allowed"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-white bg-red-600 hover:bg-red-700"
+              title={`停止扫描（${scanConf.stop_scan_concurrency} 并发）`}
             >
-              {stopBusy ? <Loader2 size={14} className="animate-spin" /> : <Square size={14} />}
-              {stopBusy ? '停止中…' : '停止扫描'}
+              <Square size={14} />
+              停止扫描
+            </button>
+          ) : phase === 'stopping' ? (
+            // N1: 停止请求已发出、后端未完全停止：禁用态，转圈不闪烁
+            <button
+              disabled
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-white bg-red-600/60 cursor-not-allowed"
+              title="正在停止中…"
+            >
+              <Loader2 size={14} className="animate-spin" />
+              正在停止中…
             </button>
           ) : (
             <button
@@ -422,7 +487,7 @@ export default function NodesPage({
                   ? 'bg-zinc-200 text-zinc-500 cursor-not-allowed'
                   : 'bg-green-600 hover:bg-green-700 shadow-sm',
               )}
-              title={selected.size === 0 ? '请先勾选节点' : '扫描选中节点'}
+              title={selected.size === 0 ? '请先勾选节点' : `扫描选中节点（${scanConf.scan_concurrency} 并发）`}
             >
               <Radar size={14} /> 扫描选中节点（{selected.size}）
             </button>
@@ -454,21 +519,25 @@ export default function NodesPage({
           >
             {acting ? <Loader2 size={14} className="animate-spin" /> : <User size={14} />} 独享
           </button>
+          {/* N2: 节点池设置（节点扫描配置折叠面板） */}
+          <button
+            onClick={() => setSettingsOpen(true)}
+            title="节点扫描配置（扫描并发 / 停止并发）"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-zinc-700 bg-white border border-zinc-200 hover:bg-zinc-50"
+          >
+            <Settings2 size={14} /> 设置
+          </button>
         </div>
       </div>
 
-            {/* 订阅自动拉取已收进右上角「设置」弹窗 */}
-
-      {/* 扫描进度条：扫描中实时显示，完成后短暂保留结果 */}
-      {scan && (scan.status === 'running' || scan.status === 'stopping' || scan.status === 'done') && (
+      {/* 扫描进度条：只在扫描中（running）显示；点击停止后立即消失（stopping/done 不再渲染） */}
+      {scan && scan.status === 'running' && (
         <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm p-4 space-y-2">
           <div className="flex items-center justify-between text-[12px] text-zinc-500">
             <span>
-              {scan.status === 'running' || scan.status === 'stopping'
-                ? scan.current_node
-                  ? `扫描中：${scan.current}/${scan.total} · ${scan.current_node}`
-                  : `扫描中：${scan.current}/${scan.total}`
-                : `扫描完成：${scan.results.filter((r) => r.ok).length}/${scan.total} 个可用`}
+              {scan.current_node
+                ? `扫描中：${scan.current}/${scan.total} · ${scan.current_node}`
+                : `扫描中：${scan.current}/${scan.total}`}
             </span>
             <span>{scan.total ? `${Math.round((scan.current / scan.total) * 100)}%` : ''}</span>
           </div>
@@ -595,6 +664,74 @@ export default function NodesPage({
       )}
 
     </div>
+
+      {/* N2: 节点池设置弹窗（节点扫描配置折叠面板，默认收起，样式对齐 PoolPage 设置弹窗） */}
+      {settingsOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => setSettingsOpen(false)}
+        >
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-[722px] max-h-[86vh] overflow-y-auto p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-zinc-900">节点池设置</h2>
+              <button onClick={() => setSettingsOpen(false)} className="p-1.5 rounded-lg hover:bg-zinc-100">
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* 节点扫描配置（折叠面板，默认收起） */}
+            <section className="border border-zinc-200 rounded-xl overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setOpenSections((s) => ({ ...s, scan: !s.scan }))}
+                className={clsx('w-full flex items-center justify-between px-4 py-3 text-left hover:bg-zinc-50', openSections.scan && 'border-b border-zinc-200')}
+              >
+                <span className="text-[14px] font-semibold text-zinc-900">节点扫描配置</span>
+                <ChevronDown size={16} className={clsx('text-zinc-400 transition-transform', !openSections.scan && '-rotate-90')} />
+              </button>
+              {openSections.scan && (
+                <div className="p-4 space-y-4">
+                  <p className="text-[12px] text-zinc-400">
+                    扫描选中节点 / 停止扫描的并发 worker 数，保存后立即生效（按钮 title 并发数即时更新）。
+                  </p>
+                  <div className="space-y-2.5 pt-1">
+                    <div className="flex items-center gap-3">
+                      <label className="text-[13px] text-zinc-700 flex-1 min-w-0 whitespace-nowrap">扫描选中节点（1~16）</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={16}
+                        value={scanConf.scan_concurrency}
+                        onChange={(e) => setScanConf({ ...scanConf, scan_concurrency: Number(e.target.value) })}
+                        className="w-28 shrink-0 px-3 py-2 border rounded-lg text-[13px] text-right"
+                      />
+                      <span className="w-8 shrink-0" />
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <label className="text-[13px] text-zinc-700 flex-1 min-w-0 whitespace-nowrap">停止扫描（1~8）</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={8}
+                        value={scanConf.stop_scan_concurrency}
+                        onChange={(e) => setScanConf({ ...scanConf, stop_scan_concurrency: Number(e.target.value) })}
+                        className="w-28 shrink-0 px-3 py-2 border rounded-lg text-[13px] text-right"
+                      />
+                      <span className="w-8 shrink-0" />
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] text-zinc-400">并发过高可能引起进程风暴，建议保持默认</span>
+                    <button onClick={() => void handleSaveScanConf()} className="bg-zinc-900 text-white rounded-lg px-4 py-2 text-[13px] hover:bg-zinc-700">
+                      保存
+                    </button>
+                  </div>
+                </div>
+              )}
+            </section>
+          </div>
+        </div>
+      )}
 
       {/* T3: 订阅管理弹窗（列表 + 新增 + 拉取 + 删除） */}
       {subOpen && (

@@ -38,5 +38,6 @@
   "pool_breaker_threshold": 3,
   "pool_halfopen_interval_sec": 60,
   "bad_pool_reset_sec": 300,
-  "ui_poll_interval_sec": 5
+  "ui_poll_interval_sec": 5,
+  "stop_scan_concurrency": 4
 }

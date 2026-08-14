@@ -26,6 +26,9 @@ type AppConfig struct {
 	CallLogMax int `json:"call_log_max,omitempty"`
 	// 界面轮询间隔（秒，U3）：nil = 未设置（默认 5），显式 0 = 关闭轮询，1~60 可配。
 	UiPollIntervalSec *int `json:"ui_poll_interval_sec,omitempty"`
+	// 停止扫描并发数（N2，默认 4）：与 scan_concurrency 一起构成节点扫描并发配置，
+	// 经管理面 /api/admin/config 透传（本端不直接使用，子进程透传兼容）。
+	StopScanConcurrency int `json:"stop_scan_concurrency,omitempty"`
 
 	// 坏状态码组：状态码 → 原因文案，遇到即切节点并计数（可配置，默认见 badStatusCodes）
 	BadStatusCodes map[string]string `json:"bad_status_codes,omitempty"`
