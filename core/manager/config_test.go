@@ -92,6 +92,67 @@ func TestConfigBadPoolResetSec(t *testing.T) {
 	}
 }
 
+// U3: ui_poll_interval_sec 默认 5、0 = 关闭轮询（持久生效）、非法值回退默认 5。
+func TestConfigUiPollIntervalSec(t *testing.T) {
+	m := newTestManager(t)
+	// 未设置（nil）→ ConfigGet 返回默认 5，ConfigView 生效 5。
+	if got, _ := m.ConfigGet("ui_poll_interval_sec"); got != "5" {
+		t.Fatalf("default get = %q, want 5", got)
+	}
+	if v := m.ConfigViewOf().UiPollIntervalSec; v != 5 {
+		t.Fatalf("default UiPollIntervalSec = %d, want 5", v)
+	}
+	// 0 = 关闭轮询：Set 接受、ConfigGet 原样读回、ConfigView 生效 0
+	// （关键回归：之前 ConfigView 把 0 归一为 5，观察不到关闭轮询）。
+	if err := m.ConfigSet("ui_poll_interval_sec", "0"); err != nil {
+		t.Fatalf("set 0: %v", err)
+	}
+	if got, _ := m.ConfigGet("ui_poll_interval_sec"); got != "0" {
+		t.Fatalf("get after set 0 = %q, want 0", got)
+	}
+	if v := m.ConfigViewOf().UiPollIntervalSec; v != 0 {
+		t.Fatalf("view after set 0 = %d, want 0", v)
+	}
+	// 落盘读回：新管理器（同一目录）重载后 0 仍持久生效。
+	m2 := New(m.paths.DataDir)
+	if got, _ := m2.ConfigGet("ui_poll_interval_sec"); got != "0" {
+		t.Fatalf("persisted get = %q, want 0", got)
+	}
+	if v := m2.ConfigViewOf().UiPollIntervalSec; v != 0 {
+		t.Fatalf("persisted view = %d, want 0", v)
+	}
+	// 1~60 正常值原样读回。
+	if err := m.ConfigSet("ui_poll_interval_sec", "10"); err != nil {
+		t.Fatalf("set 10: %v", err)
+	}
+	if got, _ := m.ConfigGet("ui_poll_interval_sec"); got != "10" {
+		t.Fatalf("get after set 10 = %q, want 10", got)
+	}
+	if v := m.ConfigViewOf().UiPollIntervalSec; v != 10 {
+		t.Fatalf("view = %d, want 10", v)
+	}
+	// 非法值（负数/超界）→ nil（未设置）回退默认 5。
+	if err := m.ConfigSet("ui_poll_interval_sec", "-3"); err != nil {
+		t.Fatalf("set -3: %v", err)
+	}
+	if got, _ := m.ConfigGet("ui_poll_interval_sec"); got != "5" {
+		t.Fatalf("get after -3 = %q, want 5", got)
+	}
+	if v := m.ConfigViewOf().UiPollIntervalSec; v != 5 {
+		t.Fatalf("view after -3 = %d, want 5", v)
+	}
+	if err := m.ConfigSet("ui_poll_interval_sec", "99"); err != nil {
+		t.Fatalf("set 99: %v", err)
+	}
+	if got, _ := m.ConfigGet("ui_poll_interval_sec"); got != "5" {
+		t.Fatalf("get after 99 = %q, want 5", got)
+	}
+	// 非整数拒绝。
+	if err := m.ConfigSet("ui_poll_interval_sec", "abc"); err == nil {
+		t.Fatal("invalid int must error")
+	}
+}
+
 func TestConfigViewMasking(t *testing.T) {
 	m := newTestManager(t)
 	_ = m.ConfigSet("default_password", "hunter2")

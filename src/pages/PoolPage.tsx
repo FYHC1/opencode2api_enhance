@@ -77,10 +77,13 @@ export default function PoolPage({
   const [keyOpen, setKeyOpen] = useState(false)
   const [keyValue, setKeyValue] = useState('')
   const [keyBusy, setKeyBusy] = useState(false)
-  // 页面设置弹窗（性能模式参数 + 网关超时切换，收进右上角齿轮）
+  // 页面设置弹窗（性能模式参数 + 网关超时切换 + 界面刷新，收进右上角齿轮）
   const [settingsOpen, setSettingsOpen] = useState(false)
-  // 折叠面板：两段默认收起
-  const [openSections, setOpenSections] = useState<{ perf: boolean; timeout: boolean }>({ perf: false, timeout: false })
+  // 折叠面板：每个配置分组一个 section，默认收起
+  const [openSections, setOpenSections] = useState<{ perf: boolean; timeout: boolean; ui: boolean }>({ perf: false, timeout: false, ui: false })
+  // 界面刷新（U3）：轮询间隔（秒，0 = 关闭轮询）（生效值 + 表单值）
+  const [uiPollSec, setUiPollSec] = useState(5)
+  const [uiForm, setUiForm] = useState({ ui_poll_interval_sec: 5 })
   // 一键释放全部池成员忙态
   const [releaseAllBusy, setReleaseAllBusy] = useState(false)
 
@@ -146,16 +149,19 @@ export default function PoolPage({
           call_log_max: c.call_log_max,
         })
         setShowNodePrefix(c.show_node_prefix)
+        setUiForm({ ui_poll_interval_sec: c.ui_poll_interval_sec })
+        setUiPollSec(c.ui_poll_interval_sec)
       })
       .catch(() => {})
   }, [])
 
-  // 首次加载 + 轻量轮询（网关状态 / 实例健康会变化）
+  // 首次加载 + 轻量轮询（网关状态 / 实例健康会变化）：间隔取配置 ui_poll_interval_sec（0 = 不轮询，默认 5s）
   useEffect(() => {
     void load()
-    const timer = setInterval(() => void load(), 3000)
+    if (uiPollSec <= 0) return
+    const timer = setInterval(() => void load(), uiPollSec * 1000)
     return () => clearInterval(timer)
-  }, [load])
+  }, [load, uiPollSec])
 
   const copyText = async (text: string, label: string) => {
     try {
@@ -305,6 +311,22 @@ export default function PoolPage({
       toast('超时配置已保存（重启网关后生效）', true)
     } catch (e) {
       console.error('保存超时配置失败', e)
+      toast('保存失败', false)
+    }
+  }
+
+  // 界面刷新（U3）：保存轮询间隔（0~60，0 = 关闭自动轮询）
+  const handleSaveUi = async () => {
+    const v = uiForm.ui_poll_interval_sec
+    if (!Number.isInteger(v) || v < 0 || v > 60) {
+      toast('刷新间隔需为 0~60 的整数（0 = 关闭自动刷新）', false)
+      return
+    }
+    try {
+      await api.configSet('ui_poll_interval_sec', String(v))
+      toast('界面刷新配置已保存（重载页面后生效）', true)
+    } catch (e) {
+      console.error('保存界面刷新配置失败', e)
       toast('保存失败', false)
     }
   }
@@ -530,7 +552,7 @@ export default function PoolPage({
           </button>
           <button
             onClick={() => setSettingsOpen(true)}
-            title="实例池设置（性能模式参数 / 网关超时切换）"
+            title="实例池设置（性能模式参数 / 网关超时切换 / 界面刷新）"
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-zinc-700 bg-white border border-zinc-200 hover:bg-zinc-50"
           >
             <Settings2 size={14} /> 设置
@@ -1129,6 +1151,43 @@ export default function PoolPage({
                   保存超时配置
                 </button>
               </div>
+                </div>
+              )}
+            </section>
+
+            {/* 界面刷新（折叠面板，默认收起） */}
+            <section className="border border-zinc-200 rounded-xl overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setOpenSections((s) => ({ ...s, ui: !s.ui }))}
+                className={clsx('w-full flex items-center justify-between px-4 py-3 text-left hover:bg-zinc-50', openSections.ui && 'border-b border-zinc-200')}
+              >
+                <span className="text-[14px] font-semibold text-zinc-900">界面刷新</span>
+                <ChevronDown size={16} className={clsx('text-zinc-400 transition-transform', !openSections.ui && '-rotate-90')} />
+              </button>
+              {openSections.ui && (
+                <div className="p-4 space-y-4">
+                  <p className="text-[12px] text-zinc-400">
+                    本页与独享页按此间隔自动刷新实例状态与链路质量（轻量轮询）；深度状态校正仍由「刷新」按钮执行
+                  </p>
+                  <div className="flex items-center gap-3">
+                    <label className="text-[13px] text-zinc-700 flex-1 min-w-0 whitespace-nowrap">刷新间隔（秒，默认 5）</label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={60}
+                      value={uiForm.ui_poll_interval_sec}
+                      onChange={(e) => setUiForm({ ui_poll_interval_sec: Number(e.target.value) })}
+                      className="w-28 shrink-0 px-3 py-2 border rounded-lg text-[13px] text-right"
+                    />
+                    <span className="text-[11px] text-zinc-400 w-8 shrink-0 text-right">0=关</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] text-zinc-400">修改后重载页面生效</span>
+                    <button onClick={() => void handleSaveUi()} className="bg-zinc-900 text-white rounded-lg px-4 py-2 text-[13px] hover:bg-zinc-700">
+                      保存
+                    </button>
+                  </div>
                 </div>
               )}
             </section>
