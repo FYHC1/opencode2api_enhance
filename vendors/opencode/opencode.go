@@ -54,6 +54,9 @@ type Config struct {
 	// RaceCopies 请求级竞速并行数（P2b）：>1 且 Transport 支持 contract.Racer 时，
 	// 一次请求并行扇出该数量的候选出口，首个成功者胜（默认 1 = 关闭竞速）。
 	RaceCopies int
+	// RaceBudgetMS 竞速整体预算（毫秒，S1）：raceDo 等待首个成功候选的上限，
+	// 到期返回错误走单发续写（0 = 默认 10s）。
+	RaceBudgetMS int
 }
 
 // Vendor 实现 contract.Vendor，代表 OpenCode 上游。

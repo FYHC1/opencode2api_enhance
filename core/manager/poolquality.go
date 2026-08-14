@@ -23,6 +23,8 @@ const (
 	qualityDegraded = "degraded"
 	qualityFlaky    = "flaky"
 	qualityDown     = "down"
+	// qualityUnknown 无探活样本（空窗口）的节点：不参与竞速候选（S1 冷启动不竞速）。
+	qualityUnknown = "unknown"
 
 	// defaultProbeTarget 默认探活目标：opencode 厂商模型列表端点
 	// （与 vendors/opencode 的 zenModelsURL 一致；配置 base_url 可覆盖）。
@@ -50,7 +52,7 @@ type QualityRecord struct {
 	Port                uint16        `json:"port"`
 	SingboxPort         uint16        `json:"singbox_port"`
 	Score               int           `json:"score"`                // 0~100
-	Level               string        `json:"level"`                // healthy / degraded / flaky / down
+	Level               string        `json:"level"`                // healthy / degraded / flaky / down / unknown（无探活样本）
 	SuccessRate         float64       `json:"success_rate"`         // 窗口内成功率 0~1
 	AvgLatencyMS        int64         `json:"avg_latency_ms"`       // 窗口内平均延迟
 	ConsecutiveFailures int           `json:"consecutive_failures"` // 从最新样本回溯的连续失败数
@@ -146,6 +148,14 @@ func poolRaceCopiesOf(cfg Config) int {
 	return 2
 }
 
+// poolRaceBudgetMSOf 竞速整体预算生效值（毫秒，<=0 用默认 10000）。
+func poolRaceBudgetMSOf(cfg Config) int {
+	if cfg.RaceBudgetMS > 0 {
+		return cfg.RaceBudgetMS
+	}
+	return 10000
+}
+
 // scanConcurrencyOf 节点扫描并发生效值（默认 8）。
 func scanConcurrencyOf(cfg Config) int {
 	if cfg.ScanConcurrency > 0 {
@@ -198,7 +208,7 @@ func probeTargetURL(cfg Config) string {
 // ---- 评分模型 ----
 
 // computeQuality 由窗口内样本计算质量分与等级（纯函数，便于单测）。
-// 窗口外的样本滑出不计分；空窗口（新实例）乐观计 100/healthy，不误伤新节点。
+// 窗口外的样本滑出不计分；空窗口（新实例）标记 unknown 乐观计 100（不参与竞速，单发可用）。
 func computeQuality(rec *QualityRecord, samples []ProbeSample, now, windowSec int64) {
 	cutoff := now - windowSec
 	var win []ProbeSample
@@ -209,8 +219,10 @@ func computeQuality(rec *QualityRecord, samples []ProbeSample, now, windowSec in
 	}
 	rec.Samples = win
 	if len(win) == 0 {
+		// 空窗口（无探活样本）：标记 unknown，不参与竞速（S1 冷启动不竞速）；
+		// 分数保持乐观，单发路由仍可选中（避免冷启动无节点可用）。
 		rec.Score = 100
-		rec.Level = qualityHealthy
+		rec.Level = qualityUnknown
 		rec.SuccessRate = 0
 		rec.AvgLatencyMS = 0
 		rec.ConsecutiveFailures = 0

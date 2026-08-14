@@ -30,6 +30,8 @@ var (
 	poolQualityPath string
 	// poolRaceCopies 请求级竞速并行数（默认 2；1 = 退化为串行）。
 	poolRaceCopies = 2
+	// raceBudgetMS 竞速整体预算（毫秒，默认 10000；0 回退默认）。
+	raceBudgetMS = 10000
 )
 
 // ---- 质量文件缓存（读 runtime/pool_quality.json，节流刷新） ----
@@ -361,16 +363,14 @@ func raceCandidates(n int) []Socks5Proxy {
 			continue
 		}
 		q, known := poolQualityOf(proxy.Addr)
-		score, level := 100, "healthy"
-		if known {
-			score, level = q.Score, q.Level
+		// S1 冷启动不竞速：候选必须已有探活样本（known=true 且非 unknown），
+		// 无质量记录/空窗口节点不参与竞速，避免冷启动双倍并行炸上游。
+		if !known || q.Level == "unknown" {
+			continue
 		}
+		score, level := q.Score, q.Level
 		if fb := poolFeedbackScore(proxy.Addr); fb >= 0 {
-			if known {
-				score = (score*7 + fb*3) / 10
-			} else {
-				score = fb
-			}
+			score = (score*7 + fb*3) / 10
 		}
 		if score < 0 {
 			score = 0

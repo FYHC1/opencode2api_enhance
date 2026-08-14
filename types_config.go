@@ -39,6 +39,8 @@ type AppConfig struct {
 	PoolHalfOpenIntervalSec int `json:"pool_halfopen_interval_sec,omitempty"`
 	// 请求级竞速并行数（P2b）：一次请求并行扇出 N 个候选出口，首个成功者胜（默认 2；1 = 关闭竞速）。
 	PoolRaceCopies int `json:"pool_race_copies,omitempty"`
+	// 竞速整体预算（毫秒，S1）：一次竞速等待首个成功候选的上限，到期走单发续写（默认 10000）。
+	RaceBudgetMS int `json:"race_budget_ms,omitempty"`
 	// ShowNodePrefix 是否在对话流首段展示「🤖 节点 · 模型」前缀（默认关闭）
 	ShowNodePrefix *bool `json:"show_node_prefix,omitempty"`
 	// PoolProbeTarget 实例池链路探活目标（空 = 按 base_url 自动拼接；S4 可配）。
