@@ -43,6 +43,61 @@
 
 ---
 
+## 〇·五、路由架构说明：三层机制正交关系（2026-08-14 用户确认补充）
+
+> 用户疑问：性能模式与 smart/failover/round_robin 是否冲突？单实例时是什么状态？
+> 结论：**三层机制互不冲突（正交叠加），且对单节点场景有防御性退化兜底。**
+
+### 三层关系
+
+```
+┌─ 第 1 层：routeMode（路由模式）——决定「游标怎么走」
+│   smart（默认）/ failover / round_robin
+│   位置：socks.go routeMode 变量 + getHTTPClientWithProxy 游标逻辑
+├─ 第 2 层：poolPerfMode（性能模式）——决定「选哪个节点」
+│   pool_performance_mode=true → pickWeightedProxy（质量加权+熔断+半开）
+│   false → 基线 pickHealthyProxy（游标+冷却跳过）
+│   位置：socks.go:221 `if poolPerfMode { return pickWeightedProxy(...) }`
+├─ 第 3 层：请求级竞速（P2b）——决定「并行抢几个」
+│   raceDo 并行扇出至多 pool_race_copies 个候选，首个 2xx/chunk 胜出
+│   位置：vendors/opencode/chat.go raceDo + socks_perf.go raceCandidates
+│   注：竞速在 vendor 层绕开池选择直接扇出，与 routeMode 完全无关
+└─ 依赖顺序：routeMode（怎么走）⊂ poolPerfMode（选哪个）⊂ 竞速（并行抢）
+```
+
+| 路由模式 | + 性能模式开（默认） | + 性能模式关 |
+|---|---|---|
+| smart | 质量加权 + 熔断 + 超时切换 | 游标 + 冷却（基线） |
+| failover | 质量加权 + 失败才切 | 失败才切（基线） |
+| round_robin | 质量加权 + 轮询推进 | 纯轮询（基线） |
+
+### 单出口/单节点退化（防御性设计）
+
+**只有 1 个实例时**（代码两处实锤）：
+
+```go
+// pickHealthyProxy（socks.go:214）：池中 ≤1 出口直接返回，不套质量/熔断智能逻辑
+if len(proxies) <= 1 {
+    if len(proxies) == 1 { return proxies[0] }
+    return Socks5Proxy{}
+}
+
+// raceCandidates（socks_perf.go:335）：候选 <2 返回 nil，竞速无意义（扇出 1 个=串行）
+if len(proxies) < 2 { return nil }
+```
+
+单实例状态：**无竞速**（raceCandidates 返回 nil → chat.go 退化普通单发）；
+**无加权选择**（没得选）；请求串行直发，靠请求层健康计数 + 超时续写兜底；
+性能模式开关开着也无影响（单节点不存在"选择"问题）。
+
+### 设计含义
+
+1. **性能模式是增强层不是替代层**——关掉后三个路由模式回到各自基线语义，完全兼容。
+2. **竞速独立于路由模式**——即使 round_robin 也能竞速（候选来自 raceCandidates 而非游标）。
+3. **单节点零开销**——不会出现"1 个实例还傻乎乎竞速扇出 1 份"的浪费。
+
+---
+
 ## 一、已完成系列（P/D/M1-2）——摘要存档
 
 > 细节见 git 历史，此处仅保留结论，避免重复文档。
