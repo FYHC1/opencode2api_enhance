@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import clsx from 'clsx'
 import {
   Activity,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Filter,
   Inbox,
@@ -25,6 +26,9 @@ const fmtDur = (ms?: number) => {
   if (ms < 1000) return `${ms}ms`
   return `${(ms / 1000).toFixed(1)}s`
 }
+
+/** 日志列表前端分页：每页条数 */
+const PAGE_SIZE = 100
 
 /** 是否有需要展开详细展示的事件（异常/切换） */
 const hasIssue = (rec: CallLogRecord) => {
@@ -89,6 +93,116 @@ const eventClass = (type: string): string => {
   }
 }
 
+/** 单条日志行（memo 化：展开/翻页/筛选切换时只重渲染变化的行） */
+const LogRow = memo(function LogRow({
+  rec,
+  isExpanded,
+  onToggle,
+}: {
+  rec: CallLogRecord
+  isExpanded: boolean
+  onToggle: (id: string) => void
+}) {
+  const issue = hasIssue(rec)
+  const nodes = rec.nodes ?? []
+  return (
+    <div
+      className={clsx(
+        'rounded-2xl border bg-white overflow-hidden',
+        issue ? 'border-amber-300/70' : 'border-zinc-200',
+      )}
+    >
+      {/* 成功：一行简短；异常：可展开 */}
+      <button
+        type="button"
+        onClick={() => issue && onToggle(rec.req_id)}
+        className={clsx(
+          'w-full flex items-center gap-3 px-4 py-2.5 text-left',
+          issue && 'cursor-pointer hover:bg-zinc-50',
+        )}
+      >
+        <span
+          className={clsx(
+            'shrink-0 w-[68px] text-center text-xs font-medium rounded-md py-0.5',
+            rec.status === 'ok' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700',
+          )}
+        >
+          {rec.status === 'ok' ? '【成功】' : '【失败】'}
+        </span>
+        {isRateLimited(rec) && (
+          <span className="shrink-0 text-[11px] text-zinc-50 bg-zinc-800 rounded-md px-2 py-0.5">
+            额度用尽
+          </span>
+        )}
+        {issue && (
+          <span className={clsx('shrink-0 text-[11px] rounded-md px-2 py-0.5', issueTagClass(rec))}>
+            {issueLabel(rec)}
+          </span>
+        )}
+        {rec.source && (
+          <span className="shrink-0 text-[11px] text-indigo-700 bg-indigo-100 rounded-md px-2 py-0.5">
+            {rec.source}
+          </span>
+        )}
+        <span className="text-zinc-500 text-xs tabular-nums shrink-0">{fmtTime(rec.ts)}</span>
+        <span className="text-zinc-800 text-sm font-medium truncate flex-1">
+          {rec.model || '-'}
+        </span>
+        {nodes.length > 0 && (
+          <span className="text-zinc-500 text-xs truncate hidden sm:inline">
+            {nodes.join(' → ')}
+          </span>
+        )}
+        <span className="text-zinc-400 text-xs tabular-nums shrink-0">
+          {fmtDur(rec.duration_ms)}
+        </span>
+        {issue && (
+          <span className="shrink-0 text-zinc-400">
+            {isExpanded ? <ChevronUpIcon /> : <ChevronRight size={16} />}
+          </span>
+        )}
+      </button>
+
+      {/* 异常/切换：整块详细时间线 */}
+      {issue && isExpanded && (
+        <div className="border-t border-zinc-100 px-4 py-3 bg-zinc-50/60">
+          <div className="text-xs text-zinc-500 mb-2 font-mono break-all">
+            req_id: {rec.req_id} · {rec.path || '/v1/chat/completions'} · stream: {rec.stream ? '是' : '否'} · 路由: {rec.route_mode || '-'}
+            {rec.source && <span className="text-indigo-600"> · 来源: {rec.source}</span>}
+            {rec.err_msg && <span className="text-red-600"> · 错误: {rec.err_msg}</span>}
+          </div>
+          <div className="text-xs text-zinc-500 mb-2">
+            token: 输入 {rec.prompt_tokens ?? 0} / 输出 {rec.completion_tokens ?? 0} · 耗时 {fmtDur(rec.duration_ms)}
+          </div>
+          <div className="space-y-1.5">
+            {(rec.events ?? []).map((ev, i) => (
+              <div key={i} className="flex items-start gap-2 text-xs">
+                <span className="shrink-0 w-24 text-zinc-400 tabular-nums">{fmtTime(ev.at ?? '')}</span>
+                <span
+                  className={clsx(
+                    'shrink-0 w-28 rounded px-1.5 py-0.5 text-center font-medium',
+                    eventClass(ev.type ?? ''),
+                  )}
+                >
+                  {ev.type}
+                </span>
+                <span className="text-zinc-700 break-all">
+                  {ev.node && <b className="text-zinc-900">{ev.node}</b>}
+                  {ev.node && ev.detail ? ' — ' : ''}
+                  {ev.detail}
+                </span>
+              </div>
+            ))}
+            {rec.events?.length === 0 && (
+              <span className="text-zinc-400">无事件明细</span>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+})
+
 export default function LogsPage({
   toast,
 }: {
@@ -105,11 +219,24 @@ export default function LogsPage({
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   // 关键词过滤（main 功能 M4：匹配 model/path/err_msg/req_id）
   const [keyword, setKeyword] = useState('')
+  // 前端分页：最新在前，第 1 页 = 最新一页
+  const [page, setPage] = useState(1)
+
+  // 拉取量跟随 call_log_max（设置页可调）：只减不增，上限保持 5000，读配置失败回退 5000
+  const fetchLimitRef = useRef(5000)
+  useEffect(() => {
+    api
+      .configGet()
+      .then((c) => {
+        if (c.call_log_max > 0) fetchLimitRef.current = Math.min(c.call_log_max, 5000)
+      })
+      .catch(() => {})
+  }, [])
 
   const load = useCallback(
     async (silent = true) => {
       try {
-        const recs = await api.getCallLog(5000)
+        const recs = await api.getCallLog(fetchLimitRef.current)
         // 最新在前
         setLogs([...recs].reverse())
         setError(null)
@@ -134,14 +261,14 @@ export default function LogsPage({
     setRefreshing(false)
   }
 
-  const toggleExpand = (id: string) => {
+  const toggleExpand = useCallback((id: string) => {
     setExpanded((prev) => {
       const next = new Set(prev)
       if (next.has(id)) next.delete(id)
       else next.add(id)
       return next
     })
-  }
+  }, [])
 
   // 日志中出现的日期（YYYY-MM-DD，新→旧），供按天筛选
   const dates = useMemo(() => {
@@ -165,6 +292,14 @@ export default function LogsPage({
     })
   }, [logs, onlyIssues, dateFilter, keyword])
 
+  // 前端分页：每页 100 条；页码 clamp 到有效范围（清空/删除/筛选收窄后安全复位，不跳页）
+  const totalPages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE))
+  const currentPage = Math.min(page, totalPages)
+  const pageItems = useMemo(() => {
+    const start = (currentPage - 1) * PAGE_SIZE
+    return visible.slice(start, start + PAGE_SIZE)
+  }, [visible, currentPage])
+
   // 汇总统计与列表同一筛选视图（日期/关键词/只看失败均联动）
   const okCount = visible.filter((l) => l.status === 'ok').length
   const failCount = visible.length - okCount
@@ -181,6 +316,7 @@ export default function LogsPage({
               try {
                 await api.clearCallLog()
                 setLogs([])
+                setPage(1)
                 toast('日志已清空')
               } catch (e) {
                 toast(String(e), false)
@@ -294,110 +430,42 @@ export default function LogsPage({
           </p>
         </div>
       ) : (
-        <div className="space-y-2">
-          {visible.map((rec) => {
-            const issue = hasIssue(rec)
-            const isExpanded = expanded.has(rec.req_id)
-            const nodes = rec.nodes ?? []
-            return (
-              <div
+        <>
+          <div className="space-y-2">
+            {pageItems.map((rec) => (
+              <LogRow
                 key={rec.req_id}
-                className={clsx(
-                  'rounded-2xl border bg-white overflow-hidden',
-                  issue ? 'border-amber-300/70' : 'border-zinc-200',
-                )}
-              >
-                {/* 成功：一行简短；异常：可展开 */}
-                <button
-                  type="button"
-                  onClick={() => issue && toggleExpand(rec.req_id)}
-                  className={clsx(
-                    'w-full flex items-center gap-3 px-4 py-2.5 text-left',
-                    issue && 'cursor-pointer hover:bg-zinc-50',
-                  )}
-                >
-                  <span
-                    className={clsx(
-                      'shrink-0 w-[68px] text-center text-xs font-medium rounded-md py-0.5',
-                      rec.status === 'ok' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700',
-                    )}
-                  >
-                    {rec.status === 'ok' ? '【成功】' : '【失败】'}
-                  </span>
-                  {isRateLimited(rec) && (
-                    <span className="shrink-0 text-[11px] text-zinc-50 bg-zinc-800 rounded-md px-2 py-0.5">
-                      额度用尽
-                    </span>
-                  )}
-                  {issue && (
-                    <span className={clsx('shrink-0 text-[11px] rounded-md px-2 py-0.5', issueTagClass(rec))}>
-                      {issueLabel(rec)}
-                    </span>
-                  )}
-                  {rec.source && (
-                    <span className="shrink-0 text-[11px] text-indigo-700 bg-indigo-100 rounded-md px-2 py-0.5">
-                      {rec.source}
-                    </span>
-                  )}
-                  <span className="text-zinc-500 text-xs tabular-nums shrink-0">{fmtTime(rec.ts)}</span>
-                  <span className="text-zinc-800 text-sm font-medium truncate flex-1">
-                    {rec.model || '-'}
-                  </span>
-                  {nodes.length > 0 && (
-                    <span className="text-zinc-500 text-xs truncate hidden sm:inline">
-                      {nodes.join(' → ')}
-                    </span>
-                  )}
-                  <span className="text-zinc-400 text-xs tabular-nums shrink-0">
-                    {fmtDur(rec.duration_ms)}
-                  </span>
-                  {issue && (
-                    <span className="shrink-0 text-zinc-400">
-                      {isExpanded ? <ChevronUpIcon /> : <ChevronRight size={16} />}
-                    </span>
-                  )}
-                </button>
-
-                {/* 异常/切换：整块详细时间线 */}
-                {issue && isExpanded && (
-                  <div className="border-t border-zinc-100 px-4 py-3 bg-zinc-50/60">
-                    <div className="text-xs text-zinc-500 mb-2 font-mono break-all">
-                      req_id: {rec.req_id} · {rec.path || '/v1/chat/completions'} · stream: {rec.stream ? '是' : '否'} · 路由: {rec.route_mode || '-'}
-                      {rec.source && <span className="text-indigo-600"> · 来源: {rec.source}</span>}
-                      {rec.err_msg && <span className="text-red-600"> · 错误: {rec.err_msg}</span>}
-                    </div>
-                    <div className="text-xs text-zinc-500 mb-2">
-                      token: 输入 {rec.prompt_tokens ?? 0} / 输出 {rec.completion_tokens ?? 0} · 耗时 {fmtDur(rec.duration_ms)}
-                    </div>
-                    <div className="space-y-1.5">
-                      {(rec.events ?? []).map((ev, i) => (
-                        <div key={i} className="flex items-start gap-2 text-xs">
-                          <span className="shrink-0 w-24 text-zinc-400 tabular-nums">{fmtTime(ev.at ?? '')}</span>
-                          <span
-                            className={clsx(
-                              'shrink-0 w-28 rounded px-1.5 py-0.5 text-center font-medium',
-                              eventClass(ev.type ?? ''),
-                            )}
-                          >
-                            {ev.type}
-                          </span>
-                          <span className="text-zinc-700 break-all">
-                            {ev.node && <b className="text-zinc-900">{ev.node}</b>}
-                            {ev.node && ev.detail ? ' — ' : ''}
-                            {ev.detail}
-                          </span>
-                        </div>
-                      ))}
-                      {rec.events?.length === 0 && (
-                        <span className="text-zinc-400">无事件明细</span>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )
-          })}
-        </div>
+                rec={rec}
+                isExpanded={expanded.has(rec.req_id)}
+                onToggle={toggleExpand}
+              />
+            ))}
+          </div>
+          {/* 分页条：上一页/下一页 + 页码（最后一页可能不满一页） */}
+          <div className="flex items-center justify-center gap-4 mt-4">
+            <button
+              type="button"
+              onClick={() => setPage(Math.max(1, currentPage - 1))}
+              disabled={currentPage <= 1}
+              className="flex items-center gap-1 bg-white border border-zinc-200 text-zinc-600 rounded-lg px-3 py-1.5 text-sm hover:bg-zinc-50 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <ChevronLeft size={14} />
+              上一页
+            </button>
+            <span className="text-sm text-zinc-500 tabular-nums">
+              第 {currentPage} / {totalPages} 页
+            </span>
+            <button
+              type="button"
+              onClick={() => setPage(Math.min(totalPages, currentPage + 1))}
+              disabled={currentPage >= totalPages}
+              className="flex items-center gap-1 bg-white border border-zinc-200 text-zinc-600 rounded-lg px-3 py-1.5 text-sm hover:bg-zinc-50 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              下一页
+              <ChevronRight size={14} />
+            </button>
+          </div>
+        </>
       )}
 
       {/* 空态提示 */}
