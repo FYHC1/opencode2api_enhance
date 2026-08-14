@@ -289,12 +289,48 @@ func (v *Vendor) call(ctx context.Context, msg *contract.Message, streaming bool
 	return &callResult{body: lastBody, status: lastStatus, headers: lastHeader, nodeAddr: lastProxyAddr}, lastErr
 }
 
-// raceCopies 返回竞速并行数（配置 >0 生效，否则 1 = 关闭竞速）。
+// raceCopies 返回竞速并行数（配置上限 >0 生效，否则 1 = 关闭竞速）。
+// S5 压力系数动态副本：pressure = 当前活跃请求数 / 健康节点数，
+//
+//	pressure <  low（默认 0.5）            → 上限（全速竞速）
+//	low ≤ pressure < high（默认 1.0）      → 2（温和竞速）
+//	pressure ≥ high                        → 1（退化单发，等效分散路由）
+//
+// 健康节点数来自 transport 的 contract.RaceTracker.HealthyNodeCount
+// （与 raceCandidates 可拿到的候选口径一致）；除数 0 / 无 tracker 统计
+// → 按高压力处理（=1）。上限即 pool_race_copies 语义（S5 起）。
 func (v *Vendor) raceCopies() int {
-	if v.cfg.RaceCopies > 0 {
-		return v.cfg.RaceCopies
+	upper := v.cfg.RaceCopies
+	if upper <= 0 {
+		return 1
 	}
-	return 1
+	low, high := v.cfg.RacePressureLow, v.cfg.RacePressureHigh
+	if low <= 0 {
+		low = 0.5
+	}
+	if high <= 0 {
+		high = 1.0
+	}
+	active := activeRequests.Load()
+	healthy := 0
+	if tr, ok := v.transport().(contract.RaceTracker); ok {
+		healthy = tr.HealthyNodeCount()
+	}
+	pressure := 2.0 // 除数 0 / 无统计 → 按高压力处理
+	if healthy > 0 {
+		pressure = float64(active) / float64(healthy)
+	}
+	switch {
+	case pressure < low:
+		return upper
+	case pressure < high:
+		if upper < 2 {
+			return upper
+		}
+		return 2
+	default:
+		return 1
+	}
 }
 
 // raceBudget 返回竞速整体预算（race_budget_ms 配置；0 回退 10s 默认）。
@@ -326,6 +362,13 @@ func (v *Vendor) raceDo(ctx context.Context, racer contract.Racer, req *http.Req
 	clients, addrs := racer.CandidateClients(contract.TierFree, streaming, copies)
 	if len(clients) == 0 {
 		return nil, "", nil
+	}
+	// S5 每节点 in-flight：候选确定后对每个 addr +1，本函数所有返回路径经
+	// defer -1（含预算到期/全败/单候选），与 RaceStarted 严格成对不泄漏。
+	// 赢家也在返回时 -1：竞速窗口结束后赢家退化为普通单发，单发不占竞速 in-flight。
+	if tracker, ok := racer.(contract.RaceTracker); ok {
+		tracker.RaceStarted(addrs)
+		defer tracker.RaceFinished(addrs)
 	}
 	if len(clients) == 1 {
 		resp, err := clients[0].Do(req)
@@ -473,9 +516,18 @@ func raceDrain(wg *sync.WaitGroup, results chan raceOutcome) {
 	}
 }
 
+// activeRequests 当前活跃请求数（S5 压力系数分子）：Chat/ChatStream 入口 +1、
+// 返回时 -1（流式在返回流时即释放，不计流消费时长）——所有返回路径成对。
+var activeRequests atomic.Int64
+
+// ActiveRequests 返回当前活跃请求数（供代理池计算压力系数）。
+func ActiveRequests() int64 { return activeRequests.Load() }
+
 // Chat 实现 contract.Vendor（非流式）。
 // 非 2xx / 传输失败时同时返回（含错误体的 Reply, error），供上层做厂商级 failover。
 func (v *Vendor) Chat(ctx context.Context, msg *contract.Message) (*contract.Reply, error) {
+	activeRequests.Add(1)
+	defer activeRequests.Add(-1)
 	res, err := v.call(ctx, msg, false)
 	if res == nil {
 		return nil, err
@@ -486,6 +538,8 @@ func (v *Vendor) Chat(ctx context.Context, msg *contract.Message) (*contract.Rep
 // ChatStream 实现 contract.Vendor（流式 SSE）。
 // 错误体包装为可读流返回（error=nil，与历史行为一致）；仅完全无响应时返回 error。
 func (v *Vendor) ChatStream(ctx context.Context, msg *contract.Message) (*contract.Stream, error) {
+	activeRequests.Add(1)
+	defer activeRequests.Add(-1)
 	res, err := v.call(ctx, msg, true)
 	if res == nil {
 		return nil, err

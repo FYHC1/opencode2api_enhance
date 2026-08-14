@@ -71,6 +71,13 @@ func applyConfig(cfg AppConfig) {
 	if cfg.RaceBudgetMS > 0 {
 		raceBudgetMS = cfg.RaceBudgetMS
 	}
+	// S5 压力系数分段阈值（>0 才覆盖，未配置保持当前值/默认）。
+	if cfg.PoolRacePressureLow > 0 {
+		poolRacePressureLow = cfg.PoolRacePressureLow
+	}
+	if cfg.PoolRacePressureHigh > 0 {
+		poolRacePressureHigh = cfg.PoolRacePressureHigh
+	}
 
 	socks5Mu.Lock()
 	proxiesChanged := false

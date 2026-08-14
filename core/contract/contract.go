@@ -125,6 +125,19 @@ type Racer interface {
 	CandidateClients(tier Tier, streaming bool, n int) ([]*http.Client, []string)
 }
 
+// RaceTracker 可选的竞速压力/在途追踪（S5——自适应竞速）：
+// Transport 实现方实现时，厂商在竞速扇出/收尾时上报候选出口地址
+// （每节点 in-flight 计数，least-in-flight 均衡），并上报健康节点规模
+// （压力系数分母）。未实现时动态副本回退固定上限、候选均衡仅按质量分。
+type RaceTracker interface {
+	// HealthyNodeCount 返回当前健康（可参与竞速）节点数；压力系数分母。
+	HealthyNodeCount() int
+	// RaceStarted 竞速候选已确定（对每个出口地址 in-flight +1）。
+	RaceStarted(addrs []string)
+	// RaceFinished 竞速结束（对每个出口地址 in-flight -1，与 RaceStarted 成对）。
+	RaceFinished(addrs []string)
+}
+
 // DirectTransport 是最简传输实现：直连（http.DefaultClient）、无代理、无健康维护。
 // 用于未注入真实网关传输的场景（单元测试、厂商独立冒烟）。
 type DirectTransport struct{}

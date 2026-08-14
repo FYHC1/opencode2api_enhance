@@ -156,6 +156,22 @@ func poolRaceBudgetMSOf(cfg Config) int {
 	return 10000
 }
 
+// poolRacePressureLowOf 压力系数低阈值生效值（<=0 用默认 0.5）。
+func poolRacePressureLowOf(cfg Config) float64 {
+	if cfg.PoolRacePressureLow > 0 {
+		return cfg.PoolRacePressureLow
+	}
+	return 0.5
+}
+
+// poolRacePressureHighOf 压力系数高阈值生效值（<=0 用默认 1.0）。
+func poolRacePressureHighOf(cfg Config) float64 {
+	if cfg.PoolRacePressureHigh > 0 {
+		return cfg.PoolRacePressureHigh
+	}
+	return 1.0
+}
+
 // scanConcurrencyOf 节点扫描并发生效值（默认 8）。
 func scanConcurrencyOf(cfg Config) int {
 	if cfg.ScanConcurrency > 0 {

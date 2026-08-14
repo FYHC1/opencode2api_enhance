@@ -51,12 +51,17 @@ type Config struct {
 	Transport contract.Transport
 	// AdminPassword 本地门禁密钥：客户端用它修复应视为 public（免费）而非透传付费 key。
 	AdminPassword string
-	// RaceCopies 请求级竞速并行数（P2b）：>1 且 Transport 支持 contract.Racer 时，
+	// RaceCopies 请求级竞速并行数上限（P2b）：>1 且 Transport 支持 contract.Racer 时，
 	// 一次请求并行扇出该数量的候选出口，首个成功者胜（默认 1 = 关闭竞速）。
+	// S5 起语义为上限：实际副本由压力系数（活跃请求数/健康节点数）动态分段决定。
 	RaceCopies int
 	// RaceBudgetMS 竞速整体预算（毫秒，S1）：raceDo 等待首个成功候选的上限，
 	// 到期返回错误走单发续写（0 = 默认 10s）。
 	RaceBudgetMS int
+	// RacePressureLow / RacePressureHigh 压力系数分段阈值（S5，默认 0.5 / 1.0）：
+	// pressure < low → 用满 RaceCopies；low ≤ pressure < high → 2；≥ high → 1。
+	RacePressureLow  float64
+	RacePressureHigh float64
 }
 
 // Vendor 实现 contract.Vendor，代表 OpenCode 上游。

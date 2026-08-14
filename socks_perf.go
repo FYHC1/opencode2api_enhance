@@ -11,10 +11,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"os"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/6Kmfi6HP/opencode2api/vendors/opencode"
 )
 
 // ---- P2 全局配置（applyConfig 热更新） ----
@@ -28,10 +32,16 @@ var (
 	poolHalfOpenIntervalSec = 60
 	// poolQualityPath 质量文件路径（-pool-quality 注入；空 = 无质量文件）。
 	poolQualityPath string
-	// poolRaceCopies 请求级竞速并行数（默认 2；1 = 退化为串行）。
+	// poolRaceCopies 请求级竞速并行数上限（默认 2；1 = 退化为串行）。
+	// S5 起语义为上限：实际副本由压力系数分段动态决定（见 raceCopies）。
 	poolRaceCopies = 2
 	// raceBudgetMS 竞速整体预算（毫秒，默认 10000；0 回退默认）。
 	raceBudgetMS = 10000
+	// poolRacePressureLow / poolRacePressureHigh 压力系数分段阈值（S5，默认 0.5 / 1.0）：
+	// pressure < low → 全速竞速（用满上限）；low ≤ pressure < high → 温和竞速（2）；
+	// pressure ≥ high → 退化单发（等效分散路由）。
+	poolRacePressureLow  = 0.5
+	poolRacePressureHigh = 1.0
 )
 
 // ---- 质量文件缓存（读 runtime/pool_quality.json，节流刷新） ----
@@ -146,6 +156,101 @@ func poolFeedbackScore(addr string) int {
 		return -1
 	}
 	return ok * 100 / n
+}
+
+// ---- S5：每节点 in-flight 计数（least-in-flight 均衡） ----
+
+// proxyInFlight 每节点在途请求计数：竞速候选确定时 +1（RaceStarted）、
+// 竞速收尾时 -1（RaceFinished）。增/减由 vendors/opencode 的 raceDo 经
+// contract.RaceTracker 回调（rootTransport 桥接）触发，对同一批候选 addrs
+// 严格成对——raceDo 用 defer 保证所有返回路径（含预算到期/全败/单候选）
+// 都会 -1，不会泄漏。无记录的地址按 0 处理（首访并发安全初始化）。
+var (
+	proxyInFlightMu sync.Mutex
+	proxyInFlight   = map[string]*atomic.Int64{}
+)
+
+// proxyInflightAdd 对节点在途计数加 delta（首次访问自动创建计数）。
+func proxyInflightAdd(addr string, delta int) {
+	proxyInFlightMu.Lock()
+	c := proxyInFlight[addr]
+	if c == nil {
+		c = &atomic.Int64{}
+		proxyInFlight[addr] = c
+	}
+	proxyInFlightMu.Unlock()
+	c.Add(int64(delta))
+}
+
+// proxyInflightOf 返回节点当前在途请求数（无记录 = 0）。
+func proxyInflightOf(addr string) int {
+	proxyInFlightMu.Lock()
+	c := proxyInFlight[addr]
+	proxyInFlightMu.Unlock()
+	if c == nil {
+		return 0
+	}
+	return int(c.Load())
+}
+
+// ---- S5：压力系数（活跃请求数 / 健康节点数） ----
+
+// raceHealthyNodeCount 可竞速健康节点数（压力系数分母）：poolquality 缓存中
+// known 且非 down/flaky/unknown 的节点数（与 raceCandidates 的候选口径一致）。
+func raceHealthyNodeCount() int {
+	loadPoolQualityCache()
+	poolQualityMu.RLock()
+	defer poolQualityMu.RUnlock()
+	n := 0
+	for _, e := range poolQualityCache {
+		if e.Level == "healthy" || e.Level == "degraded" {
+			n++
+		}
+	}
+	return n
+}
+
+// racePressure 计算压力系数 = 活跃请求数 / 健康节点数。
+// 活跃请求数来自 vendors/opencode 全局计数（Chat/ChatStream 入口成对增减）；
+// 除数为 0（无健康节点）→ 按高压力（≥2.0）处理。
+func racePressure() float64 {
+	healthy := raceHealthyNodeCount()
+	if healthy == 0 {
+		return 2.0 // 无健康节点 → 高压力
+	}
+	return float64(opencode.ActiveRequests()) / float64(healthy)
+}
+
+// racePressureFn 压力系数计算函数（独立变量，测试可替换构造高压场景）。
+var racePressureFn = racePressure
+
+// ---- S5：候选排序随机源（随机扰动 + 高压力摊开） ----
+
+var (
+	raceRandMu sync.Mutex
+	raceRand   = rand.New(rand.NewSource(time.Now().UnixNano()))
+)
+
+// setRaceRandSeed 固定竞速随机源（测试用；保证扰动/摊开的确定性）。
+func setRaceRandSeed(seed int64) {
+	raceRandMu.Lock()
+	defer raceRandMu.Unlock()
+	raceRand = rand.New(rand.NewSource(seed))
+}
+
+// raceScoreJitter 返回 [0,3) 随机微调：打破同 in-flight 同分平局，
+// 避免多请求同时选中同一节点（扰动幅度 <3%，不颠覆质量排序）。
+func raceScoreJitter() float64 {
+	raceRandMu.Lock()
+	defer raceRandMu.Unlock()
+	return raceRand.Float64() * 3
+}
+
+// raceShuffle 纯随机打乱候选（高压力时跳过质量排序，负载均衡摊开）。
+func raceShuffle(cands []raceCandidate) {
+	raceRandMu.Lock()
+	defer raceRandMu.Unlock()
+	raceRand.Shuffle(len(cands), func(i, j int) { cands[i], cands[j] = cands[j], cands[i] })
 }
 
 // ---- 熔断状态机（open / half-open / closed） ----
@@ -319,8 +424,19 @@ func pickWeightedProxy(proxies []Socks5Proxy, start int) Socks5Proxy {
 	return fallback
 }
 
-// raceCandidates 请求级竞速候选：返回质量优先的至多 n 个可用代理
-// （跳过坏池/冷却中/熔断/down/flaky；healthy 优先、degraded 次之、分高在前）。
+// raceCandidate 竞速候选（S5 扩展：scoreJitter 打破同分平局）。
+type raceCandidate struct {
+	proxy      Socks5Proxy
+	score      int
+	tier       int
+	scoreJitter float64 // [0,3) 随机扰动，排序时与 score 相加
+}
+
+// raceCandidates 请求级竞速候选：返回至多 n 个可用代理
+// （跳过坏池/冷却中/熔断/down/flaky）。
+// S5 候选均衡：in-flight 升序优先（least-in-flight），同 in-flight 按
+// 质量分（score + [0,3) 随机扰动）降序，同分 healthy 优先于 degraded；
+// 高压力（pressure ≥ 2.0）时跳过质量排序、纯随机摊开（负载均衡）。
 // 无任何可用候选时回退一个"冷却最早结束"的节点；n<=1 或池空返回 nil（不竞速）。
 func raceCandidates(n int) []Socks5Proxy {
 	if n <= 1 || !poolPerfMode {
@@ -337,12 +453,7 @@ func raceCandidates(n int) []Socks5Proxy {
 		return nil
 	}
 
-	type cand struct {
-		proxy Socks5Proxy
-		score int
-		tier  int
-	}
-	var cands []cand
+	var cands []raceCandidate
 	var fallback Socks5Proxy
 	var fallbackUntil time.Time
 
@@ -382,9 +493,9 @@ func raceCandidates(n int) []Socks5Proxy {
 		case "down", "flaky":
 			continue
 		case "degraded":
-			cands = append(cands, cand{proxy: proxy, score: score, tier: 1})
+			cands = append(cands, raceCandidate{proxy: proxy, score: score, tier: 1, scoreJitter: raceScoreJitter()})
 		default:
-			cands = append(cands, cand{proxy: proxy, score: score, tier: 2})
+			cands = append(cands, raceCandidate{proxy: proxy, score: score, tier: 2, scoreJitter: raceScoreJitter()})
 		}
 	}
 	socks5HealthMu.Unlock()
@@ -395,12 +506,23 @@ func raceCandidates(n int) []Socks5Proxy {
 		}
 		return nil
 	}
-	sort.SliceStable(cands, func(i, j int) bool {
-		if cands[i].tier != cands[j].tier {
+	if racePressureFn() >= 2.0 {
+		// 高压力：跳过质量排序，纯随机摊开（把扇出均匀撒到全部健康节点）。
+		raceShuffle(cands)
+	} else {
+		sort.SliceStable(cands, func(i, j int) bool {
+			// 1) in-flight 升序优先（治流量聚集）；
+			// 2) 同 in-flight 按质量分（含随机扰动）降序；
+			// 3) 同分按档位（healthy > degraded）降序。
+			if fi, fj := proxyInflightOf(cands[i].proxy.Addr), proxyInflightOf(cands[j].proxy.Addr); fi != fj {
+				return fi < fj
+			}
+			if si, sj := float64(cands[i].score)+cands[i].scoreJitter, float64(cands[j].score)+cands[j].scoreJitter; si != sj {
+				return si > sj
+			}
 			return cands[i].tier > cands[j].tier
-		}
-		return cands[i].score > cands[j].score
-	})
+		})
+	}
 	out := make([]Socks5Proxy, 0, n)
 	for i := 0; i < len(cands) && len(out) < n; i++ {
 		out = append(out, cands[i].proxy)

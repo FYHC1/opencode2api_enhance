@@ -60,10 +60,15 @@ type Config struct {
 	PoolBreakerThreshold    int   `json:"pool_breaker_threshold,omitempty"`
 	PoolHalfOpenIntervalSec int   `json:"pool_halfopen_interval_sec,omitempty"`
 	PoolPerformanceMode     *bool `json:"pool_performance_mode,omitempty"`
-	// 请求级竞速并行数（P2b）：一次请求并行扇出 N 个候选出口，首个成功者胜（<=0 用默认 2；1 = 关闭）。
+	// 请求级竞速并行数上限（P2b/S5）：一次请求并行扇出 N 个候选出口，首个成功者胜
+	// （<=0 用默认 2；1 = 关闭）。S5 起为上限，实际副本由压力系数动态决定。
 	PoolRaceCopies int `json:"pool_race_copies,omitempty"`
 	// 竞速整体预算（毫秒，S1）：一次竞速等待首个成功候选的上限，到期走单发续写（<=0 用默认 10000）。
 	RaceBudgetMS int `json:"race_budget_ms,omitempty"`
+	// 压力系数分段阈值（S5）：pressure = 活跃请求数/健康节点数，
+	// < Low（默认 0.5）→ 全速；Low ≤ p < High（默认 1.0）→ 2；≥ High → 单发。
+	PoolRacePressureLow  float64 `json:"pool_race_pressure_low,omitempty"`
+	PoolRacePressureHigh float64 `json:"pool_race_pressure_high,omitempty"`
 
 	// 并发设置（D3）：扫描 / 批量启停与释放 / 一键测试 / 池链路探活 的 worker 上限（<=0 用默认）。
 	ScanConcurrency      int `json:"scan_concurrency,omitempty"`
@@ -182,6 +187,10 @@ func (m *Manager) ConfigGet(key string) (string, error) {
 		return strconv.Itoa(cfg.PoolRaceCopies), nil
 	case "race_budget_ms":
 		return strconv.Itoa(cfg.RaceBudgetMS), nil
+	case "pool_race_pressure_low":
+		return strconv.FormatFloat(cfg.PoolRacePressureLow, 'f', -1, 64), nil
+	case "pool_race_pressure_high":
+		return strconv.FormatFloat(cfg.PoolRacePressureHigh, 'f', -1, 64), nil
 	case "scan_concurrency":
 		return strconv.Itoa(cfg.ScanConcurrency), nil
 	case "batch_concurrency":
@@ -380,8 +389,8 @@ func (m *Manager) ConfigSet(key, value string) error {
 		if err != nil {
 			return err
 		}
-		if v < 0 {
-			return errors.New("pool_race_copies 需 >= 0")
+		if v < 1 || v > 4 {
+			return errors.New("pool_race_copies 需在 1~4 之间（1 = 关闭竞速）")
 		}
 		cfg.PoolRaceCopies = int(v)
 	case "race_budget_ms":
@@ -393,6 +402,18 @@ func (m *Manager) ConfigSet(key, value string) error {
 			return errors.New("race_budget_ms 需 >= 0")
 		}
 		cfg.RaceBudgetMS = int(v)
+	case "pool_race_pressure_low":
+		v, err := strconv.ParseFloat(value, 64)
+		if err != nil || v < 0 {
+			return errors.New("pool_race_pressure_low 需为非负浮点数")
+		}
+		cfg.PoolRacePressureLow = v
+	case "pool_race_pressure_high":
+		v, err := strconv.ParseFloat(value, 64)
+		if err != nil || v < 0 {
+			return errors.New("pool_race_pressure_high 需为非负浮点数")
+		}
+		cfg.PoolRacePressureHigh = v
 	case "scan_concurrency":
 		v, err := parseInt()
 		if err != nil {
@@ -507,8 +528,10 @@ type ConfigView struct {
 	PoolBreakerThreshold    int    `json:"pool_breaker_threshold"`
 	PoolHalfOpenIntervalSec int    `json:"pool_halfopen_interval_sec"`
 	PoolPerformanceMode     bool   `json:"pool_performance_mode"`
-	PoolRaceCopies          int    `json:"pool_race_copies"`
-	RaceBudgetMS            int    `json:"race_budget_ms"`
+	PoolRaceCopies          int     `json:"pool_race_copies"`
+	RaceBudgetMS            int     `json:"race_budget_ms"`
+	PoolRacePressureLow     float64 `json:"pool_race_pressure_low"`
+	PoolRacePressureHigh    float64 `json:"pool_race_pressure_high"`
 	ScanConcurrency         int    `json:"scan_concurrency"`
 	BatchConcurrency        int    `json:"batch_concurrency"`
 	TestConcurrency         int    `json:"test_concurrency"`
@@ -558,6 +581,8 @@ func (m *Manager) ConfigViewOf() ConfigView {
 		PoolPerformanceMode:     poolPerfModeEnabled(cfg),
 		PoolRaceCopies:          poolRaceCopiesOf(cfg),
 		RaceBudgetMS:            poolRaceBudgetMSOf(cfg),
+		PoolRacePressureLow:     poolRacePressureLowOf(cfg),
+		PoolRacePressureHigh:    poolRacePressureHighOf(cfg),
 		ScanConcurrency:         scanConcurrencyOf(cfg),
 		BatchConcurrency:        batchConcurrencyOf(cfg),
 		TestConcurrency:         testConcurrencyOf(cfg),

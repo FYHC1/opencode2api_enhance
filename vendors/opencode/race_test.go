@@ -70,6 +70,14 @@ func (rt *racerTransport) Client(_ contract.Tier, _ bool) (*http.Client, string)
 
 func (rt *racerTransport) Mark(string, int, error) {}
 
+// S5: 测试传输实现 contract.RaceTracker——上报大健康池（pressure≈0 → 用满
+// 配置上限，保持既有竞速行为），in-flight 增减为无操作（这些测试不断言它）。
+func (rt *racerTransport) HealthyNodeCount() int { return 1000 }
+
+func (rt *racerTransport) RaceStarted([]string) {}
+
+func (rt *racerTransport) RaceFinished([]string) {}
+
 func newRaceVendor(tr contract.Transport, copies int) *Vendor {
 	v := New(Config{Transport: tr, RaceCopies: copies})
 	v.SetSession("1.15.3", "ses_t", "proj_t")
@@ -195,6 +203,13 @@ func (t *budgetRaceTransport) Client(_ contract.Tier, _ bool) (*http.Client, str
 }
 
 func (t *budgetRaceTransport) Mark(string, int, error) {}
+
+// S5: 同 racerTransport——上报大健康池保持竞速路径生效。
+func (t *budgetRaceTransport) HealthyNodeCount() int { return 1000 }
+
+func (t *budgetRaceTransport) RaceStarted([]string) {}
+
+func (t *budgetRaceTransport) RaceFinished([]string) {}
 
 // TestChatRaceFastWins 快候选胜出：响应与 nodeAddr 来自快端，慢端被取消（整体耗时≈快端）。
 func TestChatRaceFastWins(t *testing.T) {
