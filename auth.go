@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 )
 
 func requireAuth(next http.HandlerFunc) http.HandlerFunc {
@@ -35,7 +36,8 @@ func requireAuth(next http.HandlerFunc) http.HandlerFunc {
 
 // ======================== API 密钥校验 ========================
 // 实例密钥（即 -password 传入的 adminPassword）同时作为 /v1/* 的访问门禁：
-// 请求必须携带 Authorization: Bearer <实例密钥>（支持 go:/zen: 前缀），否则 401。
+// 请求必须携带 Authorization: Bearer <实例密钥> 或 x-api-key: <实例密钥>
+// （Anthropic 兼容客户端规范头；均支持 go:/zen: 前缀），否则 401 并补记一条调用日志。
 // adminPassword 为空时跳过校验（保持"未启用认证"语义）。
 
 func apiKeyAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
@@ -44,7 +46,9 @@ func apiKeyAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			next(w, r)
 			return
 		}
-		if !validAPIKey(r) {
+		if reason := apiKeyFailureReason(r); reason != "" {
+			// 鉴权失败在中间件直接 401 返回、不进业务 handler，补记一条调用日志（成功路径由 handler 记录）
+			recordAuthFailure(r, reason)
 			writeAuthError(w)
 			return
 		}
@@ -52,29 +56,71 @@ func apiKeyAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// validAPIKey 检查 Authorization 头是否为 Bearer <adminPassword>（支持 go:/zen: 前缀路由）。
+// validAPIKey 检查请求密钥是否与 adminPassword 匹配：
+// 接受 Authorization: Bearer <key> 与 x-api-key: <key>（Anthropic 兼容客户端规范头），
+// 均支持 go:/zen: 前缀剥离。
 func validAPIKey(r *http.Request) bool {
-	auth := r.Header.Get("Authorization")
-	if !strings.HasPrefix(auth, "Bearer ") {
-		return false
-	}
-	token := strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+	return apiKeyFailureReason(r) == ""
+}
+
+// apiKeyFailureReason 返回鉴权失败原因；密钥有效时返回空串。
+func apiKeyFailureReason(r *http.Request) string {
+	token := apiKeyFromRequest(r)
 	if token == "" {
-		return false
+		return "缺少 Authorization/x-api-key 头"
 	}
-	// go:/zen: 前缀仅用于上游路由，去掉后再与密钥比对
+	if subtle.ConstantTimeCompare([]byte(token), []byte(adminPassword)) == 1 {
+		return ""
+	}
+	return "key 不匹配"
+}
+
+// apiKeyFromRequest 提取请求密钥：优先 Authorization: Bearer <token>，其次 x-api-key <token>。
+func apiKeyFromRequest(r *http.Request) string {
+	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+		if token := strings.TrimSpace(strings.TrimPrefix(auth, "Bearer ")); token != "" {
+			return stripKeyPrefix(token)
+		}
+	}
+	if token := strings.TrimSpace(r.Header.Get("x-api-key")); token != "" {
+		return stripKeyPrefix(token)
+	}
+	return ""
+}
+
+// stripKeyPrefix 剥离 go:/zen: 上游路由前缀（仅用于密钥比对）。
+func stripKeyPrefix(token string) string {
 	if rest, ok := strings.CutPrefix(token, "go:"); ok {
-		token = rest
-	} else if rest, ok := strings.CutPrefix(token, "zen:"); ok {
-		token = rest
+		return rest
 	}
-	return subtle.ConstantTimeCompare([]byte(token), []byte(adminPassword)) == 1
+	if rest, ok := strings.CutPrefix(token, "zen:"); ok {
+		return rest
+	}
+	return token
 }
 
 func writeAuthError(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnauthorized)
 	fmt.Fprintf(w, `{"error":{"message":"invalid api key","type":"invalid_request_error","code":"invalid_api_key"}}`)
+}
+
+// recordAuthFailure 鉴权失败（401）时补记一条调用日志：成功路径由各业务 handler 记录，
+// 失败在中间件直接返回，需在此记录以保证日志页可见失败原因（含 ReqID）。
+// 受 callLogEnabled 控制（网关 / 实例子进程写盘）。
+func recordAuthFailure(r *http.Request, reason string) {
+	rec := CallRecord{
+		ReqID:  getReqID(r.Context()),
+		TS:     time.Now().Format(time.RFC3339),
+		Path:   r.URL.Path,
+		Status: "fail",
+		ErrMsg: "鉴权失败：" + reason,
+		Events: []CallEvent{{Type: "auth_failed", Detail: reason, At: time.Now()}},
+	}
+	if rec.ReqID == "" {
+		rec.ReqID = "req_" + randomString(12)
+	}
+	recordCall(rec)
 }
 
 func generateToken() (string, error) {

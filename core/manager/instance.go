@@ -131,9 +131,10 @@ func (m *Manager) startInstanceLockFree(runner Runner, inst *Instance) error {
 		_ = runner.Kill(sbPID)
 		return fmt.Errorf("写入 opencode2api 配置失败: %w", err)
 	}
+	// -call-log：独享/池成员进程把调用日志写到 cwd/call_log.jsonl（日志页 S4 聚合读取）
 	ocPID, err := runner.Start(ExecSpec{
 		Bin:      m.binPath("opencode2api"),
-		Args:     []string{"-port", itoa(inst.Port), "-config", filepath.Join(dir, "opencode2api.json"), "-password", inst.Password},
+		Args:     []string{"-port", itoa(inst.Port), "-config", filepath.Join(dir, "opencode2api.json"), "-password", inst.Password, "-call-log"},
 		Dir:      dir, // Go core 把 stats.json 写在 cwd
 		LogOut:   filepath.Join(dir, "logs", "opencode2api.out.log"),
 		LogErr:   filepath.Join(dir, "logs", "opencode2api.err.log"),
