@@ -69,6 +69,10 @@ type Config struct {
 	// < Low（默认 0.5）→ 全速；Low ≤ p < High（默认 1.0）→ 2；≥ High → 单发。
 	PoolRacePressureLow  float64 `json:"pool_race_pressure_low,omitempty"`
 	PoolRacePressureHigh float64 `json:"pool_race_pressure_high,omitempty"`
+	// 429 感知（S2）：冷却内跳过竞速（秒，默认 30）与指数退避 base/cap（毫秒，默认 1000/30000）。
+	RateLimitCooldownSec   int `json:"rate_limit_cooldown_sec,omitempty"`
+	RateLimitBackoffBaseMS int `json:"rate_limit_backoff_base_ms,omitempty"`
+	RateLimitBackoffCapMS  int `json:"rate_limit_backoff_cap_ms,omitempty"`
 
 	// 并发设置（D3）：扫描 / 批量启停与释放 / 一键测试 / 池链路探活 的 worker 上限（<=0 用默认）。
 	ScanConcurrency      int `json:"scan_concurrency,omitempty"`
@@ -191,6 +195,12 @@ func (m *Manager) ConfigGet(key string) (string, error) {
 		return strconv.FormatFloat(cfg.PoolRacePressureLow, 'f', -1, 64), nil
 	case "pool_race_pressure_high":
 		return strconv.FormatFloat(cfg.PoolRacePressureHigh, 'f', -1, 64), nil
+	case "rate_limit_cooldown_sec":
+		return strconv.Itoa(cfg.RateLimitCooldownSec), nil
+	case "rate_limit_backoff_base_ms":
+		return strconv.Itoa(cfg.RateLimitBackoffBaseMS), nil
+	case "rate_limit_backoff_cap_ms":
+		return strconv.Itoa(cfg.RateLimitBackoffCapMS), nil
 	case "scan_concurrency":
 		return strconv.Itoa(cfg.ScanConcurrency), nil
 	case "batch_concurrency":
@@ -414,6 +424,33 @@ func (m *Manager) ConfigSet(key, value string) error {
 			return errors.New("pool_race_pressure_high 需为非负浮点数")
 		}
 		cfg.PoolRacePressureHigh = v
+	case "rate_limit_cooldown_sec":
+		v, err := parseInt()
+		if err != nil {
+			return err
+		}
+		if v < 0 {
+			return errors.New("rate_limit_cooldown_sec 需 >= 0")
+		}
+		cfg.RateLimitCooldownSec = int(v)
+	case "rate_limit_backoff_base_ms":
+		v, err := parseInt()
+		if err != nil {
+			return err
+		}
+		if v < 0 {
+			return errors.New("rate_limit_backoff_base_ms 需 >= 0")
+		}
+		cfg.RateLimitBackoffBaseMS = int(v)
+	case "rate_limit_backoff_cap_ms":
+		v, err := parseInt()
+		if err != nil {
+			return err
+		}
+		if v < 0 {
+			return errors.New("rate_limit_backoff_cap_ms 需 >= 0")
+		}
+		cfg.RateLimitBackoffCapMS = int(v)
 	case "scan_concurrency":
 		v, err := parseInt()
 		if err != nil {
@@ -532,6 +569,9 @@ type ConfigView struct {
 	RaceBudgetMS            int     `json:"race_budget_ms"`
 	PoolRacePressureLow     float64 `json:"pool_race_pressure_low"`
 	PoolRacePressureHigh    float64 `json:"pool_race_pressure_high"`
+	RateLimitCooldownSec    int     `json:"rate_limit_cooldown_sec"`
+	RateLimitBackoffBaseMS  int     `json:"rate_limit_backoff_base_ms"`
+	RateLimitBackoffCapMS   int     `json:"rate_limit_backoff_cap_ms"`
 	ScanConcurrency         int    `json:"scan_concurrency"`
 	BatchConcurrency        int    `json:"batch_concurrency"`
 	TestConcurrency         int    `json:"test_concurrency"`
@@ -583,6 +623,9 @@ func (m *Manager) ConfigViewOf() ConfigView {
 		RaceBudgetMS:            poolRaceBudgetMSOf(cfg),
 		PoolRacePressureLow:     poolRacePressureLowOf(cfg),
 		PoolRacePressureHigh:    poolRacePressureHighOf(cfg),
+		RateLimitCooldownSec:    rateLimitCooldownSecOf(cfg),
+		RateLimitBackoffBaseMS:  rateLimitBackoffBaseMSOf(cfg),
+		RateLimitBackoffCapMS:   rateLimitBackoffCapMSOf(cfg),
 		ScanConcurrency:         scanConcurrencyOf(cfg),
 		BatchConcurrency:        batchConcurrencyOf(cfg),
 		TestConcurrency:         testConcurrencyOf(cfg),

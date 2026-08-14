@@ -159,6 +159,9 @@ func vendorParams(t string) map[string]any {
 			opencode.ParamRaceBudgetMS:     raceBudgetMS,
 			opencode.ParamRacePressureLow:  poolRacePressureLow,
 			opencode.ParamRacePressureHigh: poolRacePressureHigh,
+			opencode.ParamRateLimitCooldownSec:  rateLimitCooldownSec,
+			opencode.ParamRateLimitBackoffBaseMS: rateLimitBackoffBaseMS,
+			opencode.ParamRateLimitBackoffCapMS:  rateLimitBackoffCapMS,
 		}
 	case "windsurf":
 		return map[string]any{}

@@ -172,6 +172,30 @@ func poolRacePressureHighOf(cfg Config) float64 {
 	return 1.0
 }
 
+// rateLimitCooldownSecOf 429 冷却生效值（秒，S2；<=0 用默认 30）。
+func rateLimitCooldownSecOf(cfg Config) int {
+	if cfg.RateLimitCooldownSec > 0 {
+		return cfg.RateLimitCooldownSec
+	}
+	return 30
+}
+
+// rateLimitBackoffBaseMSOf 429 退避起点生效值（毫秒，S2；<=0 用默认 1000）。
+func rateLimitBackoffBaseMSOf(cfg Config) int {
+	if cfg.RateLimitBackoffBaseMS > 0 {
+		return cfg.RateLimitBackoffBaseMS
+	}
+	return 1000
+}
+
+// rateLimitBackoffCapMSOf 429 退避上限生效值（毫秒，S2；<=0 用默认 30000）。
+func rateLimitBackoffCapMSOf(cfg Config) int {
+	if cfg.RateLimitBackoffCapMS > 0 {
+		return cfg.RateLimitBackoffCapMS
+	}
+	return 30000
+}
+
 // scanConcurrencyOf 节点扫描并发生效值（默认 8）。
 func scanConcurrencyOf(cfg Config) int {
 	if cfg.ScanConcurrency > 0 {

@@ -50,6 +50,9 @@ func mainCodeVendor() *opencode.Vendor {
 			RaceBudgetMS:       raceBudgetMS,
 			RacePressureLow:    poolRacePressureLow,
 			RacePressureHigh:   poolRacePressureHigh,
+			RateLimitCooldownSec:  rateLimitCooldownSec,
+			RateLimitBackoffBaseMS: rateLimitBackoffBaseMS,
+			RateLimitBackoffCapMS:  rateLimitBackoffCapMS,
 		})
 	})
 	return ocAdapterTarget

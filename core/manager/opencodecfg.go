@@ -142,6 +142,10 @@ func (m *Manager) buildRouterCfg(singboxPorts []uint16, portNames map[uint16]str
 	}
 	applyFloat("pool_race_pressure_low", appCfg.PoolRacePressureLow)
 	applyFloat("pool_race_pressure_high", appCfg.PoolRacePressureHigh)
+	// S2 429 感知：冷却秒 / 退避 base/cap 毫秒（>0 才写，未配置子进程用默认 30/1000/30000）。
+	applyIf("rate_limit_cooldown_sec", int64(appCfg.RateLimitCooldownSec))
+	applyIf("rate_limit_backoff_base_ms", int64(appCfg.RateLimitBackoffBaseMS))
+	applyIf("rate_limit_backoff_cap_ms", int64(appCfg.RateLimitBackoffCapMS))
 	// 透传厂商注册表 + 路由：网关子进程与核心一致，能注册多厂商（如 windsurf）
 	cfg = injectVendorConfig(cfg, appCfg)
 	return json.MarshalIndent(cfg, "", "  ")

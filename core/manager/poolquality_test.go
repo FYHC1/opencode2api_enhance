@@ -404,6 +404,64 @@ func TestRaceCopiesRangeValidation(t *testing.T) {
 	}
 }
 
+// ---- S2：429 感知配置 ----
+
+func TestRateLimitConfigSetGet(t *testing.T) {
+	m := New(t.TempDir())
+
+	// 默认 30 / 1000 / 30000。
+	if got := rateLimitCooldownSecOf(m.loadConfig()); got != 30 {
+		t.Fatalf("default cooldown=%d, want 30", got)
+	}
+	if got := rateLimitBackoffBaseMSOf(m.loadConfig()); got != 1000 {
+		t.Fatalf("default base=%d, want 1000", got)
+	}
+	if got := rateLimitBackoffCapMSOf(m.loadConfig()); got != 30000 {
+		t.Fatalf("default cap=%d, want 30000", got)
+	}
+
+	if err := m.ConfigSet("rate_limit_cooldown_sec", "15"); err != nil {
+		t.Fatalf("set cooldown: %v", err)
+	}
+	if err := m.ConfigSet("rate_limit_backoff_base_ms", "2000"); err != nil {
+		t.Fatalf("set base: %v", err)
+	}
+	if err := m.ConfigSet("rate_limit_backoff_cap_ms", "60000"); err != nil {
+		t.Fatalf("set cap: %v", err)
+	}
+	if got, _ := m.ConfigGet("rate_limit_cooldown_sec"); got != "15" {
+		t.Fatalf("get cooldown=%s, want 15", got)
+	}
+	if got, _ := m.ConfigGet("rate_limit_backoff_base_ms"); got != "2000" {
+		t.Fatalf("get base=%s, want 2000", got)
+	}
+	if got, _ := m.ConfigGet("rate_limit_backoff_cap_ms"); got != "60000" {
+		t.Fatalf("get cap=%s, want 60000", got)
+	}
+
+	// 非法值回退（-1/abc）：保持原值并报错。
+	for _, bad := range []string{"-1", "abc"} {
+		if err := m.ConfigSet("rate_limit_cooldown_sec", bad); err == nil {
+			t.Fatalf("invalid %q should error", bad)
+		}
+		if err := m.ConfigSet("rate_limit_backoff_base_ms", bad); err == nil {
+			t.Fatalf("invalid %q should error", bad)
+		}
+		if err := m.ConfigSet("rate_limit_backoff_cap_ms", bad); err == nil {
+			t.Fatalf("invalid %q should error", bad)
+		}
+	}
+	if got, _ := m.ConfigGet("rate_limit_cooldown_sec"); got != "15" {
+		t.Fatalf("after invalid set cooldown=%s, want 15", got)
+	}
+
+	// ConfigViewOf 反映生效值。
+	v := m.ConfigViewOf()
+	if v.RateLimitCooldownSec != 15 || v.RateLimitBackoffBaseMS != 2000 || v.RateLimitBackoffCapMS != 60000 {
+		t.Fatalf("view=%d/%d/%d, want 15/2000/60000", v.RateLimitCooldownSec, v.RateLimitBackoffBaseMS, v.RateLimitBackoffCapMS)
+	}
+}
+
 // ---- 持久化 ----
 
 func TestPoolQualityFileRoundtrip(t *testing.T) {

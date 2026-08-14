@@ -31,6 +31,15 @@ func saveConfig(path string, cfg AppConfig) error {
 	return os.WriteFile(path, data, 0644)
 }
 
+// rateLimitCooldownSec / rateLimitBackoffBaseMS / rateLimitBackoffCapMS 429 感知（S2）：
+// 冷却秒 / 指数退避起点与上限毫秒（默认 30 / 1000 / 30000；<=0 回退默认）。
+// 声明于 config.go：socks_perf.go 由 S3 并行维护，不做 S2 改动。
+var (
+	rateLimitCooldownSec    = 30
+	rateLimitBackoffBaseMS  = 1000
+	rateLimitBackoffCapMS   = 30000
+)
+
 func applyConfig(cfg AppConfig) {
 	configMu.Lock()
 	defer configMu.Unlock()
@@ -77,6 +86,16 @@ func applyConfig(cfg AppConfig) {
 	}
 	if cfg.PoolRacePressureHigh > 0 {
 		poolRacePressureHigh = cfg.PoolRacePressureHigh
+	}
+	// S2 429 感知（>0 才覆盖，未配置保持当前值/默认）。
+	if cfg.RateLimitCooldownSec > 0 {
+		rateLimitCooldownSec = cfg.RateLimitCooldownSec
+	}
+	if cfg.RateLimitBackoffBaseMS > 0 {
+		rateLimitBackoffBaseMS = cfg.RateLimitBackoffBaseMS
+	}
+	if cfg.RateLimitBackoffCapMS > 0 {
+		rateLimitBackoffCapMS = cfg.RateLimitBackoffCapMS
 	}
 
 	socks5Mu.Lock()

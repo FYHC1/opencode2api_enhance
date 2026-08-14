@@ -18,6 +18,11 @@ const (
 	// ParamRacePressureLow / ParamRacePressureHigh 键：压力系数分段阈值（float64，S5）。
 	ParamRacePressureLow  = "_race_pressure_low"
 	ParamRacePressureHigh = "_race_pressure_high"
+	// ParamRateLimitCooldownSec 键：429 冷却秒（int；S2）。
+	ParamRateLimitCooldownSec = "_rate_limit_cooldown_sec"
+	// ParamRateLimitBackoffBaseMS / ParamRateLimitBackoffCapMS 键：429 指数退避 base/cap 毫秒（int；S2）。
+	ParamRateLimitBackoffBaseMS = "_rate_limit_backoff_base_ms"
+	ParamRateLimitBackoffCapMS  = "_rate_limit_backoff_cap_ms"
 )
 
 func init() {
@@ -43,6 +48,15 @@ func init() {
 		}
 		if f, ok := spec.Params[ParamRacePressureHigh].(float64); ok {
 			cfg.RacePressureHigh = f
+		}
+		if n, ok := spec.Params[ParamRateLimitCooldownSec].(int); ok {
+			cfg.RateLimitCooldownSec = n
+		}
+		if n, ok := spec.Params[ParamRateLimitBackoffBaseMS].(int); ok {
+			cfg.RateLimitBackoffBaseMS = n
+		}
+		if n, ok := spec.Params[ParamRateLimitBackoffCapMS].(int); ok {
+			cfg.RateLimitBackoffCapMS = n
 		}
 		return New(cfg), nil
 	})

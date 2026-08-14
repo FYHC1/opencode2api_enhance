@@ -202,7 +202,7 @@ func (v *Vendor) call(ctx context.Context, msg *contract.Message, streaming bool
 	var lastHeader http.Header
 	var lastProxyAddr string
 	var lastErr error
-	var retryCount, retry401Count int
+	var retryCount, retry401Count, retry429Count int
 
 	for retryCount <= maxRetries {
 		up, err := v.buildRequest(modelID, bodyMap, a)
@@ -216,7 +216,7 @@ func (v *Vendor) call(ctx context.Context, msg *contract.Message, streaming bool
 		var client *http.Client
 		var resp *http.Response
 		var proxyAddr string
-		if retryCount == 0 && hasRacer && v.raceCopies() > 1 {
+		if retryCount == 0 && hasRacer && v.raceCopies() > 1 && !v.inRateLimitCooldown() {
 			resp, proxyAddr, err = v.raceDo(ctx, racer, up, streaming, v.raceCopies())
 			if err == nil && resp == nil {
 				// 竞速无候选：退化普通单发。
@@ -261,6 +261,13 @@ func (v *Vendor) call(ctx context.Context, msg *contract.Message, streaming bool
 			if client != nil {
 				client.CloseIdleConnections()
 			}
+			if resp.StatusCode == http.StatusTooManyRequests {
+				// S2 429 感知：记录最近 429 时间戳（下个请求冷却内跳过竞速），
+				// 重试前指数退避 sleep(min(base*2^n, cap))，不放大限流。
+				v.last429.Store(time.Now().UnixNano())
+				time.Sleep(v.rateLimitBackoff(retry429Count))
+				retry429Count++
+			}
 			if resp.StatusCode == http.StatusUnauthorized {
 				retry401Count++
 				if retry401Count >= max401Retries {
@@ -279,6 +286,11 @@ func (v *Vendor) call(ctx context.Context, msg *contract.Message, streaming bool
 			return &callResult{stream: io.NopCloser(bytes.NewReader(lastBody)), status: lastStatus, nodeAddr: lastProxyAddr}, nil
 		}
 		break
+	}
+	// S2 可见报错：429 最终失败用中文文案替换上游原始错误体，status 保持 429 透传
+	// （客户端按状态码识别限流，正文明确"免费额度已用尽"）。
+	if lastStatus == http.StatusTooManyRequests {
+		lastBody = rateLimitErrorBody()
 	}
 	if streaming {
 		if lastStatus != 0 {
@@ -339,6 +351,64 @@ func (v *Vendor) raceBudget() time.Duration {
 		return time.Duration(v.cfg.RaceBudgetMS) * time.Millisecond
 	}
 	return 10 * time.Second
+}
+
+// ---------------------------------------------------------------- 429 感知（S2）
+
+// rateLimitExceededMsg 429 最终失败的可见文案（S2）：替换上游原始错误体，status 保持 429。
+const rateLimitExceededMsg = "免费额度已用尽（Rate limit exceeded），请稍后重试"
+
+// rateLimitErrorBody 返回 429 最终失败的内层错误体（OpenAI 兼容形态，客户端按状态码识别限流）。
+func rateLimitErrorBody() []byte {
+	b, _ := json.Marshal(map[string]any{
+		"error": map[string]any{
+			"message": rateLimitExceededMsg,
+			"type":    "rate_limit_error",
+			"code":    "rate_limit_exceeded",
+		},
+	})
+	return b
+}
+
+// inRateLimitCooldown 距最近一次 429 是否仍在冷却期（rate_limit_cooldown_sec，默认 30s）。
+// 冷却期内跳过竞速走单发：限流时不放大请求量。从未 429 返回 false。
+func (v *Vendor) inRateLimitCooldown() bool {
+	last := v.last429.Load()
+	if last == 0 {
+		return false
+	}
+	sec := v.cfg.RateLimitCooldownSec
+	if sec <= 0 {
+		sec = 30
+	}
+	return time.Since(time.Unix(0, last)) < time.Duration(sec)*time.Second
+}
+
+// rateLimitBackoff 返回第 attempt 次（0 基）429 重试前的退避时长：min(base*2^attempt, cap)，
+// base/cap 可配（默认 1s / 30s；<=0 回退默认）。
+func (v *Vendor) rateLimitBackoff(attempt int) time.Duration {
+	base := time.Duration(v.cfg.RateLimitBackoffBaseMS) * time.Millisecond
+	if base <= 0 {
+		base = time.Second
+	}
+	capD := time.Duration(v.cfg.RateLimitBackoffCapMS) * time.Millisecond
+	if capD <= 0 {
+		capD = 30 * time.Second
+	}
+	if capD < base {
+		capD = base
+	}
+	d := base
+	for i := 0; i < attempt; i++ {
+		if d >= capD {
+			return capD
+		}
+		d *= 2
+	}
+	if d > capD {
+		return capD
+	}
+	return d
 }
 
 // prefixReadCloser 在流式响应前拼回竞速阶段已读出的首字节。

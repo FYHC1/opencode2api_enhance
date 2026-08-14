@@ -46,6 +46,10 @@ type AppConfig struct {
 	// < Low（默认 0.5）→ 全速竞速；Low ≤ p < High（默认 1.0）→ 温和竞速（2）；≥ High → 单发。
 	PoolRacePressureLow  float64 `json:"pool_race_pressure_low,omitempty"`
 	PoolRacePressureHigh float64 `json:"pool_race_pressure_high,omitempty"`
+	// 429 感知（S2）：冷却内跳过竞速（秒，默认 30）与指数退避 base/cap（毫秒，默认 1000/30000）。
+	RateLimitCooldownSec   int `json:"rate_limit_cooldown_sec,omitempty"`
+	RateLimitBackoffBaseMS int `json:"rate_limit_backoff_base_ms,omitempty"`
+	RateLimitBackoffCapMS  int `json:"rate_limit_backoff_cap_ms,omitempty"`
 	// ShowNodePrefix 是否在对话流首段展示「🤖 节点 · 模型」前缀（默认关闭）
 	ShowNodePrefix *bool `json:"show_node_prefix,omitempty"`
 	// PoolProbeTarget 实例池链路探活目标（空 = 按 base_url 自动拼接；S4 可配）。

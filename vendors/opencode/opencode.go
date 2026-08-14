@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/6Kmfi6HP/opencode2api/core/contract"
@@ -62,12 +63,22 @@ type Config struct {
 	// pressure < low → 用满 RaceCopies；low ≤ pressure < high → 2；≥ high → 1。
 	RacePressureLow  float64
 	RacePressureHigh float64
+	// RateLimitCooldownSec 429 冷却（秒，S2）：距最近一次 429 小于该值时跳过竞速走单发，
+	// 避免限流时扇出放大请求量（0 = 默认 30）。
+	RateLimitCooldownSec int
+	// RateLimitBackoffBaseMS / RateLimitBackoffCapMS 429 指数退避（毫秒，S2）：
+	// 429 重试前 sleep min(base*2^n, cap)（0 = 默认 1000 / 30000）。
+	RateLimitBackoffBaseMS int
+	RateLimitBackoffCapMS  int
 }
 
 // Vendor 实现 contract.Vendor，代表 OpenCode 上游。
 type Vendor struct {
 	cfg Config
 	tr  contract.Transport
+
+	// last429 最近一次 429 的 UnixNano 时间戳（S2）：冷却期内跳过竞速。0 = 从未 429。
+	last429 atomic.Int64
 
 	// 会话状态（原全局 ocSession* 收敛为实例字段）
 	ocSessionID string
