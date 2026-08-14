@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/6Kmfi6HP/opencode2api/core/protocol"
 )
@@ -41,6 +42,21 @@ func claudeMessagesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 全流程调用日志：记录每个请求的决策链（网关模式下；对齐 chat_handler 三态）
+	startTime := time.Now()
+	callRec := CallRecord{
+		ReqID:     getReqID(r.Context()),
+		TS:        time.Now().Format(time.RFC3339),
+		Path:      r.URL.Path,
+		Model:     claudeReq.Model,
+		Stream:    claudeReq.Stream,
+		RouteMode: routeMode,
+		Status:    "ok",
+	}
+	if callRec.ReqID == "" {
+		callRec.ReqID = "req_" + randomString(12)
+	}
+
 	// 多模态路由
 
 	chatReq := protocol.ConvertClaudeRequest(claudeReq)
@@ -65,7 +81,13 @@ func claudeMessagesHandler(w http.ResponseWriter, r *http.Request) {
 
 	if claudeReq.Stream {
 		upResp, status, _, proxyAddr, err := callOpenCodeAPIStream(upstreamBody, chatReq.Model, auth)
+		callRec.Nodes = append(callRec.Nodes, proxyAddr)
 		if err != nil || status < 200 || status >= 300 {
+			callRec.Status = "fail"
+			callRec.ErrMsg = fmt.Sprintf("upstream status %d: %v", status, err)
+			callRec.DurationMS = time.Since(startTime).Milliseconds()
+			callRec.Events = append(callRec.Events, CallEvent{Type: "upstream_error", Node: proxyAddr, Detail: callRec.ErrMsg, At: time.Now()})
+			recordCall(callRec)
 			errResp := map[string]any{
 				"type":  "error",
 				"error": map[string]string{"type": "api_error", "message": "upstream error"},
@@ -75,13 +97,23 @@ func claudeMessagesHandler(w http.ResponseWriter, r *http.Request) {
 			json.NewEncoder(w).Encode(errResp)
 			return
 		}
+		callRec.Events = append(callRec.Events, CallEvent{Type: "connect_ok", Node: proxyAddr, Detail: "connected", At: time.Now()})
 		defer upResp.Close()
 		claudeStreamHandler(w, upResp, claudeReq.Model, keepReasoning, proxyAddr)
+		callRec.DurationMS = time.Since(startTime).Milliseconds()
+		callRec.Events = append(callRec.Events, CallEvent{Type: "complete", Node: proxyAddr, Detail: "done", At: time.Now()})
+		recordCall(callRec)
 		return
 	}
 
 	respBody, status, _, proxyAddr, err := callOpenCodeAPI(upstreamBody, chatReq.Model, auth)
+	callRec.Nodes = append(callRec.Nodes, proxyAddr)
 	if err != nil || status < 200 || status >= 300 {
+		callRec.Status = "fail"
+		callRec.ErrMsg = fmt.Sprintf("upstream status %d: %v", status, err)
+		callRec.DurationMS = time.Since(startTime).Milliseconds()
+		callRec.Events = append(callRec.Events, CallEvent{Type: "upstream_error", Node: proxyAddr, Detail: callRec.ErrMsg, At: time.Now()})
+		recordCall(callRec)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(httpStatusOr(status))
 		if len(respBody) > 0 {
@@ -104,8 +136,13 @@ func claudeMessagesHandler(w http.ResponseWriter, r *http.Request) {
 			if tt > 0 {
 				recordTokenUsage(claudeReq.Model, int64(pt), int64(ct), int64(tt), proxyAddr)
 			}
+			callRec.PromptTok = int64(pt)
+			callRec.CompletionTok = int64(ct)
 		}
 	}
+	callRec.DurationMS = time.Since(startTime).Milliseconds()
+	callRec.Events = append(callRec.Events, CallEvent{Type: "complete", Node: proxyAddr, Detail: "done", At: time.Now()})
+	recordCall(callRec)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

@@ -185,6 +185,51 @@ func TestProbeTargetURL(t *testing.T) {
 	}
 }
 
+// S4：pool_probe_target 覆盖默认拼接；空值回退现状自动拼接。
+func TestProbeTargetURLOverride(t *testing.T) {
+	custom := "https://probe.example/custom/v1/models"
+	if got := probeTargetURL(Config{PoolProbeTarget: custom}); got != custom {
+		t.Fatalf("override target=%s, want %s", got, custom)
+	}
+	// 带空白会被 trim。
+	if got := probeTargetURL(Config{PoolProbeTarget: "  " + custom + "  "}); got != custom {
+		t.Fatalf("trimmed override=%s, want %s", got, custom)
+	}
+	// 空值 = 现状：优先 base_url 拼接。
+	if got := probeTargetURL(Config{BaseURL: "http://127.0.0.1:8088/v1", PoolProbeTarget: ""}); got != "http://127.0.0.1:8088/v1/models" {
+		t.Fatalf("empty override target=%s, want base concat", got)
+	}
+	// 空值 + 无 base_url = 默认厂商端点。
+	if got := probeTargetURL(Config{PoolProbeTarget: ""}); got != defaultProbeTarget {
+		t.Fatalf("empty override default=%s, want %s", got, defaultProbeTarget)
+	}
+}
+
+// S4：pool_probe_target 配置解析（ConfigSet/ConfigGet/ConfigViewOf）。
+func TestPoolProbeTargetConfigSetGet(t *testing.T) {
+	m := New(t.TempDir())
+
+	if err := m.ConfigSet("pool_probe_target", "https://probe.example/v1/models"); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if got, _ := m.ConfigGet("pool_probe_target"); got != "https://probe.example/v1/models" {
+		t.Fatalf("get=%s", got)
+	}
+	// 空值允许（重置为自动拼接）。
+	if err := m.ConfigSet("pool_probe_target", ""); err != nil {
+		t.Fatalf("set empty: %v", err)
+	}
+	if got, _ := m.ConfigGet("pool_probe_target"); got != "" {
+		t.Fatalf("get after empty=%q, want empty", got)
+	}
+
+	_ = m.ConfigSet("pool_probe_target", "https://probe.example/custom")
+	v := m.ConfigViewOf()
+	if v.PoolProbeTarget != "https://probe.example/custom" {
+		t.Fatalf("view target=%q", v.PoolProbeTarget)
+	}
+}
+
 // ---- 配置生效值 ----
 
 func TestPoolProbeConfigDefaults(t *testing.T) {

@@ -5,6 +5,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -670,6 +671,21 @@ func responsesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 全流程调用日志：记录每个请求的决策链（网关模式下；对齐 chat_handler 三态）
+	startTime := time.Now()
+	callRec := CallRecord{
+		ReqID:     getReqID(r.Context()),
+		TS:        time.Now().Format(time.RFC3339),
+		Path:      r.URL.Path,
+		Model:     respReq.Model,
+		Stream:    respReq.Stream,
+		RouteMode: routeMode,
+		Status:    "ok",
+	}
+	if callRec.ReqID == "" {
+		callRec.ReqID = "req_" + randomString(12)
+	}
+
 	// 多模态路由
 
 	messages := respReq.Messages
@@ -766,7 +782,13 @@ func responsesHandler(w http.ResponseWriter, r *http.Request) {
 
 	if respReq.Stream {
 		upResp, status, _, proxyAddr, err := callOpenCodeAPIStream(upstreamBody, chatReq.Model, auth)
+		callRec.Nodes = append(callRec.Nodes, proxyAddr)
 		if err != nil || status < 200 || status >= 300 {
+			callRec.Status = "fail"
+			callRec.ErrMsg = fmt.Sprintf("upstream status %d: %v", status, err)
+			callRec.DurationMS = time.Since(startTime).Milliseconds()
+			callRec.Events = append(callRec.Events, CallEvent{Type: "upstream_error", Node: proxyAddr, Detail: callRec.ErrMsg, At: time.Now()})
+			recordCall(callRec)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(httpStatusOr(status))
 			if upResp != nil {
@@ -779,6 +801,7 @@ func responsesHandler(w http.ResponseWriter, r *http.Request) {
 			json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"message": "upstream error"}})
 			return
 		}
+		callRec.Events = append(callRec.Events, CallEvent{Type: "connect_ok", Node: proxyAddr, Detail: "connected", At: time.Now()})
 		defer upResp.Close()
 
 		resp := &http.Response{
@@ -787,11 +810,20 @@ func responsesHandler(w http.ResponseWriter, r *http.Request) {
 			Header:     make(http.Header),
 		}
 		responsesStreamHandler(w, r, resp, chatReq.Model, chatReq.Model, wantReasoning, respReq.Tools, respReq.ToolChoice, respReq, proxyAddr)
+		callRec.DurationMS = time.Since(startTime).Milliseconds()
+		callRec.Events = append(callRec.Events, CallEvent{Type: "complete", Node: proxyAddr, Detail: "done", At: time.Now()})
+		recordCall(callRec)
 		return
 	}
 
 	respBody, status, _, proxyAddr, err := callOpenCodeAPI(upstreamBody, chatReq.Model, auth)
+	callRec.Nodes = append(callRec.Nodes, proxyAddr)
 	if err != nil || status < 200 || status >= 300 {
+		callRec.Status = "fail"
+		callRec.ErrMsg = fmt.Sprintf("upstream status %d: %v", status, err)
+		callRec.DurationMS = time.Since(startTime).Milliseconds()
+		callRec.Events = append(callRec.Events, CallEvent{Type: "upstream_error", Node: proxyAddr, Detail: callRec.ErrMsg, At: time.Now()})
+		recordCall(callRec)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(httpStatusOr(status))
 		if len(respBody) > 0 {
@@ -821,8 +853,13 @@ func responsesHandler(w http.ResponseWriter, r *http.Request) {
 			if tt > 0 {
 				recordTokenUsage(chatReq.Model, int64(pt), int64(ct), int64(tt), proxyAddr)
 			}
+			callRec.PromptTok = int64(pt)
+			callRec.CompletionTok = int64(ct)
 		}
 	}
+	callRec.DurationMS = time.Since(startTime).Milliseconds()
+	callRec.Events = append(callRec.Events, CallEvent{Type: "complete", Node: proxyAddr, Detail: "done", At: time.Now()})
+	recordCall(callRec)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	slog.Debug("responses response body", "body", string(responsesBody))
