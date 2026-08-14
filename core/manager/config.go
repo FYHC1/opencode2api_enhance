@@ -86,6 +86,8 @@ type Config struct {
 	BatchConcurrency     int `json:"batch_concurrency,omitempty"`
 	TestConcurrency      int `json:"test_concurrency,omitempty"`
 	PoolProbeConcurrency int `json:"pool_probe_concurrency,omitempty"`
+	// StopScanConcurrency 停止扫描并发上限（N2，默认 4，<=0 用默认）。
+	StopScanConcurrency int `json:"stop_scan_concurrency,omitempty"`
 
 	// GatewayKey 统一网关鉴权密钥（空 = 回退默认 sk-unified-local；main 功能 M6）。
 	GatewayKey string `json:"gateway_key,omitempty"`
@@ -217,6 +219,8 @@ func (m *Manager) ConfigGet(key string) (string, error) {
 		return strconv.Itoa(cfg.RateLimitBackoffCapMS), nil
 	case "scan_concurrency":
 		return strconv.Itoa(cfg.ScanConcurrency), nil
+	case "stop_scan_concurrency":
+		return strconv.Itoa(stopScanConcurrencyOf(cfg)), nil
 	case "batch_concurrency":
 		return strconv.Itoa(cfg.BatchConcurrency), nil
 	case "test_concurrency":
@@ -495,6 +499,17 @@ func (m *Manager) ConfigSet(key, value string) error {
 			return errors.New("scan_concurrency 需在 1~16 之间")
 		}
 		cfg.ScanConcurrency = int(v)
+	case "stop_scan_concurrency":
+		v, err := parseInt()
+		if err != nil {
+			return err
+		}
+		if v < 1 || v > 8 {
+			// 非法值回退默认 4（不落盘，stopScanConcurrencyOf 兜底）。
+			cfg.StopScanConcurrency = 0
+		} else {
+			cfg.StopScanConcurrency = int(v)
+		}
 	case "batch_concurrency":
 		v, err := parseInt()
 		if err != nil {
@@ -610,6 +625,7 @@ type ConfigView struct {
 	RateLimitBackoffBaseMS  int     `json:"rate_limit_backoff_base_ms"`
 	RateLimitBackoffCapMS   int     `json:"rate_limit_backoff_cap_ms"`
 	ScanConcurrency         int    `json:"scan_concurrency"`
+	StopScanConcurrency     int    `json:"stop_scan_concurrency"`
 	BatchConcurrency        int    `json:"batch_concurrency"`
 	TestConcurrency         int    `json:"test_concurrency"`
 	PoolProbeConcurrency    int    `json:"pool_probe_concurrency"`
@@ -666,6 +682,7 @@ func (m *Manager) ConfigViewOf() ConfigView {
 		RateLimitBackoffBaseMS:  rateLimitBackoffBaseMSOf(cfg),
 		RateLimitBackoffCapMS:   rateLimitBackoffCapMSOf(cfg),
 		ScanConcurrency:         scanConcurrencyOf(cfg),
+		StopScanConcurrency:     stopScanConcurrencyOf(cfg),
 		BatchConcurrency:        batchConcurrencyOf(cfg),
 		TestConcurrency:         testConcurrencyOf(cfg),
 		PoolProbeConcurrency:    poolProbeConcurrencyOf(cfg),

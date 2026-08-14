@@ -92,6 +92,46 @@ func TestConfigBadPoolResetSec(t *testing.T) {
 	}
 }
 
+// N2: stop_scan_concurrency 默认 4、1~8 校验（非法回退 4）、落盘读回。
+func TestConfigStopScanConcurrency(t *testing.T) {
+	m := newTestManager(t)
+	// 未设置 → ConfigGet 返回默认 4，ConfigView 生效 4。
+	if got, _ := m.ConfigGet("stop_scan_concurrency"); got != "4" {
+		t.Fatalf("default get = %q, want 4", got)
+	}
+	if v := m.ConfigViewOf().StopScanConcurrency; v != 4 {
+		t.Fatalf("default view = %d, want 4", v)
+	}
+	// 正常 6：Get/View 原样 + 落盘读回。
+	if err := m.ConfigSet("stop_scan_concurrency", "6"); err != nil {
+		t.Fatalf("set 6: %v", err)
+	}
+	if got, _ := m.ConfigGet("stop_scan_concurrency"); got != "6" {
+		t.Fatalf("get = %q, want 6", got)
+	}
+	if v := m.ConfigViewOf().StopScanConcurrency; v != 6 {
+		t.Fatalf("view = %d, want 6", v)
+	}
+	m2 := New(m.paths.DataDir)
+	if got, _ := m2.ConfigGet("stop_scan_concurrency"); got != "6" {
+		t.Fatalf("persisted = %q, want 6", got)
+	}
+	// 非法值（越界 1~8）回退默认 4（落盘为未设置）。
+	if err := m.ConfigSet("stop_scan_concurrency", "99"); err != nil {
+		t.Fatalf("set 99 should fall back, got err: %v", err)
+	}
+	if got, _ := m.ConfigGet("stop_scan_concurrency"); got != "4" {
+		t.Fatalf("get after 99 = %q, want 4", got)
+	}
+	if v := m.ConfigViewOf().StopScanConcurrency; v != 4 {
+		t.Fatalf("view after 99 = %d, want 4", v)
+	}
+	// 非整数拒绝。
+	if err := m.ConfigSet("stop_scan_concurrency", "abc"); err == nil {
+		t.Fatal("invalid int must error")
+	}
+}
+
 // U3: ui_poll_interval_sec 默认 5、0 = 关闭轮询（持久生效）、非法值回退默认 5。
 func TestConfigUiPollIntervalSec(t *testing.T) {
 	m := newTestManager(t)

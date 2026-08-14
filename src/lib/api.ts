@@ -140,6 +140,8 @@ export type ConfigView = {
   pool_race_copies: number
   /** 并发设置（D3） */
   scan_concurrency: number
+  /** N2: 停止扫描并发（默认 4） */
+  stop_scan_concurrency: number
   batch_concurrency: number
   test_concurrency: number
   pool_probe_concurrency: number
