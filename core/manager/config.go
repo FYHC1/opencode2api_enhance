@@ -29,6 +29,8 @@ type Config struct {
 	FailoverProbeMax    int64  `json:"failover_probe_max,omitempty"`
 	CallLogMax          int64  `json:"call_log_max,omitempty"`
 	ShowNodePrefix      bool   `json:"show_node_prefix,omitempty"`
+	// UiPollIntervalSec 界面轮询间隔（秒，U3）：0 = 关闭轮询，1~60 可配，默认 5。
+	UiPollIntervalSec int `json:"ui_poll_interval_sec,omitempty"`
 
 	// UpstreamProxy 上游代理出口（E1）：非空时实例/探针生成的 active_socks5 指向该代理
 	// （生成时剥离 socks5:// / http:// 前缀取 host:port），跳过 sing-box 出口，绕过本机
@@ -162,6 +164,8 @@ func (m *Manager) ConfigGet(key string) (string, error) {
 		return strconv.FormatInt(cfg.CallLogMax, 10), nil
 	case "show_node_prefix":
 		return strconv.FormatBool(cfg.ShowNodePrefix), nil
+	case "ui_poll_interval_sec":
+		return strconv.Itoa(cfg.UiPollIntervalSec), nil
 	case "upstream_proxy":
 		return cfg.UpstreamProxy, nil
 	case "subscribe_url":
@@ -311,6 +315,17 @@ func (m *Manager) ConfigSet(key, value string) error {
 			return fmt.Errorf("invalid boolean for show_node_prefix: %s", value)
 		}
 		cfg.ShowNodePrefix = b
+	case "ui_poll_interval_sec":
+		v, err := parseInt()
+		if err != nil {
+			return err
+		}
+		// 0 = 关闭轮询；负数/超界（>60）回退默认 5。
+		if v < 0 || v > 60 {
+			cfg.UiPollIntervalSec = defaultUiPollIntervalSec
+		} else {
+			cfg.UiPollIntervalSec = int(v)
+		}
 	case "upstream_proxy":
 		// 原样存储（生成子进程配置时才剥离 scheme / 校验端口，非法值回退直连）。
 		cfg.UpstreamProxy = strings.TrimSpace(value)
@@ -565,6 +580,7 @@ type ConfigView struct {
 	FailoverProbeMax        int64  `json:"failover_probe_max"`
 	CallLogMax              int64  `json:"call_log_max"`
 	ShowNodePrefix          bool   `json:"show_node_prefix"`
+	UiPollIntervalSec       int    `json:"ui_poll_interval_sec"`
 	UpstreamProxy           string `json:"upstream_proxy"`
 	SubscribeURL            string `json:"subscribe_url"`
 	SubscribeIntervalMin    int    `json:"subscribe_interval_min"`
@@ -620,6 +636,7 @@ func (m *Manager) ConfigViewOf() ConfigView {
 		FailoverProbeMax:        def(cfg.FailoverProbeMax, 3),
 		CallLogMax:              def(cfg.CallLogMax, 5000),
 		ShowNodePrefix:          cfg.ShowNodePrefix,
+		UiPollIntervalSec:       uiPollIntervalSecOf(cfg),
 		UpstreamProxy:           cfg.UpstreamProxy,
 		SubscribeURL:            cfg.SubscribeURL,
 		SubscribeIntervalMin:    cfg.SubscribeIntervalMin,
@@ -649,6 +666,18 @@ func (m *Manager) ConfigViewOf() ConfigView {
 		HasGatewayKey:           cfg.GatewayKey != "",
 		GatewayKey:              maskSecret(cfg.GatewayKey),
 	}
+}
+
+// defaultUiPollIntervalSec 界面轮询间隔默认值（秒，U3）。
+const defaultUiPollIntervalSec = 5
+
+// uiPollIntervalSecOf 生效的界面轮询间隔（秒）：1~60 直接用；
+// 未设置（0）与非法值（负数或 >60）回退默认 5——默认行为是 5s 自动刷新。
+func uiPollIntervalSecOf(cfg Config) int {
+	if cfg.UiPollIntervalSec <= 0 || cfg.UiPollIntervalSec > 60 {
+		return defaultUiPollIntervalSec
+	}
+	return cfg.UiPollIntervalSec
 }
 
 // effectiveGatewayKey 生效的统一网关密钥：配置未设置/为空时回退默认 "sk-unified-local"。

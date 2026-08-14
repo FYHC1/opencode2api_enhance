@@ -24,6 +24,8 @@ type AppConfig struct {
 	ProbeMax     int `json:"failover_probe_max,omitempty"`
 	// 调用日志保留上限（条）
 	CallLogMax int `json:"call_log_max,omitempty"`
+	// 界面轮询间隔（秒，U3）：0 = 关闭轮询，1~60 可配，默认 5。
+	UiPollIntervalSec int `json:"ui_poll_interval_sec,omitempty"`
 
 	// 坏状态码组：状态码 → 原因文案，遇到即切节点并计数（可配置，默认见 badStatusCodes）
 	BadStatusCodes map[string]string `json:"bad_status_codes,omitempty"`

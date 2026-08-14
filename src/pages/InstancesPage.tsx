@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import clsx from 'clsx'
-import { RefreshCw, Play, Square, Trash2, TestTube2, Copy, Loader2, Search, Server, Activity } from 'lucide-react'
+import { RefreshCw, Play, Square, Trash2, TestTube2, Copy, Loader2, Search, Server, Activity, Settings2, ChevronDown, X } from 'lucide-react'
 import { api, type Instance, type TestResult, type PoolQualityRecord, type PoolQualityLevel } from '../lib/api'
 
 /** 链路质量徽标（与实例池页一致）：质量分 + 等级 + 延迟（无记录显示"未探测"） */
@@ -57,6 +57,12 @@ export default function InstancesPage({
   const [refreshing, setRefreshing] = useState(false)
   // 手动刷新进度：{ done: 已检查数量, total: 实例总数 }，null = 不在刷新
   const [refreshProgress, setRefreshProgress] = useState<{ done: number; total: number } | null>(null)
+  // 界面刷新（U3）：轮询间隔（秒，0 = 关闭轮询）（生效值 + 表单值）
+  const [uiPollSec, setUiPollSec] = useState(5)
+  const [uiForm, setUiForm] = useState({ ui_poll_interval_sec: 5 })
+  // 页面设置弹窗（折叠面板：每个配置分组一个 section，默认收起）
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [openSections, setOpenSections] = useState<{ ui: boolean }>({ ui: false })
 
   const load = useCallback(async (silent = true) => {
     try {
@@ -95,10 +101,40 @@ export default function InstancesPage({
     }
   }
 
-  // 首次加载查询一次实例状态，之后不自动轮询，由用户点击刷新按钮手动刷新
+  // 界面刷新（U3）：保存轮询间隔（0~60，0 = 关闭自动轮询）
+  const handleSaveUi = async () => {
+    const v = uiForm.ui_poll_interval_sec
+    if (!Number.isInteger(v) || v < 0 || v > 60) {
+      toast('刷新间隔需为 0~60 的整数（0 = 关闭自动刷新）', false)
+      return
+    }
+    try {
+      await api.configSet('ui_poll_interval_sec', String(v))
+      toast('界面刷新配置已保存（重载页面后生效）', true)
+    } catch (e) {
+      console.error('保存界面刷新配置失败', e)
+      toast('保存失败', false)
+    }
+  }
+
+  // U3: 挂载时读界面刷新配置（轮询间隔）一次，填表单 + 定生效值
+  useEffect(() => {
+    api
+      .configGet()
+      .then((c) => {
+        setUiForm({ ui_poll_interval_sec: c.ui_poll_interval_sec })
+        setUiPollSec(c.ui_poll_interval_sec)
+      })
+      .catch(() => {})
+  }, [])
+
+  // 自动轮询（U3）：按配置间隔轻量刷新列表与状态（0 = 关闭）；深度校正仍由手动「刷新」按钮承担
   useEffect(() => {
     void load()
-  }, [load])
+    if (uiPollSec <= 0) return
+    const timer = setInterval(() => void load(), uiPollSec * 1000)
+    return () => clearInterval(timer)
+  }, [load, uiPollSec])
 
   // 手动刷新：按名称分批（每批并发 CHECK_BATCH）调用后端校正状态，
   // 每批返回后更新列表并累计进度，全部完成后按钮文字恢复「刷新」
@@ -371,6 +407,13 @@ if (kind === 'delete' && !confirm(`确定释放选中的 ${names.length} 个实�
             <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
             {refreshProgress ? `刷新 ${refreshProgress.done} / ${refreshProgress.total}` : '刷新'}
           </button>
+          <button
+            onClick={() => setSettingsOpen(true)}
+            title="页面设置（界面刷新等）"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-zinc-700 bg-white border border-zinc-200 hover:bg-zinc-50"
+          >
+            <Settings2 size={14} /> 设置
+          </button>
         </div>
       </div>
 
@@ -551,6 +594,60 @@ if (kind === 'delete' && !confirm(`确定释放选中的 ${names.length} 个实�
         <div className="flex flex-col items-center justify-center py-24 text-zinc-400">
           <p className="text-base mb-2">暂无独享实例</p>
 <p className="text-[13px]">在「节点池」页勾选节点，以「独享」方式批量添加；池成员见「实例池」页</p>
+        </div>
+      )}
+
+      {/* 页面设置弹窗（右上角齿轮）：折叠面板，每个配置分组一个 section（默认收起） */}
+      {settingsOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => setSettingsOpen(false)}
+        >
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md max-h-[86vh] overflow-y-auto p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-zinc-900">独享管理设置</h2>
+              <button onClick={() => setSettingsOpen(false)} className="p-1.5 rounded-lg hover:bg-zinc-100">
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* 界面刷新（折叠面板，默认收起） */}
+            <section className="border border-zinc-200 rounded-xl overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setOpenSections((s) => ({ ...s, ui: !s.ui }))}
+                className={clsx('w-full flex items-center justify-between px-4 py-3 text-left hover:bg-zinc-50', openSections.ui && 'border-b border-zinc-200')}
+              >
+                <span className="text-[14px] font-semibold text-zinc-900">界面刷新</span>
+                <ChevronDown size={16} className={clsx('text-zinc-400 transition-transform', !openSections.ui && '-rotate-90')} />
+              </button>
+              {openSections.ui && (
+                <div className="p-4 space-y-4">
+                  <p className="text-[12px] text-zinc-400">
+                    本页按此间隔自动刷新实例状态与链路质量（轻量轮询，静默无提示）；深度状态校正仍由「刷新」按钮执行
+                  </p>
+                  <div className="flex items-center gap-3">
+                    <label className="text-[13px] text-zinc-700 flex-1 min-w-0 whitespace-nowrap">刷新间隔（秒，默认 5）</label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={60}
+                      value={uiForm.ui_poll_interval_sec}
+                      onChange={(e) => setUiForm({ ui_poll_interval_sec: Number(e.target.value) })}
+                      className="w-28 shrink-0 px-3 py-2 border rounded-lg text-[13px] text-right"
+                    />
+                    <span className="text-[11px] text-zinc-400 w-8 shrink-0 text-right">0=关</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] text-zinc-400">修改后重载页面生效</span>
+                    <button onClick={() => void handleSaveUi()} className="bg-zinc-900 text-white rounded-lg px-4 py-2 text-[13px] hover:bg-zinc-700">
+                      保存
+                    </button>
+                  </div>
+                </div>
+              )}
+            </section>
+          </div>
         </div>
       )}
 

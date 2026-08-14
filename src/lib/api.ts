@@ -116,6 +116,8 @@ export type ConfigView = {
   failover_probe_max: number
   call_log_max: number
   show_node_prefix: boolean
+  /** U3: 界面轮询间隔（秒，0 = 关闭轮询，默认 5） */
+  ui_poll_interval_sec: number
   subscribe_url: string
   subscribe_interval_min: number
   health_check_interval_sec: number
