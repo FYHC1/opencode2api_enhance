@@ -99,6 +99,10 @@ func (m *Manager) ReadCallLog(max int) []CallLogRecord {
 	if len(all) > max {
 		all = all[len(all)-max:]
 	}
+	// 无日志时返回空数组而非 nil（避免 JSON 序列化为 null，前端展开报 TypeError）
+	if all == nil {
+		all = []CallLogRecord{}
+	}
 	return all
 }
 

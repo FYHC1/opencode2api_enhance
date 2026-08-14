@@ -71,6 +71,12 @@ const issueTagClass = (rec: CallLogRecord): string => {
   return 'text-amber-700 bg-amber-100'
 }
 
+/** 行内完整错误文本（err_msg + 事件 detail 拼接，供 title 悬停展示全文） */
+const rowErrText = (rec: CallLogRecord): string | undefined => {
+  const parts = [rec.err_msg || '', ...(rec.events ?? []).map((e) => e.detail || '')].filter(Boolean)
+  return parts.length ? parts.join(' · ') : undefined
+}
+
 /** 时间线事件配色：切换琥珀 / 超时类玫红 / 失败类红 / 成功绿 / 其它灰 */
 const eventClass = (type: string): string => {
   switch (type) {
@@ -116,6 +122,7 @@ const LogRow = memo(function LogRow({
       <button
         type="button"
         onClick={() => issue && onToggle(rec.req_id)}
+        title={issue ? rowErrText(rec) : undefined}
         className={clsx(
           'w-full flex items-center gap-3 px-4 py-2.5 text-left',
           issue && 'cursor-pointer hover:bg-zinc-50',
@@ -169,7 +176,7 @@ const LogRow = memo(function LogRow({
           <div className="text-xs text-zinc-500 mb-2 font-mono break-all">
             req_id: {rec.req_id} · {rec.path || '/v1/chat/completions'} · stream: {rec.stream ? '是' : '否'} · 路由: {rec.route_mode || '-'}
             {rec.source && <span className="text-indigo-600"> · 来源: {rec.source}</span>}
-            {rec.err_msg && <span className="text-red-600"> · 错误: {rec.err_msg}</span>}
+            {rec.err_msg && <span className="text-red-600" title={rec.err_msg}> · 错误: {rec.err_msg}</span>}
           </div>
           <div className="text-xs text-zinc-500 mb-2">
             token: 输入 {rec.prompt_tokens ?? 0} / 输出 {rec.completion_tokens ?? 0} · 耗时 {fmtDur(rec.duration_ms)}
@@ -186,7 +193,7 @@ const LogRow = memo(function LogRow({
                 >
                   {ev.type}
                 </span>
-                <span className="text-zinc-700 break-all">
+                <span className="text-zinc-700 break-all" title={[ev.node, ev.detail].filter(Boolean).join(' — ')}>
                   {ev.node && <b className="text-zinc-900">{ev.node}</b>}
                   {ev.node && ev.detail ? ' — ' : ''}
                   {ev.detail}
@@ -237,8 +244,8 @@ export default function LogsPage({
     async (silent = true) => {
       try {
         const recs = await api.getCallLog(fetchLimitRef.current)
-        // 最新在前
-        setLogs([...recs].reverse())
+        // 最新在前（后端无日志时可能返回 null → 归一为空数组，避免 TypeError）
+        setLogs([...(Array.isArray(recs) ? recs : [])].reverse())
         setError(null)
       } catch (e) {
         if (!silent) toast(String(e), false)
