@@ -123,6 +123,8 @@ export type ConfigView = {
   /** 实例池链路探活（P1） */
   pool_probe_interval_sec: number
   pool_probe_timeout_sec: number
+  /** 探活目标（空 = 按 base_url 自动拼接；S4 可配） */
+  pool_probe_target: string
   pool_quality_window_min: number
   pool_probe_enabled: boolean
   probe_solo_enabled: boolean
@@ -168,6 +170,8 @@ export type CallLogRecord = {
   completion_tokens?: number
   duration_ms?: number
   err_msg?: string
+  /** 来源标注：空 = 统一网关；否则为独享实例名（S4 聚合读取） */
+  source?: string
 }
 
 // ─── 统一网关（实例池） ─────────────────────────────────────────────
@@ -501,7 +505,7 @@ export const api = {
 
   // Token 统计（按实例）
   getStats: () => req<StatsSummary>('GET', '/stats'),
-  /** 按天统计（date=YYYY-MM-DD，空=全量；按统一网关调用日志聚合） */
+  /** 按天统计（date=YYYY-MM-DD，空=全量；按统一网关 + 独享实例调用日志聚合） */
   statsByDay: (date?: string) => req<DayStats>('GET', '/stats/by-day', undefined, { date: date ?? undefined }),
   /** 重置全部 Token 统计（clearDeleted=同时清除已删除节点历史统计） */
   resetStats: (clearDeleted?: boolean) =>

@@ -34,6 +34,14 @@ const hasIssue = (rec: CallLogRecord) => {
   )
 }
 
+/** 429/额度类错误关键字（命中 err_msg 或事件 detail → 「额度用尽」标签） */
+const isRateLimited = (rec: CallLogRecord) => {
+  const hay = [rec.err_msg || '', ...(rec.events ?? []).map((e) => e.detail || '')]
+    .join(' ')
+    .toLowerCase()
+  return /429|rate\s*limit|quota|insufficient|exceeded|额度|配额|用尽|限流/.test(hay)
+}
+
 const issueLabel = (rec: CallLogRecord): string => {
   const ev = rec.events ?? []
   if (ev.some((e) => e.type === 'all_failed')) return '全部节点失败'
@@ -45,6 +53,40 @@ const issueLabel = (rec: CallLogRecord): string => {
   if (ev.some((e) => e.type === 'connect_error')) return '连接失败'
   if (ev.some((e) => e.type === 'upstream_error')) return '上游错误'
   return '异常'
+}
+
+/** 行级异常标签配色：失败类红 / 超时类玫红 / 切换与其它琥珀 */
+const issueTagClass = (rec: CallLogRecord): string => {
+  const ev = rec.events ?? []
+  if (ev.some((e) => ['all_failed', 'stream_error', 'connect_error', 'upstream_error'].includes(e.type))) {
+    return 'text-red-700 bg-red-100'
+  }
+  if (ev.some((e) => ['ttft_timeout', 'silence_timeout', 'stream_interrupt'].includes(e.type))) {
+    return 'text-rose-700 bg-rose-100'
+  }
+  return 'text-amber-700 bg-amber-100'
+}
+
+/** 时间线事件配色：切换琥珀 / 超时类玫红 / 失败类红 / 成功绿 / 其它灰 */
+const eventClass = (type: string): string => {
+  switch (type) {
+    case 'switch':
+      return 'bg-amber-100 text-amber-800'
+    case 'ttft_timeout':
+    case 'silence_timeout':
+    case 'stream_interrupt':
+      return 'bg-rose-100 text-rose-700'
+    case 'all_failed':
+    case 'stream_error':
+    case 'connect_error':
+    case 'upstream_error':
+      return 'bg-red-100 text-red-700'
+    case 'connect_ok':
+    case 'complete':
+      return 'bg-green-100 text-green-700'
+    default:
+      return 'bg-zinc-200 text-zinc-700'
+  }
 }
 
 export default function LogsPage({
@@ -248,7 +290,7 @@ export default function LogsPage({
           <Inbox size={40} strokeWidth={1.5} />
           <p className="mt-3 text-sm">暂无日志</p>
           <p className="text-xs mt-1">
-            {logs.length === 0 ? '网关尚未记录调用（需以网关模式运行）' : '没有匹配的日志'}
+            {logs.length === 0 ? '网关/独享实例尚未记录调用（需以网关或独享实例模式运行）' : '没有匹配的日志'}
           </p>
         </div>
       ) : (
@@ -282,9 +324,19 @@ export default function LogsPage({
                   >
                     {rec.status === 'ok' ? '【成功】' : '【失败】'}
                   </span>
+                  {isRateLimited(rec) && (
+                    <span className="shrink-0 text-[11px] text-zinc-50 bg-zinc-800 rounded-md px-2 py-0.5">
+                      额度用尽
+                    </span>
+                  )}
                   {issue && (
-                    <span className="shrink-0 text-[11px] text-amber-700 bg-amber-100 rounded-md px-2 py-0.5">
+                    <span className={clsx('shrink-0 text-[11px] rounded-md px-2 py-0.5', issueTagClass(rec))}>
                       {issueLabel(rec)}
+                    </span>
+                  )}
+                  {rec.source && (
+                    <span className="shrink-0 text-[11px] text-indigo-700 bg-indigo-100 rounded-md px-2 py-0.5">
+                      {rec.source}
                     </span>
                   )}
                   <span className="text-zinc-500 text-xs tabular-nums shrink-0">{fmtTime(rec.ts)}</span>
@@ -311,6 +363,7 @@ export default function LogsPage({
                   <div className="border-t border-zinc-100 px-4 py-3 bg-zinc-50/60">
                     <div className="text-xs text-zinc-500 mb-2 font-mono break-all">
                       req_id: {rec.req_id} · {rec.path || '/v1/chat/completions'} · stream: {rec.stream ? '是' : '否'} · 路由: {rec.route_mode || '-'}
+                      {rec.source && <span className="text-indigo-600"> · 来源: {rec.source}</span>}
                       {rec.err_msg && <span className="text-red-600"> · 错误: {rec.err_msg}</span>}
                     </div>
                     <div className="text-xs text-zinc-500 mb-2">
@@ -323,10 +376,7 @@ export default function LogsPage({
                           <span
                             className={clsx(
                               'shrink-0 w-28 rounded px-1.5 py-0.5 text-center font-medium',
-                              ev.type === 'switch' ? 'bg-amber-100 text-amber-800'
-                                : ev.type === 'connect_ok' || ev.type === 'complete' ? 'bg-green-100 text-green-700'
-                                : ev.type === 'all_failed' ? 'bg-red-100 text-red-700'
-                                : 'bg-zinc-200 text-zinc-700',
+                              eventClass(ev.type ?? ''),
                             )}
                           >
                             {ev.type}

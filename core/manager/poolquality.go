@@ -178,8 +178,12 @@ func poolProbeConcurrencyOf(cfg Config) int {
 	return 4
 }
 
-// probeTargetURL 探测目标：优先配置 base_url（补 /v1/models），否则默认厂商端点。
+// probeTargetURL 探测目标：配置 pool_probe_target 非空时直接使用（默认 "" = 按 base_url 自动拼接）；
+// base_url 为空时用默认厂商端点。
 func probeTargetURL(cfg Config) string {
+	if target := strings.TrimSpace(cfg.PoolProbeTarget); target != "" {
+		return target
+	}
 	base := strings.TrimSpace(cfg.BaseURL)
 	if base == "" {
 		return defaultProbeTarget
