@@ -468,9 +468,21 @@ func parseSingboxJSON(body string) ([]SubscribeNode, error) {
 			fingerprint, _ = utls["fingerprint"].(string)
 		}
 		var network, wsPath, flow string
+		var wsHeaders map[string]string
 		if tr, ok := ob["transport"].(map[string]any); ok {
 			network, _ = tr["type"].(string)
 			wsPath, _ = tr["path"].(string)
+			if hdrs, ok := tr["headers"].(map[string]any); ok {
+				hm := make(map[string]string, len(hdrs))
+				for k, v := range hdrs {
+					if s, ok := v.(string); ok {
+						hm[k] = s
+					}
+				}
+				if len(hm) > 0 {
+					wsHeaders = hm
+				}
+			}
 		}
 		flow, _ = ob["flow"].(string)
 		var obfs, obfsPassword string
@@ -519,6 +531,7 @@ func parseSingboxJSON(body string) ([]SubscribeNode, error) {
 			SNI:               sni,
 			Network:           network,
 			WsPath:            wsPath,
+			WsHeaders:         wsHeaders,
 			Flow:              flow,
 			TLS:               tlsEnabled || realityPbk != "",
 			RealityPbk:        realityPbk,
@@ -560,6 +573,11 @@ func parseVmess(rest string) (SubscribeNode, error) {
 		return SubscribeNode{}, nil
 	}
 	tls := v["tls"] == "tls"
+	// vmess 的 host 字段是 ws/http 传输的 Host 头（CDN 前置节点缺了会被 403）。
+	var hdrs map[string]string
+	if h := asString(v["host"]); h != "" && !strings.HasPrefix(h, ".") {
+		hdrs = map[string]string{"Host": h}
+	}
 	return SubscribeNode{
 		Name:     name,
 		Server:   server,
@@ -570,6 +588,7 @@ func parseVmess(rest string) (SubscribeNode, error) {
 		SNI:      asString(v["sni"]),
 		Network:  asDefaultString(v["net"], "tcp"),
 		WsPath:   asString(v["path"]),
+		WsHeaders: hdrs,
 		TLS:      tls,
 		Raw:      "vmess://" + rest,
 	}, nil
@@ -648,6 +667,11 @@ func parseTrojan(rest string) (SubscribeNode, error) {
 		network = "tcp"
 	}
 	tls := params["security"] != "none"
+	// host 参数是 ws/http Host 头（CDN 前置节点必须带上，否则 Cloudflare 403）。
+	var hdrs map[string]string
+	if h := params["host"]; h != "" && !strings.HasPrefix(h, ".") {
+		hdrs = map[string]string{"Host": h}
+	}
 	return SubscribeNode{
 		Name:     nname,
 		Server:   server,
@@ -657,6 +681,7 @@ func parseTrojan(rest string) (SubscribeNode, error) {
 		SNI:      params["sni"],
 		Network:  network,
 		WsPath:   params["path"],
+		WsHeaders: hdrs,
 		TLS:      tls,
 		Raw:      "trojan://" + rest,
 	}, nil
