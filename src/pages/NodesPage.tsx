@@ -184,13 +184,17 @@ export default function NodesPage({
           if (p.status === 'stopping' || p.status === 'done') {
             stopAckRef.current = false
             setScanning(false)
-            return
+            // 不再 return —— 继续走底部 setTimeout(poll, 800) 保持轮询存活
+          } else {
+            setScan(p)
+            setScanning(true)
           }
+        } else {
+          setScan(p)
+          setScanning(p.status === 'running' || p.status === 'stopping')
+          // 扫描刚完成（running → done）：弹出结果弹窗
+          if (p.status === 'done' && prev === 'running') setShowResult(true)
         }
-        setScan(p)
-        setScanning(p.status === 'running' || p.status === 'stopping')
-        // 扫描刚完成（running → done）：弹出结果弹窗
-        if (p.status === 'done' && prev === 'running') setShowResult(true)
       } catch {
         /* ignore */
       }
