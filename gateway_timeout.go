@@ -204,7 +204,7 @@ var (
 	callLog        = NewEventLog(DefaultCallLogMax)
 	callLogPath    = "call_log.jsonl"
 	callLogMu      sync.RWMutex
-	callLogEnabled = true // 仅网关/代理池模式启用（避免直连实例产生无人读取的日志）
+	callLogEnabled = true // main() 按 -gateway/-call-log 赋值；测试默认开启
 )
 
 // ======================== SSE 调试（诊断 JSON 拼接） ========================

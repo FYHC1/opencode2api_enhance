@@ -671,23 +671,33 @@ func TestValidAPIKey(t *testing.T) {
 	tests := []struct {
 		name       string
 		authHeader string
+		xapiKey    string
 		want       bool
 	}{
-		{"no header", "", false},
-		{"bearer empty", "Bearer ", false},
-		{"bearer public placeholder", "Bearer public", false},
-		{"bearer no-key placeholder", "Bearer no-key-required", false},
-		{"wrong sk key", "Bearer sk-wrongkey0123456789", false},
-		{"correct bare key", "Bearer " + key, true},
-		{"go prefix with correct key", "Bearer go:" + key, true},
-		{"zen prefix with correct key", "Bearer zen:" + key, true},
-		{"go prefix with wrong key", "Bearer go:sk-wrongkey0123456789", false},
+		{"no header", "", "", false},
+		{"bearer empty", "Bearer ", "", false},
+		{"bearer public placeholder", "Bearer public", "", false},
+		{"bearer no-key placeholder", "Bearer no-key-required", "", false},
+		{"wrong sk key", "Bearer sk-wrongkey0123456789", "", false},
+		{"correct bare key", "Bearer " + key, "", true},
+		{"go prefix with correct key", "Bearer go:" + key, "", true},
+		{"zen prefix with correct key", "Bearer zen:" + key, "", true},
+		{"go prefix with wrong key", "Bearer go:sk-wrongkey0123456789", "", false},
+		// U5-③：Anthropic 兼容客户端用 x-api-key 头，与 Bearer 同值判断
+		{"x-api-key correct key", "", key, true},
+		{"x-api-key with go prefix", "", "go:" + key, true},
+		{"x-api-key wrong key", "", "sk-wrongkey0123456789", false},
+		{"x-api-key blank after trim", "", "   ", false},
+		{"bearer wrong but x-api-key correct (Bearer wins)", "Bearer sk-wrongkey0123456789", key, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 			if tt.authHeader != "" {
 				req.Header.Set("Authorization", tt.authHeader)
+			}
+			if tt.xapiKey != "" {
+				req.Header.Set("x-api-key", tt.xapiKey)
 			}
 			if got := validAPIKey(req); got != tt.want {
 				t.Fatalf("validAPIKey() = %v, want %v", got, tt.want)
@@ -717,18 +727,25 @@ func TestAPIAuthMiddleware(t *testing.T) {
 	for _, tt := range []struct {
 		name       string
 		authHeader string
+		xapiKey    string
 		want       int
 	}{
-		{"missing header", "", http.StatusUnauthorized},
-		{"wrong key", "Bearer sk-wrongkey0123456789", http.StatusUnauthorized},
-		{"placeholder key", "Bearer no-key-required", http.StatusUnauthorized},
-		{"correct key", "Bearer " + key, http.StatusOK},
-		{"correct key with go prefix", "Bearer go:" + key, http.StatusOK},
+		{"missing header", "", "", http.StatusUnauthorized},
+		{"wrong key", "Bearer sk-wrongkey0123456789", "", http.StatusUnauthorized},
+		{"placeholder key", "Bearer no-key-required", "", http.StatusUnauthorized},
+		{"correct key", "Bearer " + key, "", http.StatusOK},
+		{"correct key with go prefix", "Bearer go:" + key, "", http.StatusOK},
+		// U5-③：x-api-key（Anthropic 兼容客户端规范头）
+		{"x-api-key correct key", "", key, http.StatusOK},
+		{"x-api-key wrong key", "", "sk-wrongkey0123456789", http.StatusUnauthorized},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 			if tt.authHeader != "" {
 				req.Header.Set("Authorization", tt.authHeader)
+			}
+			if tt.xapiKey != "" {
+				req.Header.Set("x-api-key", tt.xapiKey)
 			}
 			rec := httptest.NewRecorder()
 			apiKeyAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {

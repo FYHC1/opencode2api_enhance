@@ -73,6 +73,17 @@ func TestStartInstanceLifecycle(t *testing.T) {
 	if run.starts[0].Bin != m.binPath("sing-box") || run.starts[1].Bin != m.binPath("opencode2api") {
 		t.Fatalf("bin order: %q %q", run.starts[0].Bin, run.starts[1].Bin)
 	}
+	// U5-②：独享/池成员 opencode2api 进程必须带 -call-log，日志页才能聚合读到实例日志
+	ocArgs := run.starts[1].Args
+	hasCallLog := false
+	for _, a := range ocArgs {
+		if a == "-call-log" {
+			hasCallLog = true
+		}
+	}
+	if !hasCallLog {
+		t.Fatalf("opencode2api args = %v, want -call-log", ocArgs)
+	}
 	got, ok := m.FindInstance("i1")
 	if !ok || got.Status.State != "Running" || got.PID == nil || got.SingboxPID == nil {
 		t.Fatalf("after start = %+v", got)

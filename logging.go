@@ -97,6 +97,7 @@ var (
 	showNodePrefix       bool
 	debugMode            bool
 	gatewayMode          bool
+	callLogFlag          bool // -call-log：实例子进程显式启用调用日志写盘
 	configMu             sync.RWMutex
 	storedResponses      = map[string]StoredResponseState{}
 	storedResponsesMu    sync.RWMutex

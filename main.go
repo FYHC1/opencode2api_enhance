@@ -78,6 +78,7 @@ func main() {
 	flag.StringVar(&adminPassword, "password", "123456", "管理面板密码（留空则不启用登录验证）")
 	flag.BoolVar(&debugMode, "debug", false, "启用调试日志")
 	flag.BoolVar(&gatewayMode, "gateway", false, "统一网关模式（记录节点级统计）")
+	flag.BoolVar(&callLogFlag, "call-log", false, "启用调用日志写盘（实例子进程注入；-gateway 自动启用）")
 	flag.StringVar(&poolQualityPath, "pool-quality", "", "实例池质量文件路径（网关子进程注入；空 = 无质量约束）")
 	flag.StringVar(&logLevel, "log-level", "info", "日志级别: debug/info/warn/error")
 	flag.StringVar(&logFile, "log-file", "", "日志文件路径（留空输出到 stdout）")
@@ -103,7 +104,7 @@ func main() {
 	loadTokenStats()
 	loadNodeStats()
 	initCallLog()
-	callLogEnabled = gatewayMode // 仅网关进程记录全流程日志（对齐 node_stats 语义）
+	callLogEnabled = gatewayMode || callLogFlag // 网关自动记录；独享/池成员实例子进程经 -call-log 注入后同样写盘（cwd/call_log.jsonl）
 	slog.Info("config loaded", "path", configPath)
 	globalAgg = newAggregator()
 	chatRouterVar = newChatRouter(globalAgg)
