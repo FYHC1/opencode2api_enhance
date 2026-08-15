@@ -92,11 +92,28 @@ func applyConfig(cfg AppConfig) {
 		raceBudgetMS.Store(int64(cfg.RaceBudgetMS))
 	}
 	// S5 压力系数分段阈值（>0 才覆盖，未配置保持当前值/默认）。
-	if cfg.PoolRacePressureLow > 0 {
-		poolRacePressureLow.Store(cfg.PoolRacePressureLow)
-	}
-	if cfg.PoolRacePressureHigh > 0 {
-		poolRacePressureHigh.Store(cfg.PoolRacePressureHigh)
+	// G16：分段钳制——只接受 0 < Low < High 的单调分段（.Store 原子写，G5 不受影响）；
+	// 任一侧与另一侧（含默认值）倒挂时忽略该侧并告警，避免 raceCopies 分段判定反转
+	// （压力越大副本越多，与「高压退单发」的设计意图相反）。
+	if cfg.PoolRacePressureLow > 0 && cfg.PoolRacePressureHigh > 0 {
+		if cfg.PoolRacePressureHigh > cfg.PoolRacePressureLow {
+			poolRacePressureLow.Store(cfg.PoolRacePressureLow)
+			poolRacePressureHigh.Store(cfg.PoolRacePressureHigh)
+		} else {
+			slog.Warn("pool race pressure thresholds ignored (low >= high)", "low", cfg.PoolRacePressureLow, "high", cfg.PoolRacePressureHigh)
+		}
+	} else if cfg.PoolRacePressureLow > 0 {
+		if curr := poolRacePressureHigh.Load().(float64); cfg.PoolRacePressureLow < curr {
+			poolRacePressureLow.Store(cfg.PoolRacePressureLow)
+		} else {
+			slog.Warn("pool race pressure low ignored (low >= high)", "low", cfg.PoolRacePressureLow, "high", curr)
+		}
+	} else if cfg.PoolRacePressureHigh > 0 {
+		if curr := poolRacePressureLow.Load().(float64); cfg.PoolRacePressureHigh > curr {
+			poolRacePressureHigh.Store(cfg.PoolRacePressureHigh)
+		} else {
+			slog.Warn("pool race pressure high ignored (low >= high)", "low", curr, "high", cfg.PoolRacePressureHigh)
+		}
 	}
 	// S2 429 感知（>0 才覆盖，未配置保持当前值/默认）。
 	if cfg.RateLimitCooldownSec > 0 {
@@ -126,6 +143,14 @@ func applyConfig(cfg AppConfig) {
 		socks5HealthMu.Lock()
 		socks5Health = map[string]socks5HealthState{}
 		socks5HealthMu.Unlock()
+		// G17：代理列表重建时整体重置反馈/in-flight 计数——已移除节点的
+		// 死条目常驻 map 会随节点历史缓慢增长，重建即顺带驱逐全部旧 key。
+		poolFeedbackMu.Lock()
+		poolFeedback = map[string][]poolFbSample{}
+		poolFeedbackMu.Unlock()
+		proxyInFlightMu.Lock()
+		proxyInFlight = map[string]*atomic.Int64{}
+		proxyInFlightMu.Unlock()
 	}
 
 }

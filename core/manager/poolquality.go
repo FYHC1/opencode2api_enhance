@@ -7,7 +7,9 @@
 package manager
 
 import (
+	"context"
 	"encoding/json"
+	"log/slog"
 	"math"
 	"net/http"
 	"os"
@@ -370,39 +372,53 @@ func (m *Manager) poolQualityFilePath() string {
 	return filepath.Join(m.paths.RuntimeDir, "pool_quality.json")
 }
 
+// loadPoolQuality 读取持久化质量记录（缺失/损坏容错；G21 起失败路径告警，不静默吞）。
 func (m *Manager) loadPoolQuality() []QualityRecord {
 	data, err := os.ReadFile(m.poolQualityFilePath())
 	if err != nil {
+		if !os.IsNotExist(err) {
+			slog.Warn("pool quality load failed", "path", m.poolQualityFilePath(), "error", err)
+		}
 		return nil
 	}
 	var recs []QualityRecord
-	if json.Unmarshal(data, &recs) != nil {
+	if err := json.Unmarshal(data, &recs); err != nil {
+		slog.Warn("pool quality parse failed", "path", m.poolQualityFilePath(), "error", err)
 		return nil
 	}
 	return recs
 }
 
 func (m *Manager) savePoolQuality(recs []QualityRecord) {
-	_ = os.MkdirAll(m.paths.RuntimeDir, 0o755)
+	if err := os.MkdirAll(m.paths.RuntimeDir, 0o755); err != nil {
+		slog.Warn("pool quality mkdir failed", "dir", m.paths.RuntimeDir, "error", err)
+		return
+	}
 	data, err := json.MarshalIndent(recs, "", "  ")
 	if err != nil {
+		slog.Warn("pool quality marshal failed", "error", err)
 		return
 	}
 	// G9：临时文件 + Rename 原子落盘——truncate+write 非原子，并发读写可能
 	// 读到半截 JSON；Rename 保证目标路径任一时刻都是完整旧文件或完整新文件。
 	tmp, err := os.CreateTemp(m.paths.RuntimeDir, "pool_quality-*.tmp")
 	if err != nil {
+		slog.Warn("pool quality tmp create failed", "dir", m.paths.RuntimeDir, "error", err)
 		return
 	}
 	defer os.Remove(tmp.Name()) // 失败路径清理；成功后目标已不存在，无副作用
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
+		slog.Warn("pool quality write failed", "error", err)
 		return
 	}
 	if err := tmp.Close(); err != nil {
+		slog.Warn("pool quality tmp close failed", "error", err)
 		return
 	}
-	_ = os.Rename(tmp.Name(), m.poolQualityFilePath())
+	if err := os.Rename(tmp.Name(), m.poolQualityFilePath()); err != nil {
+		slog.Warn("pool quality rename failed", "path", m.poolQualityFilePath(), "error", err)
+	}
 }
 
 // ---- 探活调度 ----
@@ -482,14 +498,25 @@ func (m *Manager) RunPoolQualityOnce(runner Runner) PoolQualitySummary {
 
 // StartPoolQualityLoop 后台链路探活循环：与 StartHealthLoop 并行。
 // 按 pool_probe_interval_sec 间隔运行；未启用或间隔 <=0 时睡 30s 重读配置。
-func (m *Manager) StartPoolQualityLoop() {
+// 返回停止函数（G22：测试/热重建可关闭 goroutine；生产启动忽略返回值）。
+func (m *Manager) StartPoolQualityLoop() (stop func()) {
+	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
 			cfg := m.loadConfig()
 			// V5: 性能模式关闭 → 不再做质量探测（路由沿用用户所选模式，不加权/熔断）；
 			// pool_probe_enabled 作为性能模式内的二级开关。
 			if !poolPerfModeEnabled(cfg) || !poolProbeEnabled(cfg) || poolProbeInterval(cfg) <= 0 {
-				time.Sleep(30 * time.Second)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(30 * time.Second):
+				}
 				continue
 			}
 			started := time.Now()
@@ -499,9 +526,14 @@ func (m *Manager) StartPoolQualityLoop() {
 			if wait < time.Second {
 				wait = time.Second
 			}
-			time.Sleep(wait)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(wait):
+			}
 		}
 	}()
+	return cancel
 }
 
 // ---- 管理 API ----

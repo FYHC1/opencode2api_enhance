@@ -179,6 +179,10 @@ var routeMode atomic.Value
 var (
 	socks5Client     *http.Client // 缓存的 SOCKS5 客户端
 	socks5ClientAddr string       // 缓存对应的代理地址
+	// G23：socks5Client 缓存的读写专用小锁——请求路径在 socks5Mu.RLock 内并发
+	// 读写缓存有写-写竞争（值等价但 -race 必报），独立锁串行化；applyConfig 的
+	// 缓存重置仍在 socks5Mu.Lock 下、不取本锁，无死锁环。
+	socks5CacheMu sync.Mutex
 )
 
 // ======================== 代理健康池 ========================
@@ -404,8 +408,11 @@ func getHTTPClientWithProxy() (*http.Client, string) {
 		}
 		useRR = true
 	} else {
-		if socks5Client != nil && socks5ClientAddr == activeSocks5 {
-			return socks5Client, activeSocks5
+		socks5CacheMu.Lock()
+		cachedClient, cachedAddr := socks5Client, socks5ClientAddr
+		socks5CacheMu.Unlock()
+		if cachedClient != nil && cachedAddr == activeSocks5 {
+			return cachedClient, activeSocks5
 		}
 		var found bool
 		for i := range socks5Proxies {
@@ -423,8 +430,10 @@ func getHTTPClientWithProxy() (*http.Client, string) {
 	client := clientForProxy(proxy)
 
 	if !useRR {
+		socks5CacheMu.Lock()
 		socks5Client = client
 		socks5ClientAddr = activeSocks5
+		socks5CacheMu.Unlock()
 	}
 	return client, proxy.Addr
 }

@@ -402,3 +402,62 @@ func TestNewFixesTransport(t *testing.T) {
 		t.Fatalf("注入的 Transport 未保持原值: %v", got)
 	}
 }
+
+// ---------------------------------------------------------------- G14：候选不等长截断
+
+// unevenRacer 返回不等长的 clients/addrs（G14 病态输入：实现违反等长约定）。
+type unevenRacer struct {
+	clients []*http.Client
+	addrs   []string
+}
+
+func (r *unevenRacer) CandidateClients(_ contract.Tier, _ bool, _ int) ([]*http.Client, []string) {
+	return r.clients, r.addrs
+}
+
+func (r *unevenRacer) Client(_ contract.Tier, _ bool) (*http.Client, string) {
+	if len(r.clients) == 0 {
+		return http.DefaultClient, ""
+	}
+	return r.clients[0], ""
+}
+
+func (r *unevenRacer) Mark(string, int, error) {}
+
+func (r *unevenRacer) HealthyNodeCount() int { return 1000 }
+
+func (r *unevenRacer) RaceStarted([]string) {}
+
+func (r *unevenRacer) RaceFinished([]string) {}
+
+// TestRaceDoUnevenCandidates G14：CandidateClients 返回 clients/addrs 不等长时，
+// raceDo 按短者截断、不越界 panic；截断后剩余候选正常完成。
+func TestRaceDoUnevenCandidates(t *testing.T) {
+	ok := `{"id":"uneven","object":"chat.completion","choices":[]}`
+	for _, tc := range []struct {
+		name    string
+		clients int
+		addrs   int
+	}{
+		{"clients-more-than-addrs", 2, 1},
+		{"addrs-more-than-clients", 1, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &unevenRacer{}
+			for i := 0; i < tc.clients; i++ {
+				r.clients = append(r.clients, &http.Client{Transport: &delayRT{body: ok}})
+			}
+			for i := 0; i < tc.addrs; i++ {
+				r.addrs = append(r.addrs, fmt.Sprintf("uneven-%d", i))
+			}
+			v := newRaceVendor(r, 2)
+			reply, err := v.Chat(context.Background(), msgWith(`{"model":"m-free","messages":[{"role":"user","content":"hi"}]}`, "m-free", "public", ""))
+			if err != nil {
+				t.Fatalf("Chat: %v", err)
+			}
+			if reply.Status != 200 {
+				t.Fatalf("status=%d, want 200", reply.Status)
+			}
+		})
+	}
+}

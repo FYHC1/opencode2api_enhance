@@ -128,7 +128,8 @@ type Racer interface {
 // RaceTracker 可选的竞速压力/在途追踪（S5——自适应竞速）：
 // Transport 实现方实现时，厂商在竞速扇出/收尾时上报候选出口地址
 // （每节点 in-flight 计数，least-in-flight 均衡），并上报健康节点规模
-// （压力系数分母）。未实现时动态副本回退固定上限、候选均衡仅按质量分。
+// （压力系数分母）。未实现时 healthy=0 → 压力系数恒为高 → 退化为单发
+// （1 副本，竞速实际被关闭），候选均衡仅按质量分。
 type RaceTracker interface {
 	// HealthyNodeCount 返回当前健康（可参与竞速）节点数；压力系数分母。
 	HealthyNodeCount() int
