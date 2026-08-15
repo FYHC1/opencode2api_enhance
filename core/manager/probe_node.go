@@ -9,8 +9,8 @@ import (
 	"time"
 )
 
-// probeNode 单节点完整探测。
-func (c *ScanController) probeNode(opts ScanOptions, node ClashNode, pair portPair, workerDir string) ProbeResult {
+// probeNode 单节点完整探测。worker 为并发 worker 索引（0 起），用于停止时登记活跃探针。
+func (c *ScanController) probeNode(worker int, opts ScanOptions, node ClashNode, pair portPair, workerDir string) ProbeResult {
 	base := ProbeResult{Node: node.Name, NodeType: node.NodeType, Server: node.Server, Port: node.Port}
 	// S1: 停止扫描响应——探测开始前若已收到停止请求，直接放弃该节点（不 spawn 探针进程）。
 	if c.isStopping() {
@@ -43,7 +43,8 @@ func (c *ScanController) probeNode(opts ScanOptions, node ClashNode, pair portPa
 	if rem := time.Until(deadline); rem < waitTimeout {
 		waitTimeout = rem
 	}
-	if err := waitForPort(pair.socks, waitTimeout); err != nil {
+	// 停止响应：waitForPort 轮询中加入中止检查，停止后不再干等至超时。
+	if err := waitForPortAbort(pair.socks, waitTimeout, c.isStopping); err != nil {
 		_ = c.runner.Kill(sbPID)
 		base.Category = singboxFailCategory(filepath.Join(workerDir, "logs", "singbox.err.log"))
 		base.Message = err.Error()
@@ -65,6 +66,10 @@ func (c *ScanController) probeNode(opts ScanOptions, node ClashNode, pair portPa
 		base.Message = err.Error()
 		return base
 	}
+	// 登记活跃探针（V1 停止中断）：两进程 spawn 成功后注册，退出时注销——覆盖所有返回路径，
+	// 避免停止时 kill 不到正在跑的探针、或扫描结束登记残留。
+	c.registerProbe(worker, sbPID, ocPID)
+	defer c.unregisterProbe(worker)
 	// 探针进程清理（防泄漏）：spawn 成功后，无论后续探测成败、任何返回路径，
 	// 退出前必杀 sing-box + opencode2api 探针进程——否则每次扫描每个节点
 	// 都会残留一对进程（任务管理器可见数十个 opencode2api/sing-box 堆积）。
@@ -79,7 +84,7 @@ func (c *ScanController) probeNode(opts ScanOptions, node ClashNode, pair portPa
 	if apiWait < 2*time.Second {
 		apiWait = 2 * time.Second
 	}
-	if err := waitForPort(pair.api, apiWait); err != nil {
+	if err := waitForPortAbort(pair.api, apiWait, c.isStopping); err != nil {
 		_ = c.runner.Kill(ocPID)
 		_ = c.runner.Kill(sbPID)
 		base.Category = "upstream"

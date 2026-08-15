@@ -59,7 +59,7 @@ func (c *ScanController) run(opts ScanOptions, nodes []ClashNode) {
 					return
 				}
 				start := time.Now()
-				res := c.probeNode(opts, nodes[i], pair, workerDir)
+				res := c.probeNode(w, opts, nodes[i], pair, workerDir)
 				res.LatencyMS = time.Since(start).Milliseconds()
 				c.mu.Lock()
 				c.progress.Results = append(c.progress.Results, res)

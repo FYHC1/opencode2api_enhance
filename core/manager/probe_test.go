@@ -75,7 +75,7 @@ func TestProbeNodeOK(t *testing.T) {
 	ctrl := NewScanController(m, run)
 	pair := portPair{api: apiPort, socks: socksPort}
 	node := ClashNode{Name: "ok-node", NodeType: "trojan", Server: "1.2.3.4", Port: 443, Password: "p"}
-	res := ctrl.probeNode(ScanOptions{TimeoutSec: 8}, node, pair, t.TempDir())
+	res := ctrl.probeNode(0, ScanOptions{TimeoutSec: 8}, node, pair, t.TempDir())
 
 	if !res.OK || res.Category != "ok" {
 		t.Fatalf("res = %+v", res)
@@ -109,7 +109,7 @@ func TestProbeNodeConfigFail(t *testing.T) {
 	m := newTestManager(t)
 	ctrl := NewScanController(m, &fakeRunner{})
 	node := ClashNode{Name: "bad", NodeType: "relay", Server: "x", Port: 1}
-	res := ctrl.probeNode(ScanOptions{TimeoutSec: 5}, node, portPair{api: 19900, socks: 29900}, t.TempDir())
+	res := ctrl.probeNode(0, ScanOptions{TimeoutSec: 5}, node, portPair{api: 19900, socks: 29900}, t.TempDir())
 	if res.Category != "config" {
 		t.Fatalf("category = %q, want config", res.Category)
 	}

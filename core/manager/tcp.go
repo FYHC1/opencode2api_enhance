@@ -128,9 +128,19 @@ func httpPostJSON(port uint16, path string, timeout time.Duration, authToken str
 
 // waitForPort 轮询探测端口可连接（每 200ms 一次，直到超时）。
 func waitForPort(port uint16, timeout time.Duration) error {
+	return waitForPortAbort(port, timeout, nil)
+}
+
+// waitForPortAbort 同 waitForPort；abort 非空时每轮先检查（返回 true → 立即中止）。
+// 扫描停止时探针进程被 Kill，探测端口不再就绪——此检查让阻塞的轮询快速退出，
+// 否则停止要干等到 waitForPort 超时（8~20s）。
+func waitForPortAbort(port uint16, timeout time.Duration, abort func() bool) error {
 	deadline := time.Now().Add(timeout)
 	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port)))
 	for {
+		if abort != nil && abort() {
+			return fmt.Errorf("已中止")
+		}
 		conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
 		if err == nil {
 			_ = conn.Close()

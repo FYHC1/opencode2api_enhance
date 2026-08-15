@@ -79,6 +79,9 @@ type ScanProgress struct {
 	StartedMS   int64         `json:"started_ms,omitempty"`
 	FinishedMS  int64         `json:"finished_ms,omitempty"`
 	Concurrency int           `json:"concurrency"`
+	// Stopping 期间统计（V2 stop-scan 悬浮窗进度）：停止时活跃探针数 / 已中断探针对数。
+	StoppingCount int `json:"stopping_count,omitempty"`
+	StoppedCount  int `json:"stopped_count,omitempty"`
 }
 
 // ScanOptions 扫描参数。
@@ -90,6 +93,12 @@ type ScanOptions struct {
 	Concurrency int      // 默认 8，上限 8
 }
 
+// probeProcs 一个 worker 当前正在探测的探针进程对（V1 停止中断用）。
+type probeProcs struct {
+	sbPID int
+	ocPID int
+}
+
 // ScanController 控制一次扫描的状态机。
 type ScanController struct {
 	m      *Manager
@@ -97,6 +106,11 @@ type ScanController struct {
 
 	mu       sync.Mutex
 	progress ScanProgress
+
+	// activeProbes 活跃探针登记：worker 索引 → 正在探测的进程对。
+	// 停止扫描时按 stop_scan_concurrency 并发上限 kill，使 probeNode 快速失败。
+	activeMu     sync.Mutex
+	activeProbes map[int]probeProcs
 }
 
 // NewScanController 构造扫描控制器。
@@ -104,7 +118,12 @@ func NewScanController(m *Manager, runner Runner) *ScanController {
 	if runner == nil {
 		runner = &realRunner{}
 	}
-	return &ScanController{m: m, runner: runner, progress: ScanProgress{Status: ScanIdle}}
+	return &ScanController{
+		m:            m,
+		runner:       runner,
+		progress:     ScanProgress{Status: ScanIdle},
+		activeProbes: map[int]probeProcs{},
+	}
 }
 
 // Snapshot 返回当前进度快照。
@@ -116,14 +135,78 @@ func (c *ScanController) Snapshot() ScanProgress {
 	return out
 }
 
-// RequestStop 请求停止（Running → Stopping）。
+// registerProbe 登记 worker 正在探测的进程对（两个探针 spawn 成功后调用）。
+func (c *ScanController) registerProbe(worker int, sbPID, ocPID int) {
+	c.activeMu.Lock()
+	defer c.activeMu.Unlock()
+	c.activeProbes[worker] = probeProcs{sbPID: sbPID, ocPID: ocPID}
+}
+
+// unregisterProbe 注销 worker 的探测登记（probeNode 任何返回路径的 defer，防残留）。
+func (c *ScanController) unregisterProbe(worker int) {
+	c.activeMu.Lock()
+	defer c.activeMu.Unlock()
+	delete(c.activeProbes, worker)
+}
+
+// RequestStop 请求停止（Running → Stopping）：置标志后并发中断正在运行的探针进程。
 func (c *ScanController) RequestStop() ScanProgress {
 	c.mu.Lock()
 	if c.progress.Status == ScanRunning {
 		c.progress.Status = ScanStopping
 	}
 	c.mu.Unlock()
+	c.interruptProbes()
 	return c.Snapshot()
+}
+
+// interruptProbes 中断活跃探针：按 stop_scan_concurrency 并发上限 kill 正在探测的进程对
+// （同时最多 kill 上限对，防一次性斩断全部 worker 的资源尖峰）；完成后清空登记。
+// 探针进程被杀 → waitForPort 中止 / freeCompletion 连接拒绝 → probeNode 快速失败返回，
+// 其 defer 再 kill 一次（幂等）并注销登记（此时登记已被清空，注销为空操作）。
+// 返回 (中断前活跃对数, 已中断对数)。
+func (c *ScanController) interruptProbes() (int, int) {
+	cfg := Config{}
+	if c.m != nil {
+		cfg = c.m.loadConfig()
+	}
+	limit := stopScanConcurrencyOf(cfg)
+	if limit < 1 {
+		limit = 1
+	}
+	c.activeMu.Lock()
+	pairs := make([]probeProcs, 0, len(c.activeProbes))
+	for _, p := range c.activeProbes {
+		pairs = append(pairs, p)
+	}
+	c.activeMu.Unlock()
+
+	// 带缓冲 channel semaphore 限流：每对探针进程的 kill 占一个并发位。
+	sem := make(chan struct{}, limit)
+	var wg sync.WaitGroup
+	for _, p := range pairs {
+		p := p
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			_ = c.runner.Kill(p.sbPID)
+			_ = c.runner.Kill(p.ocPID)
+		}()
+	}
+	wg.Wait()
+
+	// 清空登记（stop 后 probeNode 不再新登记：worker 循环每轮先查 isStopping）。
+	c.activeMu.Lock()
+	c.activeProbes = map[int]probeProcs{}
+	c.activeMu.Unlock()
+
+	c.mu.Lock()
+	c.progress.StoppingCount = len(pairs)
+	c.progress.StoppedCount = len(pairs)
+	c.mu.Unlock()
+	return len(pairs), len(pairs)
 }
 
 // Start 启动扫描（已运行则报错）。
