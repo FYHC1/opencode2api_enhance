@@ -236,6 +236,8 @@ func refreshModelCatalog() {
 		slog.Warn("model catalog refresh failed", "error", err)
 	}
 	syncModelsFromAggregator(globalAgg)
+	// 目录代际+1：请求侧 syncVendorState/seedVendorCatalog 检测到变化才重新 SetCatalog。
+	catalogGen.Add(1)
 }
 
 // syncModelsFromAggregator 把聚合目录中 opencode 厂商的模型写入 modelsCache / goModelsCache

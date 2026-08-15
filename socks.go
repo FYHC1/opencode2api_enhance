@@ -176,12 +176,20 @@ var socks5RRIndex uint32
 // G5：配置热重载原子写（applyConfig Store），请求路径无锁 Load；默认 "smart" 写于 init。
 var routeMode atomic.Value
 
+// proxyCacheKey 客户端缓存键：代理地址 + 凭据（同 addr 异凭据不串池）。
+type proxyCacheKey struct {
+	addr     string
+	username string
+	password string
+}
+
 var (
-	socks5Client     *http.Client // 缓存的 SOCKS5 客户端
-	socks5ClientAddr string       // 缓存对应的代理地址
-	// G23：socks5Client 缓存的读写专用小锁——请求路径在 socks5Mu.RLock 内并发
-	// 读写缓存有写-写竞争（值等价但 -race 必报），独立锁串行化；applyConfig 的
-	// 缓存重置仍在 socks5Mu.Lock 下、不取本锁，无死锁环。
+	// socks5ClientCache 按代理缓存的 SOCKS5 客户端（连接池复用）。
+	socks5ClientCache map[proxyCacheKey]*http.Client
+	// G23：客户端缓存的读写专用小锁——请求路径在 socks5Mu.RLock 内并发
+	// 读写缓存有写-写竞争（值等价但 -race 必报），独立锁串行化；applyConfig
+	// 的整体失效也在本锁下完成（锁序 socks5Mu → socks5CacheMu，与请求路径
+	// 同向，无反向嵌套，无死锁环）。
 	socks5CacheMu sync.Mutex
 )
 
@@ -383,7 +391,6 @@ func getHTTPClientWithProxy() (*http.Client, string) {
 	}
 
 	var proxy Socks5Proxy
-	var useRR bool
 
 	if activeSocks5 == socks5RR {
 		if len(socks5Proxies) == 0 {
@@ -406,14 +413,7 @@ func getHTTPClientWithProxy() (*http.Client, string) {
 				}
 			}
 		}
-		useRR = true
 	} else {
-		socks5CacheMu.Lock()
-		cachedClient, cachedAddr := socks5Client, socks5ClientAddr
-		socks5CacheMu.Unlock()
-		if cachedClient != nil && cachedAddr == activeSocks5 {
-			return cachedClient, activeSocks5
-		}
 		var found bool
 		for i := range socks5Proxies {
 			if socks5Proxies[i].Addr == activeSocks5 {
@@ -427,22 +427,26 @@ func getHTTPClientWithProxy() (*http.Client, string) {
 		}
 	}
 
-	client := clientForProxy(proxy)
-
-	if !useRR {
-		socks5CacheMu.Lock()
-		socks5Client = client
-		socks5ClientAddr = activeSocks5
-		socks5CacheMu.Unlock()
-	}
-	return client, proxy.Addr
+	// RR 与单发共用同一缓存：未命中构建后存入，后续请求复用连接池。
+	return clientForProxy(proxy), proxy.Addr
 }
 
-// clientForProxy 为指定代理构造 HTTP 客户端（复用一个可用池参数）。
-// 竞速（raceCandidates）与单发路径共用，保证行为一致。
+// clientForProxy 返回缓存的代理 HTTP 客户端：按地址+凭据命中直接返回，
+// 未命中构建后存入（连接池复用，避免每请求新建 Transport）。
+// 竞速（CandidateClients）与单发路径共用，保证行为一致。
+// 调用方不得原地修改返回的 client（流式去 Timeout 用浅拷贝）。
 func clientForProxy(proxy Socks5Proxy) *http.Client {
+	key := proxyCacheKey{addr: proxy.Addr, username: proxy.Username, password: proxy.Password}
+	socks5CacheMu.Lock()
+	defer socks5CacheMu.Unlock()
+	if socks5ClientCache == nil {
+		socks5ClientCache = map[proxyCacheKey]*http.Client{}
+	}
+	if c, ok := socks5ClientCache[key]; ok {
+		return c
+	}
 	dial := socks5Dial(proxy)
-	return &http.Client{
+	client := &http.Client{
 		Timeout: 300 * time.Second,
 		Transport: &http.Transport{
 			DialContext:         dial,
@@ -451,6 +455,8 @@ func clientForProxy(proxy Socks5Proxy) *http.Client {
 			IdleConnTimeout:     90 * time.Second,
 		},
 	}
+	socks5ClientCache[key] = client
+	return client
 }
 
 func getHTTPClient() *http.Client {

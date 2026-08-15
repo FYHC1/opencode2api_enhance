@@ -57,8 +57,7 @@ func installCancelRecorderClient(t *testing.T, tr http.RoundTripper) *cancelReco
 	oldModelsCache := modelsCache
 	oldGoModelsCache := goModelsCache
 	oldActiveSocks5 := activeSocks5
-	oldSocks5Client := socks5Client
-	oldSocks5ClientAddr := socks5ClientAddr
+	oldSocks5ClientCache := socks5ClientCache
 
 	if tr != nil {
 		httpClient = &http.Client{Transport: tr}
@@ -72,9 +71,10 @@ func installCancelRecorderClient(t *testing.T, tr http.RoundTripper) *cancelReco
 	modelMu.Unlock()
 	socks5Mu.Lock()
 	activeSocks5 = ""
-	socks5Client = nil
-	socks5ClientAddr = ""
 	socks5Mu.Unlock()
+	socks5CacheMu.Lock()
+	socks5ClientCache = map[proxyCacheKey]*http.Client{}
+	socks5CacheMu.Unlock()
 
 	mainCodeVendor().SetSession("test-version", "ses_cancel", "proj_cancel")
 
@@ -86,9 +86,10 @@ func installCancelRecorderClient(t *testing.T, tr http.RoundTripper) *cancelReco
 		modelMu.Unlock()
 		socks5Mu.Lock()
 		activeSocks5 = oldActiveSocks5
-		socks5Client = oldSocks5Client
-		socks5ClientAddr = oldSocks5ClientAddr
 		socks5Mu.Unlock()
+		socks5CacheMu.Lock()
+		socks5ClientCache = oldSocks5ClientCache
+		socks5CacheMu.Unlock()
 	})
 	return rt
 }

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"log/slog"
+	"net/http"
 	"os"
 	"sync/atomic"
 	"time"
@@ -134,8 +135,10 @@ func applyConfig(cfg AppConfig) {
 	}
 	if activeSocks5 != cfg.ActiveSocks5 || proxiesChanged {
 		activeSocks5 = cfg.ActiveSocks5
-		socks5Client = nil
-		socks5ClientAddr = ""
+		// 代理配置变化：清空整个客户端缓存（下一请求按新配置重建）。
+		socks5CacheMu.Lock()
+		socks5ClientCache = map[proxyCacheKey]*http.Client{}
+		socks5CacheMu.Unlock()
 		atomic.StoreUint32(&socks5RRIndex, 0)
 	}
 	socks5Mu.Unlock()
