@@ -16,8 +16,8 @@
 | H4 | StopInstance 全局锁内 Kill + 全量落盘 | 高 | CONC-4 | ✅ `cd29df7` |
 | H5 | windsurf 账号可被并发借用 | 高 | CONC-6 | ⬜ |
 | H6 | 订阅导入端口记账偏移 `+10000`（应 `+2000`） | 高 | CONC-4 | ✅ `cd29df7` |
-| M1 | 网关 Status「未运行则拉起」check-then-act 竞态 | 中 | CONC-5 | ⬜ |
-| M2 | refreshModels 无锁读 g.password（数据竞态） | 中 | CONC-5 | ⬜ |
+| M1 | 网关 Status「未运行则拉起」check-then-act 竞态 | 中 | CONC-5 | ✅ `43f1c9c` |
+| M2 | refreshModels 无锁读 g.password（数据竞态） | 中 | CONC-5 | ✅ `43f1c9c` |
 | M3 | 模型目录/上游目录多源串行拉取 | 中 | CONC-7 | ⬜ |
 | M4 | 调用日志锁内磁盘 IO + 文件永不轮转 + 整文件读 | 中 | CONC-3（写侧 ✅ `ae22129`）/CONC-8（读侧） | 🔄 写侧完成，读侧待 |
 | M5 | 健康巡检串行探测 + 双轮无互斥 + 旧快照重启 | 中 | CONC-7 | ⬜ |
