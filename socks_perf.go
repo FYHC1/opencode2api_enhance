@@ -276,6 +276,7 @@ type poolBreaker struct {
 	failures  int
 	openUntil time.Time // 熔断到期；now >= openUntil 且未消费半开放行时放行 1 个
 	probeUsed bool      // 半开放行是否已消费
+	tripped   bool      // 是否已跳闸（open 置 true；成功恢复置 false；G33 阈值热重载兼容）
 }
 
 var (
@@ -359,6 +360,7 @@ func applyPoolResult(addr string, status int, requestErr error) {
 			b.failures = 0
 			b.openUntil = time.Time{}
 			b.probeUsed = false
+			b.tripped = false
 		}
 		return
 	}
@@ -368,11 +370,14 @@ func applyPoolResult(addr string, status int, requestErr error) {
 		poolBreakers[addr] = b
 	}
 	b.failures++
-	// G8：只在 close→open 跳变（failures 恰好达到阈值）或半开探测失败
-	// （probeUsed 已消费，需重新计时）时重推 openUntil；跳闸后在途失败
-	// 只累计计数，不再把半开恢复窗口向后顺延。
+	// G8：只在 close→open 跳变或半开探测失败（probeUsed 已消费，需重新计时）
+	// 时重推 openUntil；跳闸后在途失败只累计计数，不再把半开恢复窗口向后顺延。
+	// G33：显式 tripped 替代 ==threshold 精确相等——阈值热重载（G5）后跳变判定
+	// 仍成立：未跳闸时 failures 达到当前阈值即跳闸（调低越过 failures 也能触发）；
+	// 半开探测失败无条件重推（调高越过 failures 也不被新阈值钳制、不永久剔除）。
 	threshold := int(poolBreakerThreshold.Load())
-	if b.failures == threshold || (b.probeUsed && b.failures >= threshold) {
+	if (b.failures >= threshold && !b.tripped) || b.probeUsed {
+		b.tripped = true
 		b.openUntil = time.Now().Add(time.Duration(poolHalfOpenIntervalSec.Load()) * time.Second)
 		b.probeUsed = false
 		slog.Warn("pool breaker opened", "addr", addr, "failures", b.failures)

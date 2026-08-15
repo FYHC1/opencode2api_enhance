@@ -230,7 +230,11 @@ func (v *Vendor) call(ctx context.Context, msg *contract.Message, streaming bool
 			resp, err = client.Do(up)
 		}
 		if err != nil {
-			tr.Mark(proxyAddr, 0, err)
+			// G32：客户端断开（ctx.Canceled）不是节点链路失败——all-fail 竞速返回的
+			// Canceled 连带真实 addr 在此会被误标冷却/熔断，统一排除；真实网络错误仍标记。
+			if !errors.Is(err, context.Canceled) {
+				tr.Mark(proxyAddr, 0, err)
+			}
 			lastErr = err
 			retryCount++
 			continue
