@@ -19,7 +19,7 @@
 | M1 | 网关 Status「未运行则拉起」check-then-act 竞态 | 中 | CONC-5 | ✅ `43f1c9c` |
 | M2 | refreshModels 无锁读 g.password（数据竞态） | 中 | CONC-5 | ✅ `43f1c9c` |
 | M3 | 模型目录/上游目录多源串行拉取 | 中 | CONC-7 | ✅ `8be36ef` |
-| M4 | 调用日志锁内磁盘 IO + 文件永不轮转 + 整文件读 | 中 | CONC-3（写侧 ✅ `ae22129`）/CONC-8（读侧） | 🔄 写侧完成，读侧待 |
+| M4 | 调用日志锁内磁盘 IO + 文件永不轮转 + 整文件读 | 中 | CONC-3（写侧 ✅ `ae22129`）/CONC-8（读侧 ✅ `4b95e17`） | ✅ 全部完成 |
 | M5 | 健康巡检串行探测 + 双轮无互斥 + 旧快照重启 | 中 | CONC-7 | ✅ `8be36ef` |
 | M6 | 自动订阅整轮串行 + 等待间隔取最短源 | 中 | CONC-7 | ✅ `8be36ef` |
 | M7 | 订阅缓存 load-modify-write 无锁并发覆盖 | 中 | CONC-4 | ✅ `cd29df7` |
@@ -35,7 +35,7 @@
 | L6 | SSE/流无并发连接上限 | 低 | CONC-10 | ⬜ |
 | L7 | probe 单节点预算超支（GET/POST 各自拿预算） | 低 | CONC-10 | ⬜ |
 | L8 | probe run() defer 吞掉 ScanError | 低 | CONC-10 | ⬜ |
-| L9 | 管理端统计串行 IO（AggregateStats/ResetStats） | 低 | CONC-8 | ⬜ |
+| L9 | 管理端统计串行 IO（AggregateStats/ResetStats） | 低 | CONC-8 | ✅ `4b95e17`（另修 ResetStats 6ns→6s 超时笔误） |
 | L10 | SettingsPage effect 依赖 [toast] 重发请求/覆盖表单 | 低 | CONC-9 | ⬜ |
 | 前端杂项 | toast timer 互相覆盖 / 收起 timer 无限重置 / dismissedRef 压制新一轮 / 退出无防重入 | 低 | CONC-9 | ⬜ |
 
