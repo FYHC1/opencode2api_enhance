@@ -214,8 +214,9 @@ export default function NodesPage({
         // 杜绝闪烁；停止请求后也不回填 scan（进度条立即消失、无 5/10 残留）。
         // V2: 顺带同步全局任务悬浮窗的 scan / stop-scan 进度。
         if (phaseRef.current === 'stopping') {
-          // 已请求停止：等后端确认 done（停止完成）才回 idle；期间持续上报停止进度
-          if (p.status === 'done') {
+          // 已请求停止：等后端确认终止（done/error/idle 等价收尾）才回 idle；期间持续上报停止进度
+          // M11: error/idle 与 done 同等收敛——停止被中止或状态回落时不再永久 busy
+          if (p.status === 'done' || p.status === 'error' || p.status === 'idle') {
             setScanPhase('idle')
             onTask({ id: 'stop-scan', type: 'stop-scan', title: '停止扫描', done: p.stopped_count ?? 0, total: p.stopping_count ?? 0, busy: false })
           } else {
@@ -237,7 +238,9 @@ export default function NodesPage({
             onRemove('scan')
             onTask({ id: 'stop-scan', type: 'stop-scan', title: '停止扫描', done: p.stopped_count ?? 0, total: p.stopping_count ?? 0, busy: true })
           } else {
+            // M11: scanning 遇 error/idle——扫描中止或未真正开始：收尾 scan 任务（同 done 分支），回 idle
             setScanPhase('idle')
+            onTask({ id: 'scan', type: 'scan', title: '扫描节点', done: p.total ?? 0, total: p.total ?? 0, busy: false })
           }
         } else if (p.status === 'running') {
           // idle：页面加载/刷新后恢复真实后端状态（可能在扫或已停）

@@ -86,11 +86,16 @@ export default function StatsPage({
   const [dayTrend, setDayTrend] = useState<DayTrendPoint[]>([])
   // G29: 按天请求序号——快速切换日期时过期响应丢弃，防止数据串日期
   const dayReqSeq = useRef(0)
+  // M9: 轮询代次守卫——load/loadDates 各记一代，响应后比对，过期响应丢弃（不叠加、旧快照不覆盖新状态）
+  const loadGen = useRef(0)
+  const datesGen = useRef(0)
 
   // 提取调用日志中出现过的日期（新→旧）供按天筛选，同时聚合迷你条图数据
   const loadDates = useCallback(async () => {
+    const gen = ++datesGen.current
     try {
       const recs = await api.getCallLog(5000)
+      if (gen !== datesGen.current) return
       const s = new Set<string>()
       const bySrc = new Map<string, { ok: number; fail: number }>()
       const byDay = new Map<string, { total: number; ok: number }>()
@@ -126,6 +131,7 @@ export default function StatsPage({
           .slice(0, TREND_DAYS),
       )
     } catch {
+      if (gen !== datesGen.current) return
       /* 忽略：无日志时日期为空，迷你条图置空 */
       // G28: 一并清空日期——拉取失败时不残留陈旧日期/按天选择
       setDates([])
@@ -171,11 +177,14 @@ export default function StatsPage({
 
   const load = useCallback(
     async (silent = true) => {
+      const gen = ++loadGen.current
       try {
         const s = await api.getStats()
+        if (gen !== loadGen.current) return
         setStats(s)
         setError(null)
       } catch (e) {
+        if (gen !== loadGen.current) return
         if (!silent) toastRef.current(String(e), false)
         else setError(String(e))
       }

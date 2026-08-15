@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
 import { Copy, Loader2, Power, RefreshCw, ShieldCheck, Network, Search, Play, Square, TestTube2, Trash2, KeyRound, Pencil, Check, X, Activity, Settings2, ChevronDown } from 'lucide-react'
 import { api, type GatewayStatus, type Instance, type TestResult, type PoolQualitySummary, type PoolQualityRecord, type PoolQualityLevel } from '../lib/api'
@@ -11,7 +11,8 @@ function statusBadge(st: Instance['status']): [string, string] {
   return ['bg-zinc-100 text-zinc-500', '未知']
 }
 
-export default function PoolPage({
+// M10: memo 包裹——props（toast/onRelease/onTask 已稳定化）引用不变，App 任务面板变化不重渲染本页大表格
+export default memo(function PoolPage({
   toast,
   onRelease,
   onTask,
@@ -92,6 +93,8 @@ export default function PoolPage({
   // G25: 释放收尾 timer 句柄 + 代次——快速连续释放时旧 timer 不误关新任务
   const releaseFinishTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const releaseGen = useRef(0)
+  // 杂项: 释放防重入——releaseAllBusy 是异步 state，连点两下会在生效前二次进入
+  const releaseAllGuard = useRef(false)
 
   // 池成员 = 已入池（join_gateway=true）的实例；支持前端搜索（名称/节点/IP/端口）+ 状态筛选
   // G30: poolMembers = 未过滤的真成员全集，members = 筛选后可见集——空态区分「真为空」与「筛选无匹配」
@@ -117,9 +120,13 @@ export default function PoolPage({
   const qualityByName = new Map<string, PoolQualityRecord>()
   if (quality) for (const r of quality.records) qualityByName.set(r.name, r)
 
+  // M9: 轮询代次守卫——load 开始记代，响应后比对，过期响应丢弃（慢响应不叠加、旧快照不覆盖新状态）
+  const loadGen = useRef(0)
   const load = useCallback(async () => {
+    const gen = ++loadGen.current
     try {
       const [g, ins, q] = await Promise.all([api.gatewayStatus(), api.listInstances(), api.poolQuality()])
+      if (gen !== loadGen.current) return
       setGw(g)
       setInstances(ins)
       setQuality(q)
@@ -394,6 +401,8 @@ export default function PoolPage({
   const [releaseMode, setReleaseMode] = useState<'all' | 'running' | null>(null)
   // 批量释放池成员：按所选模式（完全/仅运行中）分块并发删除 + 实时上报进度
   const doReleaseAll = async (mode: 'all' | 'running') => {
+    // 防重入：连点两下不并发两组释放循环（releaseAllBusy 是异步 state）
+    if (releaseAllGuard.current) return
     // T2: 仅作用于勾选集
     const base = members.filter((i) => poolSelected.has(i.name))
     const targets = mode === 'running' ? base.filter((i) => i.status === 'Running') : base
@@ -406,6 +415,7 @@ export default function PoolPage({
     // G25: 新一轮释放开始——作废旧收尾 timer，代次 +1（收尾回调比对代次，不误关新任务）
     if (releaseFinishTimer.current) clearTimeout(releaseFinishTimer.current)
     const releaseGenThis = ++releaseGen.current
+    releaseAllGuard.current = true
     setReleaseAllBusy(true)
     onRelease({ active: true, done: 0, total: names.length })
     try {
@@ -434,6 +444,7 @@ export default function PoolPage({
       toast(String(e), false)
     } finally {
       setReleaseAllBusy(false)
+      releaseAllGuard.current = false
       // G25: 面板短暂显示"已完成"后自动消失——仅当没有新一轮释放（同代次）时收尾
       releaseFinishTimer.current = setTimeout(() => {
         if (releaseGenThis === releaseGen.current) onRelease({ active: false, done: 0, total: 0 })
@@ -1296,7 +1307,7 @@ export default function PoolPage({
       )}
     </div>
   )
-}
+})
 
 /** 测试结果徽章：✓ 通过+延迟+详情 / ✗ 失败+原因（无结果返回 null 不占位） */
 /** 链路质量徽标（P1 探活评分）：质量分 + 等级 + 平均延迟（无记录显示"未探测"） */

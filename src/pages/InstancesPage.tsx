@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
 import { RefreshCw, Play, Square, Trash2, TestTube2, Copy, Loader2, Search, Server, Activity, Settings2, ChevronDown, X } from 'lucide-react'
 import { api, type Instance, type TestResult, type PoolQualityRecord, type PoolQualityLevel } from '../lib/api'
@@ -38,7 +38,8 @@ function statusBadge(st: Instance['status']): [string, string] {
   return ['bg-zinc-100 text-zinc-500', '未知']
 }
 
-export default function InstancesPage({
+// M10: memo 包裹——props（toast 稳定化后）引用不变，App 因任务面板 tasks 变化的重渲染不波及本页大表格
+export default memo(function InstancesPage({
   toast,
 }: {
   toast: (msg: string, ok?: boolean) => void
@@ -68,13 +69,18 @@ export default function InstancesPage({
   const toastRef = useRef(toast)
   toastRef.current = toast
 
+  // M9: 轮询代次守卫——load 开始记代，响应后比对，过期响应丢弃（慢响应不叠加、旧快照不覆盖新状态）
+  const loadGen = useRef(0)
   const load = useCallback(async (silent = true) => {
+    const gen = ++loadGen.current
     try {
       const [ins, q, c] = await Promise.all([api.listInstances(), api.poolQuality(), api.configGet()])
+      if (gen !== loadGen.current) return
       setInstances(ins)
       setQuality(q.records ?? null)
       setProbeSolo(c.probe_solo_enabled)
     } catch (e) {
+      if (gen !== loadGen.current) return
       if (!silent) toastRef.current(String(e), false)
     }
   }, [])
@@ -145,6 +151,8 @@ export default function InstancesPage({
   // 每批返回后更新列表并累计进度，全部完成后按钮文字恢复「刷新」
   const CHECK_BATCH = 5
   const doRefresh = async () => {
+    // M9: 手动深度校正开始即作废在途轮询响应（避免校正后的旧快照回退覆盖）
+    loadGen.current++
     // 本页只管理独享实例（池成员在实例池页管理），刷新只校正独享
     const names = instances.filter((i) => !i.join_gateway).map((i) => i.name)
     const total = names.length
@@ -173,6 +181,8 @@ export default function InstancesPage({
     } catch (e) {
       toast(String(e), false)
     } finally {
+      // M9: 校正完成再作废一次在途轮询响应（刷新期间启动的轮询不覆盖已校正的合并结果）
+      loadGen.current++
       setRefreshing(false)
       setRefreshProgress(null)
     }
@@ -658,7 +668,7 @@ if (kind === 'delete' && !confirm(`确定释放选中的 ${names.length} 个实�
 
     </div>
   )
-}
+})
 
 /** 测试结果徽章：✓ 通过+延迟+详情 / ✗ 失败+原因（无结果返回 null 不占位） */
 function testBadge(r?: TestResult) {
