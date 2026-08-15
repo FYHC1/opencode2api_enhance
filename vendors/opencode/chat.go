@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -212,12 +213,13 @@ func (v *Vendor) call(ctx context.Context, msg *contract.Message, streaming bool
 		}
 		tr := v.transport()
 		// P2b 请求级竞速：首轮并行扇出 N 个候选，首个 2xx（流式 = 首个 chunk 到达）胜出。
+		// G1：付费层（TierPaid）跳过竞速直接走单发（与单发路径一致，付费 token 不走代理池扇出）。
 		racer, hasRacer := tr.(contract.Racer)
 		var client *http.Client
 		var resp *http.Response
 		var proxyAddr string
-		if retryCount == 0 && hasRacer && v.raceCopies() > 1 && !v.inRateLimitCooldown() {
-			resp, proxyAddr, err = v.raceDo(ctx, racer, up, streaming, v.raceCopies())
+		if retryCount == 0 && a.tier() == contract.TierFree && hasRacer && v.raceCopies() > 1 && !v.inRateLimitCooldown() {
+			resp, proxyAddr, err = v.raceDo(ctx, racer, up, streaming, a.tier(), v.raceCopies(), tr.Mark)
 			if err == nil && resp == nil {
 				// 竞速无候选：退化普通单发。
 				client, proxyAddr = tr.Client(a.tier(), streaming)
@@ -425,11 +427,30 @@ type raceOutcome struct {
 	idx  int // 候选下标：赢家锁流后只取消其它候选，保留赢家流
 }
 
+// raceMarkOutcome 上报单个落选候选的最终结果（G6）：真实失败（非 2xx / 传输错误）才记；
+// 赢家与全败时返回给调用方的候选不上报（由 call 统一标记，避免重复）；
+// 被本竞速取消（ctx 已取消）的候选不算失败——它可能只是较慢的健康节点，误记会污染池健康。
+func raceMarkOutcome(mark func(string, int, error), o raceOutcome) {
+	if o.err == nil && o.resp != nil && o.resp.StatusCode >= 200 && o.resp.StatusCode < 300 {
+		return
+	}
+	if o.err != nil && errors.Is(o.err, context.Canceled) {
+		return
+	}
+	status := 0
+	if o.resp != nil {
+		status = o.resp.StatusCode
+	}
+	mark(o.addr, status, o.err)
+}
+
 // raceDo 请求级竞速：并行扇出至多 copies 个候选出口，首个 2xx（流式 = 首个 chunk 到达）胜出，其余取消。
 // 整体受 raceBudget 约束：到期（如候选全部挂起）返回非 nil 错误，调用方走单发续写。
 // 返回（nil, "", nil）表示无候选——调用方应退化普通单发。
-func (v *Vendor) raceDo(ctx context.Context, racer contract.Racer, req *http.Request, streaming bool, copies int) (*http.Response, string, error) {
-	clients, addrs := racer.CandidateClients(contract.TierFree, streaming, copies)
+// tier 透传给 CandidateClients（G1：付费层直连，不进入代理池竞速）。
+// mark 上报落选候选的失败结果（G6：池健康/冷却可见；赢家与全败返回的候选由 call 统一标记，避免重复）。
+func (v *Vendor) raceDo(ctx context.Context, racer contract.Racer, req *http.Request, streaming bool, tier contract.Tier, copies int, mark func(string, int, error)) (*http.Response, string, error) {
+	clients, addrs := racer.CandidateClients(tier, streaming, copies)
 	if len(clients) == 0 {
 		return nil, "", nil
 	}
@@ -547,32 +568,47 @@ func (v *Vendor) raceDo(ctx context.Context, racer contract.Racer, req *http.Req
 						cancels[j]()
 					}
 				}
-				go raceDrain(&wg, results)
+				// G6：赢家锁流前已落定的首个失败此时确认落选，补报（赢家由 call 统一标记）。
+				if firstFail != nil {
+					raceMarkOutcome(mark, *firstFail)
+				}
+				go raceDrain(&wg, results, mark)
 				return o.resp, o.addr, nil
 			}
 			f := o
 			if firstFail == nil {
+				// 首个失败暂缓上报：全败时它是返回给调用方的候选（由 call 标记）。
 				firstFail = &f
+			} else {
+				// G6：后续失败候选必为落选，立即上报池健康。
+				raceMarkOutcome(mark, o)
 			}
 			if atomic.AddInt32(&done, 1) == int32(len(clients)) {
 				cancelAll()
-				go raceDrain(&wg, results)
+				// 全败逐个上报：首个失败返回给 call()（由其统一标记），
+				// 其余候选已在循环中上报；raceDrain 收尾通道余量。
+				go raceDrain(&wg, results, mark)
 				if firstFail.err != nil {
-					return nil, "", firstFail.err
+					return nil, firstFail.addr, firstFail.err
 				}
 				return firstFail.resp, firstFail.addr, nil
 			}
 		case <-timer.C:
 			// 预算到期：即使候选全挂也快速失败返回错误（不无限悬着）。
 			cancelAll()
-			go raceDrain(&wg, results)
+			// G6：预算前已落定的失败补报（无返回候选，全部算落选）。
+			if firstFail != nil {
+				raceMarkOutcome(mark, *firstFail)
+			}
+			go raceDrain(&wg, results, mark)
 			return nil, "", fmt.Errorf("race budget exceeded")
 		}
 	}
 }
 
-// raceDrain 竞速收尾：等所有候选 goroutine 退出后关闭落选响应的 Body（防连接泄漏）。
-func raceDrain(wg *sync.WaitGroup, results chan raceOutcome) {
+// raceDrain 竞速收尾：等所有候选 goroutine 退出后关闭落选响应的 Body（防连接泄漏），
+// 并把余下落选候选的失败结果上报池健康（G6；主循环已上报的不在此列）。
+func raceDrain(wg *sync.WaitGroup, results chan raceOutcome, mark func(string, int, error)) {
 	wg.Wait()
 	for {
 		select {
@@ -580,6 +616,7 @@ func raceDrain(wg *sync.WaitGroup, results chan raceOutcome) {
 			if o.resp != nil {
 				o.resp.Body.Close()
 			}
+			raceMarkOutcome(mark, o)
 		default:
 			return
 		}

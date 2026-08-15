@@ -327,7 +327,7 @@ func TestRaceDoBudgetExpiryFastFail(t *testing.T) {
 		t.Fatal(err)
 	}
 	start := time.Now()
-	resp, addr, err := v.raceDo(context.Background(), tr, req, false, 2)
+	resp, addr, err := v.raceDo(context.Background(), tr, req, false, contract.TierFree, 2, tr.Mark)
 	elapsed := time.Since(start)
 	if err == nil || !strings.Contains(err.Error(), "race budget") {
 		t.Fatalf("err=%v, want race budget exceeded", err)
@@ -409,7 +409,7 @@ func TestRaceDoStreamFirstByteTimeout(t *testing.T) {
 
 	req, _ := http.NewRequest("POST", "https://opencode.ai/zen/v1/chat/completions", strings.NewReader(`{}`))
 	start := time.Now()
-	resp, addr, err := v.raceDo(context.Background(), tr, req, true, 2)
+	resp, addr, err := v.raceDo(context.Background(), tr, req, true, contract.TierFree, 2, tr.Mark)
 	elapsed := time.Since(start)
 	if err == nil {
 		t.Fatalf("want timeout error, got resp=%v addr=%s", resp, addr)
