@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useState, type ReactNode } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import clsx from 'clsx'
 import { BarChart3, ChevronDown, ChevronRight, RefreshCw, RotateCcw, Inbox, CalendarDays, Loader2 } from 'lucide-react'
 import { api, type StatsSummary, type DayStats } from '../lib/api'
@@ -84,6 +84,8 @@ export default function StatsPage({
   // 迷你条图数据（来自调用日志聚合）：每来源成功/失败、按天请求量/成功率
   const [insOkFail, setInsOkFail] = useState<Record<string, { ok: number; fail: number }>>({})
   const [dayTrend, setDayTrend] = useState<DayTrendPoint[]>([])
+  // G29: 按天请求序号——快速切换日期时过期响应丢弃，防止数据串日期
+  const dayReqSeq = useRef(0)
 
   // 提取调用日志中出现过的日期（新→旧）供按天筛选，同时聚合迷你条图数据
   const loadDates = useCallback(async () => {
@@ -125,6 +127,8 @@ export default function StatsPage({
       )
     } catch {
       /* 忽略：无日志时日期为空，迷你条图置空 */
+      // G28: 一并清空日期——拉取失败时不残留陈旧日期/按天选择
+      setDates([])
       setInsOkFail({})
       setDayTrend([])
     }
@@ -133,19 +137,37 @@ export default function StatsPage({
   // 选择日期 → 拉取当日聚合；切回全部 → 恢复累计视图
   const doSelectDay = async (d: string) => {
     setDay(d)
+    // G29: 每个选择（含切回全部）都推进序号——在途旧响应落地时比对序号，过期丢弃
+    const seq = ++dayReqSeq.current
     if (!d) {
       setDayStats(null)
       return
     }
     setDayBusy(true)
     try {
-      setDayStats(await api.statsByDay(d))
+      const s = await api.statsByDay(d)
+      if (seq !== dayReqSeq.current) return
+      setDayStats(s)
     } catch (e) {
+      if (seq !== dayReqSeq.current) return
       toast(String(e), false)
     } finally {
-      setDayBusy(false)
+      if (seq === dayReqSeq.current) setDayBusy(false)
     }
   }
+
+  // G27: dates 收窄后过期的按天选择自动复位（同时作废在途按天请求，防过期响应落库）
+  useEffect(() => {
+    if (day && !dates.includes(day)) {
+      dayReqSeq.current++
+      setDay('')
+      setDayStats(null)
+    }
+  }, [dates, day])
+
+  // G31: toast 用 ref 封装（App 的 showToast 每次渲染重建）——load 依赖不含 toast，轮询定时器不因 toast 重启
+  const toastRef = useRef(toast)
+  toastRef.current = toast
 
   const load = useCallback(
     async (silent = true) => {
@@ -154,18 +176,21 @@ export default function StatsPage({
         setStats(s)
         setError(null)
       } catch (e) {
-        if (!silent) toast(String(e), false)
+        if (!silent) toastRef.current(String(e), false)
         else setError(String(e))
       }
     },
-    [toast],
+    [],
   )
 
-  // 自动轮询（静默，5s）
+  // 自动轮询（静默，5s）：token 卡与迷你条/趋势/日期一并刷新（G28）
   useEffect(() => {
     void load()
     void loadDates()
-    const t = setInterval(() => void load(true), 5000)
+    const t = setInterval(() => {
+      void load(true)
+      void loadDates()
+    }, 5000)
     return () => clearInterval(t)
   }, [load, loadDates])
 

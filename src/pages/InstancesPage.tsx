@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
 import { RefreshCw, Play, Square, Trash2, TestTube2, Copy, Loader2, Search, Server, Activity, Settings2, ChevronDown, X } from 'lucide-react'
 import { api, type Instance, type TestResult, type PoolQualityRecord, type PoolQualityLevel } from '../lib/api'
@@ -64,6 +64,10 @@ export default function InstancesPage({
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [openSections, setOpenSections] = useState<{ ui: boolean }>({ ui: false })
 
+  // G31: toast 用 ref 封装（App 的 showToast 每次渲染重建）——load 依赖不含 toast，轮询定时器不因 toast 重启
+  const toastRef = useRef(toast)
+  toastRef.current = toast
+
   const load = useCallback(async (silent = true) => {
     try {
       const [ins, q, c] = await Promise.all([api.listInstances(), api.poolQuality(), api.configGet()])
@@ -71,9 +75,9 @@ export default function InstancesPage({
       setQuality(q.records ?? null)
       setProbeSolo(c.probe_solo_enabled)
     } catch (e) {
-      if (!silent) toast(String(e), false)
+      if (!silent) toastRef.current(String(e), false)
     }
-  }, [toast])
+  }, [])
 
   // 独享实例探测开关（V4）：控制是否对独享实例做链路质量检查
   const doToggleProbeSolo = async () => {
