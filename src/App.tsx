@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
 import { invoke } from '@tauri-apps/api/core'
-import { Server, Layers, Radar, Settings, BarChart3, ScrollText, LogOut, X } from 'lucide-react'
+import { Server, Layers, Radar, Settings, BarChart3, ScrollText, LogOut } from 'lucide-react'
 import { api } from './lib/api'
 import { TitleBar } from './components/TitleBar'
+import TaskPanel from './components/TaskPanel'
 import InstancesPage from './pages/InstancesPage'
 import PoolPage from './pages/PoolPage'
 import NodesPage from './pages/NodesPage'
@@ -22,10 +23,10 @@ const NAV: { id: Tab; label: string; icon: typeof Server }[] = [
   { id: 'settings', label: '设置', icon: Settings },
 ]
 
-// V2: 全局任务悬浮栈——任务类型（决定进度条颜色）与任务项
-type TaskType = 'release' | 'scan' | 'stop-scan' | 'restart' | 'batch'
+// V2: 全局任务悬浮栈——任务类型（决定进度条颜色）与任务项（TaskPanel 组件复用类型）
+export type TaskType = 'release' | 'scan' | 'stop-scan' | 'restart' | 'batch'
 
-type TaskItem = {
+export type TaskItem = {
   id: string
   type: TaskType
   title: string
@@ -45,22 +46,6 @@ const SCAN_STALE_BASE_MS = 60_000
 const SCAN_STALE_PER_NODE_MS = 5_000
 const scanStaleMs = (total: number) => Math.min(600_000, SCAN_STALE_BASE_MS + total * SCAN_STALE_PER_NODE_MS)
 
-const TASK_COLORS: Record<TaskType, string> = {
-  release: 'bg-red-500',
-  'stop-scan': 'bg-amber-500',
-  restart: 'bg-amber-500',
-  scan: 'bg-teal-500',
-  batch: 'bg-teal-500',
-}
-
-const TASK_TEXT: Record<TaskType, string> = {
-  release: '正在释放，不影响你继续操作…',
-  scan: '正在扫描，不影响你继续操作…',
-  'stop-scan': '正在停止，不影响你继续操作…',
-  restart: '正在重启实例池…',
-  batch: '正在处理，不影响你继续操作…',
-}
-
 export default function App() {
   const [tab, setTab] = useState<Tab>('instances')
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null)
@@ -70,86 +55,116 @@ export default function App() {
   const [exitOpen, setExitOpen] = useState(false)
   const [exiting, setExiting] = useState(false)
 
-  const showToast = (msg: string, ok = true) => {
+  // 任务镜像 ref：供超时兜底 interval 离线判断（避免在 setTasks 更新器里做副作用）
+  const tasksRef = useRef<TaskItem[]>([])
+  useEffect(() => {
+    tasksRef.current = tasks
+  }, [tasks])
+
+  // 杂项: toast 单 timer——新提示先清旧句柄再排，连续两条时早先的 timer 不会提前清掉后面的
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // M10: showToast 稳定化（内部只依赖 ref/函数式 setState）——页面组件引用不变，配合 memo 隔离重渲染
+  const showToast = useCallback((msg: string, ok = true) => {
     setToast({ msg, ok })
-    setTimeout(() => setToast(null), 3600)
-  }
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+    toastTimerRef.current = setTimeout(() => setToast(null), 3600)
+  }, [])
 
-  // V2: 任务操作——upsertTask 按 id 新增/更新（同 id 覆盖，异 id 并存堆叠）；
-  // removeTask 收尾移除（完成自动收起/停止过渡取代）；clearTask 完成/失败自动收起重置（短暂保留完成态后移除）。
-  // G10: ✕ 关闭（后台继续）语义——dismissedRef 记忆已关闭的 id，busy 期间 upsert 被过滤（防 poll 秒速加回）；
-  // 收到该 id 非 busy 收尾上报或收尾移除时清除记忆（完成态短暂显示后收起，同 id 下一轮新任务不受影响）。
-  const dismissedRef = useRef<Set<string>>(new Set())
+  // V2/G10/L10: 任务操作——upsertTask 按 id 新增/更新（同 id 覆盖，异 id 并存堆叠）；removeTask 收尾移除。
+  // ✕ 关闭（后台继续）：dismissedRef 记忆「id → 轮次令牌」，仅同轮 busy 上报被过滤（防 poll 秒速加回）；
+  // 收尾上报/移除即本轮结束（清记忆 + 推进轮次）——同 id 新一轮 busy 从宽放行，不压制重新开始的任务。
+  // 完成态自动收起：每任务独立驱逐 timer——自「该任务非忙收尾 upsert」起 1.2s 移除，不因其它任务更新而无限重置。
+  const taskRoundSeq = useRef(1)
+  const taskRoundRef = useRef<Map<string, number>>(new Map()) // id → 当前轮次令牌
+  const dismissedRef = useRef<Map<string, number>>(new Map()) // id → 已关闭的轮次令牌
+  const finishTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
 
-  const upsertTask = (task: TaskItem) => {
-    if (dismissedRef.current.has(task.id)) {
-      if (task.busy) return // 已关闭且后台仍 busy：不加回
-      dismissedRef.current.delete(task.id) // 非 busy 收尾上报：任务生命周期结束，清除关闭记忆
-    }
-    setTasks((prev) => {
-      const item = { ...task, lastUpdate: Date.now() }
-      const idx = prev.findIndex((t) => t.id === task.id)
-      if (idx === -1) return [...prev, item]
-      const next = prev.slice()
-      next[idx] = item
-      return next
-    })
-  }
+  // 同 id 换新驱逐 timer 前清旧句柄（新一轮收尾重新计时）
+  const clearFinishTimer = useCallback((id: string) => {
+    const h = finishTimersRef.current.get(id)
+    if (h) clearTimeout(h)
+    finishTimersRef.current.delete(id)
+  }, [])
 
-  const removeTask = (id: string) => {
-    dismissedRef.current.delete(id) // 收尾移除即生命周期结束，清除关闭记忆
-    setTasks((prev) => prev.filter((t) => t.id !== id))
-  }
+  const removeTask = useCallback(
+    (id: string) => {
+      dismissedRef.current.delete(id)
+      // 移除即本轮结束：推进轮次，新一轮 busy 上报与旧关闭记忆令牌不同 → 放行
+      taskRoundRef.current.set(id, taskRoundSeq.current++)
+      clearFinishTimer(id)
+      setTasks((prev) => prev.filter((t) => t.id !== id))
+    },
+    [clearFinishTimer],
+  )
+
+  const upsertTask = useCallback(
+    (task: TaskItem) => {
+      const id = task.id
+      // 未开轮的 id 首见即开一轮（令牌定轮）
+      if (!taskRoundRef.current.has(id)) taskRoundRef.current.set(id, taskRoundSeq.current++)
+      const round = taskRoundRef.current.get(id)!
+      if (task.busy) {
+        // G10: 已关闭的同轮 busy 上报过滤；新一轮（令牌不同）从宽放行
+        if (dismissedRef.current.get(id) === round) return
+      } else {
+        // 收尾上报：本轮生命周期结束——清关闭记忆 + 推进轮次
+        dismissedRef.current.delete(id)
+        taskRoundRef.current.set(id, taskRoundSeq.current++)
+      }
+      clearFinishTimer(id)
+      setTasks((prev) => {
+        const item = { ...task, lastUpdate: Date.now() }
+        const idx = prev.findIndex((t) => t.id === task.id)
+        if (idx === -1) return [...prev, item]
+        const next = prev.slice()
+        next[idx] = item
+        return next
+      })
+      // 完成态 1.2s 自动收起：仅非忙且 done>=total（或 0/0 重置信号），按该任务自身计时
+      if (!task.busy && (task.total <= 0 || task.done >= task.total)) {
+        finishTimersRef.current.set(id, setTimeout(() => removeTask(id), 1200))
+      }
+    },
+    [clearFinishTimer, removeTask],
+  )
 
   // G10: ✕ 关闭（后台继续）——仅对仍 busy（后台在跑）的任务记录 dismissed 防 poll 加回；
   // 已完成卡片 ✕ 只移除不记录，避免压制同 id 的下一轮新任务。
-  const dismissTask = (id: string, busy = false) => {
-    removeTask(id)
-    if (busy) dismissedRef.current.add(id)
-  }
+  const dismissTask = useCallback(
+    (id: string, busy = false) => {
+      removeTask(id)
+      if (busy) dismissedRef.current.set(id, taskRoundRef.current.get(id) ?? 0)
+    },
+    [removeTask],
+  )
 
-  const clearTask = (id: string): number => {
-    return window.setTimeout(() => removeTask(id), 1200)
-  }
-
-  // V2: 完成/失败自动收起重置——仅非忙态且 done>=total（或 0/0 重置信号）短暂保留后移除；
-  // busy 任务（停止扫描等 done==total 仍进行中）不参与自动收起；空 tasks 不渲染。
-  useEffect(() => {
-    if (tasks.length === 0) return
-    const timers = tasks
-      .filter((t) => !t.busy && (t.total <= 0 || t.done >= t.total))
-      .map((t) => clearTask(t.id))
-    return () => timers.forEach(clearTimeout)
-  }, [tasks])
-
-  // V2: busy scan 任务超时兜底——每 5s 检查超过预计时长无更新的 scan 任务，
-  // 置为非忙（0/0 由上方收起 effect 移除），防「扫描中切页后无人上报 done」冻结。
+  // V2: busy scan/stop-scan 超时兜底——每 5s 检查超过预计时长无更新的任务，
+  // 走 upsertTask 收尾（非忙 0/0，由各自驱逐 timer 1.2s 收起），
+  // 防「扫描中切页后无人上报 done」冻结；M11: 兜底范围从仅 scan 扩展到 stop-scan。
   useEffect(() => {
     const timer = window.setInterval(() => {
-      setTasks((prev) => {
-        const now = Date.now()
-        let changed = false
-        const next = prev.map((t) => {
-          if (t.type !== 'scan' || !t.busy) return t
-          if (now - (t.lastUpdate ?? now) <= scanStaleMs(t.total)) return t
-          changed = true
-          return { ...t, busy: false, done: 0, total: 0 }
-        })
-        return changed ? next : prev
-      })
+      const now = Date.now()
+      for (const t of tasksRef.current) {
+        if ((t.type !== 'scan' && t.type !== 'stop-scan') || !t.busy) continue
+        if (now - (t.lastUpdate ?? now) <= scanStaleMs(t.total)) continue
+        // 超时冻结：置非忙 0/0（upsertTask 内部会排完成态驱逐 timer）
+        upsertTask({ id: t.id, type: t.type, title: t.title, done: 0, total: 0, busy: false })
+      }
     }, 5000)
     return () => window.clearInterval(timer)
-  }, [])
+  }, [upsertTask])
 
-  // V2: onRelease 兼容包装——PoolPage 现有释放调用（{active,done,total}）零改动映射到任务栈；
-  // busy 由 done/total 推导：进行中忙态文案，完成（done=total）后显示「已完成」并自动收起。
-  const onRelease = (r: { active: boolean; done: number; total: number }) => {
-    if (!r.active) {
-      removeTask('release')
-      return
-    }
-    upsertTask({ id: 'release', type: 'release', title: '释放实例', done: r.done, total: r.total, busy: r.done < r.total })
-  }
+  // M10: onRelease 稳定化（只依赖稳定回调）——PoolPage 因 props 引用不变而保持 memo，隔离重渲染
+  const onRelease = useCallback(
+    (r: { active: boolean; done: number; total: number }) => {
+      if (!r.active) {
+        removeTask('release')
+        return
+      }
+      upsertTask({ id: 'release', type: 'release', title: '释放实例', done: r.done, total: r.total, busy: r.done < r.total })
+    },
+    [removeTask, upsertTask],
+  )
 
   // 退出（不释放实例）：直接调用壳退出（实例留在后台继续运行）。
   const doExitKeep = async () => {
@@ -162,7 +177,11 @@ export default function App() {
   }
 
   // 退出并释放：先按 4 并发释放全部实例（含独享与池成员），进度全局可见，完成后退出。
+  // 杂项: ref 级防重入——setExiting 是异步 state，连点两下会在生效前二次进入（并发释放同一批/重复 quit_app）
+  const exitGuard = useRef(false)
   const doExitRelease = async () => {
+    if (exitGuard.current) return
+    exitGuard.current = true
     setExitOpen(false)
     setExiting(true)
     try {
@@ -186,6 +205,8 @@ export default function App() {
     } catch (e) {
       setExiting(false)
       showToast(String(e), false)
+    } finally {
+      exitGuard.current = false
     }
   }
 
@@ -239,47 +260,8 @@ export default function App() {
       )}
 
       {/* V2: 全局任务悬浮栈（跨页面常驻；多任务并存纵向堆叠；✕ 仅隐藏该条，后台继续） */}
-      {tasks.length > 0 && (
-        <div className="fixed bottom-5 right-5 z-50 w-72 space-y-2 pointer-events-none">
-          {tasks.map((t) => {
-            const donePct = t.total > 0 ? Math.min((t.done / t.total) * 100, 100) : 0
-            // 已完成仅当非忙态且 done>=total（停止扫描等忙态 done==total 时仍显示进行中文案）
-            const finished = !t.busy && (t.total <= 0 || t.done >= t.total)
-            return (
-              <div
-                key={t.id}
-                className="pointer-events-auto bg-white rounded-xl border border-zinc-200 shadow-xl p-3.5"
-              >
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-[13px] font-semibold text-zinc-900">{t.title}</span>
-                  <span className="flex items-center gap-1.5">
-                    <span className="text-[12px] text-zinc-500 tabular-nums">
-                      {t.done}/{t.total}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => dismissTask(t.id, t.busy)}
-                      className="p-0.5 rounded text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100"
-                      title="关闭（后台继续）"
-                    >
-                      <X size={13} />
-                    </button>
-                  </span>
-                </div>
-                <div className="h-1.5 bg-zinc-100 rounded-full overflow-hidden">
-                  <div
-                    className={clsx('h-full rounded-full transition-all duration-300', TASK_COLORS[t.type])}
-                    style={{ width: `${donePct}%` }}
-                  />
-                </div>
-                <div className={clsx('mt-1.5 text-[11px]', t.error ? 'text-red-500' : 'text-zinc-400')}>
-                  {t.error ? '失败，详见页面提示' : finished ? '已完成' : TASK_TEXT[t.type]}
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      )}
+      {/* M10: 独立 memo 面板——App 其它状态（toast/tab/退出弹窗）变化不带动面板与页面重渲染 */}
+      {tasks.length > 0 && <TaskPanel tasks={tasks} onDismiss={dismissTask} />}
     {/* D1：退出二次确认弹窗 */}
       {exitOpen && (
         <div

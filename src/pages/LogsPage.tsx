@@ -244,14 +244,19 @@ export default function LogsPage({
   const toastRef = useRef(toast)
   toastRef.current = toast
 
+  // M9: 轮询代次守卫——load 开始记代，响应后比对，过期响应丢弃（慢响应不叠加、旧快照不覆盖新状态）
+  const loadGen = useRef(0)
   const load = useCallback(
     async (silent = true) => {
+      const gen = ++loadGen.current
       try {
         const recs = await api.getCallLog(fetchLimitRef.current)
+        if (gen !== loadGen.current) return
         // 最新在前（后端无日志时可能返回 null → 归一为空数组，避免 TypeError）
         setLogs([...(Array.isArray(recs) ? recs : [])].reverse())
         setError(null)
       } catch (e) {
+        if (gen !== loadGen.current) return
         if (!silent) toastRef.current(String(e), false)
         else setError(String(e))
       }
@@ -331,6 +336,8 @@ export default function LogsPage({
               if (!confirm('确定清空全部调用日志？该操作不可恢复。')) return
               try {
                 await api.clearCallLog()
+                // M9: 作废在途轮询响应——清空后旧日志不再被慢响应回填
+                loadGen.current++
                 setLogs([])
                 setPage(1)
                 toast('日志已清空')

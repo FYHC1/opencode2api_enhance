@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
 import { Loader2, Search, Trash2, LogOut } from 'lucide-react'
 import { api, type OrphanProcess } from '../lib/api'
@@ -32,6 +32,11 @@ export default function SettingsPage({
   const [selected, setSelected] = useState<Set<number>>(new Set())
 
 
+  // G31/L10: toast 用 ref 封装（App 的 showToast 每次渲染重建）——effect 固定只跑一次，
+  // 不因 toast 变化重发 3 个请求，也不会把服务器旧值覆盖回未保存的表单输入
+  const toastRef = useRef(toast)
+  toastRef.current = toast
+
   useEffect(() => {
     const loadData = async () => {
       try {
@@ -43,15 +48,22 @@ export default function SettingsPage({
         setConfig(cfg)
         setAutostart(as)
         setBinariesInfo(bin)
-        setClashUrl(cfg.clash_external_url)
-        setUpstreamProxy(cfg.upstream_proxy)
       } catch (e) {
         console.error('加载设置失败', e)
-        toast('加载设置失败', false)
+        toastRef.current('加载设置失败', false)
       }
     }
     loadData()
-  }, [toast])
+    // L10: 首次加载初始化表单值（clashUrl/upstreamProxy）——单独处理、不回写进 loadData，
+    // 后续其它路径重载数据也不会覆盖用户未保存的表单输入
+    api
+      .configGet()
+      .then((cfg) => {
+        setClashUrl(cfg.clash_external_url)
+        setUpstreamProxy(cfg.upstream_proxy)
+      })
+      .catch(() => {})
+  }, [])
 
   const handleSaveClash = async () => {
     try {
