@@ -46,6 +46,10 @@ type Gateway struct {
 	pid     int
 	lastErr string
 
+	// startMu 串行化「检查+拉起/重启」复合动作（Status 自动拉起 / sync / ApplyKey），
+	// 防止并发触发各自 spawn 一个 -gateway 子进程抢同一端口。锁序：startMu → mu。
+	startMu sync.Mutex
+
 	models    []string
 	updatedAt int64
 	lastFetch int64
@@ -84,6 +88,9 @@ func (g *Gateway) ApplyKey(pwd string, runner Runner) error {
 	if runner == nil {
 		runner = &realRunner{}
 	}
+	// M1: 换 key 的整体动作进 startMu，与 Status 自动拉起 / sync 互斥，避免双启。
+	g.startMu.Lock()
+	defer g.startMu.Unlock()
 	g.mu.Lock()
 	g.password = pwd
 	running := g.pid > 0 && pidAlive(g.pid)
@@ -148,12 +155,17 @@ func (g *Gateway) startChild(runner Runner) error {
 		return err
 	}
 	cfgPath := filepath.Join(dir, "opencode2api.json")
+	// M2: 锁内快照 port/password 再拼 Args（spawn 在锁外执行，避免持 g.mu 起进程）。
+	g.mu.Lock()
+	port := g.port
+	pwd := g.password
+	g.mu.Unlock()
 	pid, err := runner.Start(ExecSpec{
 		Bin: g.m.binPath("opencode2api"),
 		Args: []string{
-			"-port", itoa(g.port),
+			"-port", itoa(port),
 			"-config", cfgPath,
-			"-password", g.password,
+			"-password", pwd,
 			"-gateway",
 			// P2: 注入实例池质量文件路径，子进程路由按质量分加权/熔断（空 = 无质量约束）。
 			"-pool-quality", filepath.Join(g.m.Paths().RuntimeDir, "pool_quality.json"),
@@ -184,6 +196,9 @@ func (g *Gateway) setErr(msg string) {
 // sync 同步网关池：成员 = Running 且 JoinGateway 的实例 sing-box 端口。
 // 无成员 → 停网关；配置变化且运行中 → 重启以热生效；未运行 → 拉起。
 func (g *Gateway) sync(runner Runner) error {
+	// M1: 「检查+stop+start」整体进 startMu，与 Status 自动拉起 / ApplyKey 互斥。
+	g.startMu.Lock()
+	defer g.startMu.Unlock()
 	insts := g.m.ListInstances()
 	var ports []uint16
 	portNames := map[uint16]string{}
@@ -244,11 +259,17 @@ func (g *Gateway) Status(runner Runner) GatewayStatus {
 	total := len(g.m.ListInstances())
 	running := g.isRunning(runner)
 	if !running && g.memberCount() > 0 {
-		if err := g.startChild(runner); err != nil {
-			g.setErr(err.Error())
-		} else {
-			running = true
+		// M1: 自动拉起整体进 startMu，锁内重查——多个并发 Status 只拉起一个子进程。
+		g.startMu.Lock()
+		running = g.isRunning(runner)
+		if !running && g.memberCount() > 0 {
+			if err := g.startChild(runner); err != nil {
+				g.setErr(err.Error())
+			} else {
+				running = true
+			}
 		}
+		g.startMu.Unlock()
 	}
 	if running {
 		g.refreshModels()
@@ -279,6 +300,7 @@ func (g *Gateway) Status(runner Runner) GatewayStatus {
 	updated := g.updatedAt
 	port := g.port
 	routeMode := g.routeMode
+	apiKey := g.password
 	g.mu.Unlock()
 
 	var updatedPtr *int64
@@ -289,7 +311,7 @@ func (g *Gateway) Status(runner Runner) GatewayStatus {
 		Running:      running,
 		Address:      fmt.Sprintf("http://127.0.0.1:%d/v1", port),
 		Port:         port,
-		APIKey:       g.password,
+		APIKey:       apiKey,
 		RunningInsts: g.memberCount(),
 		TotalInsts:   total,
 		Message:      message,
@@ -328,8 +350,11 @@ func (g *Gateway) refreshModels() {
 	}
 	g.loading = true
 	g.loadingMu.Unlock()
+	// M2: 锁内快照 port/password 传入 goroutine，不与 ApplyKey 的写并发读 g.password。
 	g.mu.Lock()
 	g.lastFetch = now
+	port := g.port
+	pwd := g.password
 	g.mu.Unlock()
 
 	go func() {
@@ -338,7 +363,7 @@ func (g *Gateway) refreshModels() {
 			g.loading = false
 			g.loadingMu.Unlock()
 		}()
-		models, err := fetchGatewayModels(g.port, g.password)
+		models, err := fetchGatewayModels(port, pwd)
 		g.mu.Lock()
 		defer g.mu.Unlock()
 		if err != nil {
