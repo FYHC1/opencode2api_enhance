@@ -61,40 +61,69 @@ func newMidStreamSwitch(v *Vendor, ctx context.Context, msg *contract.Message, s
 }
 
 // Read 实现 io.Reader：逐行读取底层流；发现错误/中断时自动换号续写。
+// 锁策略（CONC-6）：网络读（nextLine）与换号网段（oneSwitch）不持 m.mu——
+// Read 只在大括号临界区（取 pending / 查 closed / 提交状态）持锁，
+// 因此 Close 总能及时拿到锁（关 src 解除 Read 的阻塞读），不会被网络 IO 饿死。
+// pending/done/accumulated 等仅由本 Read 协程访问，无需锁。
 func (m *midStreamSwitch) Read(p []byte) (int, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.closed {
-		return 0, io.ErrClosedPipe
-	}
-	for len(m.pending) == 0 {
+	for {
+		// 锁内：查关闭 / 取待发数据
+		m.mu.Lock()
+		if m.closed {
+			m.mu.Unlock()
+			return 0, io.ErrClosedPipe
+		}
+		if len(m.pending) > 0 {
+			line := m.pending[0]
+			m.pending = m.pending[1:]
+			m.mu.Unlock()
+			n := copy(p, line)
+			if n < len(line) {
+				// 目标缓冲区不足：剩余部分放回队首，下次再取
+				m.pending = append([]string{line[n:]}, m.pending...)
+			}
+			return n, nil
+		}
+		m.mu.Unlock()
+
+		// 锁外：网络读一行（可能阻塞；Close 可并发拿锁关 src）
 		line, err := m.nextLine()
+
+		// 锁内：处理读到的行 / 决定是否换号
+		m.mu.Lock()
+		if m.closed {
+			m.mu.Unlock()
+			return 0, io.ErrClosedPipe
+		}
 		if err != nil {
+			m.mu.Unlock()
 			if err == io.EOF {
 				if m.done {
 					return 0, io.EOF
 				}
 				// 未见过 [DONE] 即 EOF：视为流中断，换号续写
-				if serr := m.trySwitchLocked("stream ended without [DONE]"); serr != nil {
-					m.surfaceFinalErrorLocked(serr)
+				if serr := m.trySwitch("stream ended without [DONE]"); serr != nil {
+					m.surfaceFinalError(serr)
 					continue
 				}
 				continue
 			}
 			// 传输层读错误：同样视为可换号信号
-			if serr := m.trySwitchLocked("stream read error: " + err.Error()); serr != nil {
-				m.surfaceFinalErrorLocked(serr)
+			if serr := m.trySwitch("stream read error: " + err.Error()); serr != nil {
+				m.surfaceFinalError(serr)
 				continue
 			}
 			continue
 		}
 		if line == "" {
+			m.mu.Unlock()
 			continue
 		}
 		if midstreamIsErrorLine(line) {
 			// 上游显式错误事件（capacity/限流等）→ 换号；错误行不转发（无感）
-			if serr := m.trySwitchLocked(midstreamErrorText(line)); serr != nil {
-				m.surfaceFinalErrorLocked(serr)
+			m.mu.Unlock()
+			if serr := m.trySwitch(midstreamErrorText(line)); serr != nil {
+				m.surfaceFinalError(serr)
 				continue
 			}
 			continue
@@ -106,33 +135,32 @@ func (m *midStreamSwitch) Read(p []byte) (int, error) {
 			m.done = true
 		}
 		m.pending = append(m.pending, line+"\n")
+		m.mu.Unlock()
 	}
-	line := m.pending[0]
-	m.pending = m.pending[1:]
-	n := copy(p, line)
-	if n < len(line) {
-		// 目标缓冲区不足：剩余部分放回队首，下次再取
-		m.pending = append([]string{line[n:]}, m.pending...)
-	}
-	return n, nil
 }
 
 // Close 实现 io.Closer：关闭当前流，归还当前账号（不标记耗尽）。
+// 锁内只置 closed + 取出 src/acct 引用；关流与还账号在锁外——
+// 关 src 会解除 Read 的阻塞读，且本函数不等待任何网络 IO。
 func (m *midStreamSwitch) Close() error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.closed {
+		m.mu.Unlock()
 		return nil
 	}
 	m.closed = true
-	if m.src != nil {
-		_ = m.src.Close()
-		m.src = nil
+	src := m.src
+	m.src = nil
+	acct := m.acct
+	m.acct = ""
+	m.mu.Unlock()
+
+	if src != nil {
+		_ = src.Close()
 	}
 	// 归还当前账号：仅更新 LastUsedAt，不进入冷却（客户端主动断开不是账号故障）
-	if m.acct != "" {
-		m.v.pool.release(m.acct, time.Now(), false)
-		m.acct = ""
+	if acct != "" {
+		m.v.pool.release(acct, time.Now(), false)
 	}
 	return nil
 }
@@ -147,8 +175,9 @@ func (m *midStreamSwitch) nextLine() (string, error) {
 	return strings.TrimSuffix(line, "\n"), err
 }
 
-// trySwitchLocked 尝试换号续写（最多 maxMidStreamSwitch 次；每次失败耗一个账号）。
-func (m *midStreamSwitch) trySwitchLocked(reason string) error {
+// trySwitch 尝试换号续写（最多 maxMidStreamSwitch 次；每次失败耗一个账号）。
+// 由 Read 在锁外调用（换号网段不持 m.mu）。
+func (m *midStreamSwitch) trySwitch(reason string) error {
 	for m.attempts < maxMidStreamSwitch {
 		if err := m.oneSwitch(reason); err == nil {
 			return nil
@@ -165,14 +194,23 @@ func (m *midStreamSwitch) trySwitchLocked(reason string) error {
 }
 
 // oneSwitch 执行一次换号：标旧号耗尽 → 借新号 → 以已吐内容为上下文续接请求。
+// 网络段（markExhausted/Acquire/DoChatStream）不持 m.mu；commit 段锁内校验
+// 未关闭才安装新流（换号期间被 Close → 丢弃新流、归还新号，不安装）。
 func (m *midStreamSwitch) oneSwitch(reason string) error {
 	m.attempts++
-	// 1) 当前账号标记耗尽 + 冷却（触发后台预注册）
-	if m.acct != "" {
-		m.v.markExhausted(contract.AcctID(m.acct))
-		m.acct = ""
+	// 1) 锁内取当前账号并清空（避免与 Close 竞态）；锁外标旧号耗尽+冷却（触发后台预注册）
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return errors.New("windsurf: 流已关闭")
 	}
-	// 2) 借新账号（受冷却与健康约束）
+	old := m.acct
+	m.acct = ""
+	m.mu.Unlock()
+	if old != "" {
+		m.v.markExhausted(contract.AcctID(old))
+	}
+	// 2) 借新账号（受冷却与健康约束）——锁外
 	acct, err := m.v.Acquire()
 	if err != nil {
 		m.lastErr = fmt.Sprintf("无可换账号: %v", err)
@@ -184,7 +222,7 @@ func (m *midStreamSwitch) oneSwitch(reason string) error {
 		m.lastErr = "新账号无会话令牌"
 		return errors.New("windsurf: 换号账号无会话令牌")
 	}
-	// 3) 续接请求：原消息 + assistant(已吐内容) + user(请继续)
+	// 3) 续接请求：原消息 + assistant(已吐内容) + user(请继续)——锁外网络
 	nextMsg := resumeMessageOf(m.orig, m.accumulated)
 	stream, err := m.v.cfg.Chatter.DoChatStream(m.ctx, token, nextMsg)
 	if err != nil || stream == nil {
@@ -195,14 +233,26 @@ func (m *midStreamSwitch) oneSwitch(reason string) error {
 		m.lastErr = fmt.Sprintf("换号重连失败: %v", err)
 		return fmt.Errorf("windsurf: 换号重连失败: %v", err)
 	}
-	// 4) 替换当前流
-	if m.src != nil {
-		_ = m.src.Close()
+	// 4) commit 段：锁内校验未关闭才替换当前流
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		if stream.ReadCloser != nil {
+			_ = stream.ReadCloser.Close()
+		}
+		m.v.pool.release(string(acct), time.Now(), false)
+		m.lastErr = "换号期间流已关闭"
+		return errors.New("windsurf: 换号期间流已关闭")
 	}
+	oldSrc := m.src
 	m.src = stream.ReadCloser
 	m.rd = bufio.NewReader(m.src)
 	m.acct = string(acct)
 	m.segments++
+	m.mu.Unlock()
+	if oldSrc != nil {
+		_ = oldSrc.Close()
+	}
 	m.v.pool.touch(string(acct), time.Now())
 	slog.Info("windsurf: 流中无感换号",
 		"reason", reason,
@@ -212,9 +262,10 @@ func (m *midStreamSwitch) oneSwitch(reason string) error {
 	return nil
 }
 
-// surfaceFinalErrorLocked 全部账号失败：把错误作为最后一个 SSE 事件上抛。
-// pending 行以 '\n' 结尾（core 侧按行读取）。
-func (m *midStreamSwitch) surfaceFinalErrorLocked(err error) {
+// surfaceFinalError 全部账号失败：把错误作为最后一个 SSE 事件上抛。
+// pending 行以 '\n' 结尾（core 侧按行读取）。由 Read 协程在锁外调用
+// （pending/done 仅该协程访问）。
+func (m *midStreamSwitch) surfaceFinalError(err error) {
 	if m.done {
 		return
 	}

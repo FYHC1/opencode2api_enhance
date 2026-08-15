@@ -58,6 +58,7 @@ type Vendor struct {
 
 	mu          sync.Mutex
 	registering bool // 防并发重复注册
+	preRegOnce  chan struct{} // 预注册防抖闸（容量 1：同一时刻只放行一次）
 	lastErr     string
 	lastSuccess time.Time
 }
@@ -85,7 +86,7 @@ func New(cfg Config) *Vendor {
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = http.DefaultClient
 	}
-	v := &Vendor{cfg: cfg}
+	v := &Vendor{cfg: cfg, preRegOnce: make(chan struct{}, 1)}
 	v.pool = newPool(cfg.Cooldown, cfg.StoreFile)
 	if cfg.StoreFile != "" {
 		if err := v.pool.loadFile(cfg.StoreFile); err != nil {
@@ -232,7 +233,8 @@ func (v *Vendor) registerNew(ctx context.Context, need int) error {
 	return nil
 }
 
-// preRegisterIfLow 额度≤阈值时后台预注册 1 个新号（防抖：同一时刻只一次）。
+// preRegisterIfLow 额度≤阈值时后台预注册 1 个新号（防抖：同一时刻只 spawn 一次，
+// 靠 Vendor 级 preRegOnce 闸实现；registerNew 内 registering 标志仍兜底注册本身）。
 func (v *Vendor) preRegisterIfLow() {
 	if v.cfg.Registrar == nil || v.cfg.Mailbox == nil {
 		return
@@ -240,14 +242,13 @@ func (v *Vendor) preRegisterIfLow() {
 	if v.pool.quotaMin() > v.cfg.QuotaThreshold {
 		return
 	}
-	ready := make(chan struct{}, 1)
 	select {
-	case ready <- struct{}{}:
+	case v.preRegOnce <- struct{}{}:
 	default:
-		return // 已有一次进行中
+		return // 已有一次 preRegister 进行中
 	}
 	go func() {
-		defer func() { <-ready }()
+		defer func() { <-v.preRegOnce }()
 		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 		defer cancel()
 		if err := v.registerNew(ctx, 1); err != nil {
@@ -307,7 +308,8 @@ func (v *Vendor) Chat(ctx context.Context, msg *contract.Message) (*contract.Rep
 		}
 		reply, err := chatter.DoChat(ctx, token, msg)
 		if err == nil && reply != nil && reply.Status >= 200 && reply.Status < 300 {
-			v.pool.touch(string(acct), time.Now())
+			// 成功归还：清占用（inUse=false）但标记最近使用（不冷却）
+			v.pool.release(string(acct), time.Now(), false)
 			v.mu.Lock()
 			v.lastSuccess = time.Now()
 			v.lastErr = ""
