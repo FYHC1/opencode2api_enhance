@@ -150,11 +150,14 @@ func (c *ScanController) unregisterProbe(worker int) {
 }
 
 // RequestStop 请求停止（Running → Stopping）：置标志后并发中断正在运行的探针进程。
+// 非 Running（idle/done/error/已 stopping）直接返回当前快照，避免重复停止重入中断逻辑清空计数。
 func (c *ScanController) RequestStop() ScanProgress {
 	c.mu.Lock()
-	if c.progress.Status == ScanRunning {
-		c.progress.Status = ScanStopping
+	if c.progress.Status != ScanRunning {
+		c.mu.Unlock()
+		return c.Snapshot()
 	}
+	c.progress.Status = ScanStopping
 	c.mu.Unlock()
 	c.interruptProbes()
 	return c.Snapshot()
@@ -181,6 +184,13 @@ func (c *ScanController) interruptProbes() (int, int) {
 	}
 	c.activeMu.Unlock()
 
+	// V2: 停止进度渐进可见——总数立即可读（进度条分母），已中断数随每对 kill 完成递增，
+	// 不再等全部 kill 结束一次性置满（原先进度条瞬间 100% 误导）。
+	c.mu.Lock()
+	c.progress.StoppingCount = len(pairs)
+	c.progress.StoppedCount = 0
+	c.mu.Unlock()
+
 	// 带缓冲 channel semaphore 限流：每对探针进程的 kill 占一个并发位。
 	sem := make(chan struct{}, limit)
 	var wg sync.WaitGroup
@@ -193,6 +203,9 @@ func (c *ScanController) interruptProbes() (int, int) {
 			defer func() { <-sem }()
 			_ = c.runner.Kill(p.sbPID)
 			_ = c.runner.Kill(p.ocPID)
+			c.mu.Lock()
+			c.progress.StoppedCount++
+			c.mu.Unlock()
 		}()
 	}
 	wg.Wait()
@@ -202,10 +215,6 @@ func (c *ScanController) interruptProbes() (int, int) {
 	c.activeProbes = map[int]probeProcs{}
 	c.activeMu.Unlock()
 
-	c.mu.Lock()
-	c.progress.StoppingCount = len(pairs)
-	c.progress.StoppedCount = len(pairs)
-	c.mu.Unlock()
 	return len(pairs), len(pairs)
 }
 
