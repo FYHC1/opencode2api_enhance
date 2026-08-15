@@ -149,7 +149,10 @@ func (c *ScanController) unregisterProbe(worker int) {
 	delete(c.activeProbes, worker)
 }
 
-// RequestStop 请求停止（Running → Stopping）：置标志后并发中断正在运行的探针进程。
+// RequestStop 请求停止（Running → Stopping）：置标志后立即返回快照，
+// 中断探针进程移到后台 goroutine 执行——HTTP /scan/stop 不再被串行 kill + wg.Wait 阻塞
+// （G11：原同步实现可阻塞数百 ms~秒）。StoppingCount 同步立数（进度分母立即可读），
+// StoppedCount 由后台按每对 kill 完成渐进递增，poll 可读到停止进度。
 // 非 Running（idle/done/error/已 stopping）直接返回当前快照，避免重复停止重入中断逻辑清空计数。
 func (c *ScanController) RequestStop() ScanProgress {
 	c.mu.Lock()
@@ -158,8 +161,14 @@ func (c *ScanController) RequestStop() ScanProgress {
 		return c.Snapshot()
 	}
 	c.progress.Status = ScanStopping
+	// 停止分母同步置位，避免返回快照竞态读到 0/0（后台 interruptProbes 会按实际收集对数再次核对覆盖）。
+	c.activeMu.Lock()
+	active := len(c.activeProbes)
+	c.activeMu.Unlock()
+	c.progress.StoppingCount = active
+	c.progress.StoppedCount = 0
 	c.mu.Unlock()
-	c.interruptProbes()
+	go c.interruptProbes()
 	return c.Snapshot()
 }
 
@@ -168,6 +177,8 @@ func (c *ScanController) RequestStop() ScanProgress {
 // 探针进程被杀 → waitForPort 中止 / freeCompletion 连接拒绝 → probeNode 快速失败返回，
 // 其 defer 再 kill 一次（幂等）并注销登记（此时登记已被清空，注销为空操作）。
 // 返回 (中断前活跃对数, 已中断对数)。
+// G11：由 RequestStop 在后台 goroutine 调用，与 Snapshot/worker 并发安全——progress 字段
+// 写入持 c.mu（Snapshot 只读同一把锁），activeMu 独立且从不与 c.mu 嵌套持锁，无锁序问题。
 func (c *ScanController) interruptProbes() (int, int) {
 	cfg := Config{}
 	if c.m != nil {
