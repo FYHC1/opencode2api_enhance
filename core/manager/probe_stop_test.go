@@ -1,8 +1,9 @@
 package manager
 
-// V1 停止扫描并发接逻辑单测：RequestStop 并发中断活跃探针（stop_scan_concurrency 上限）、
-// 停止统计、停止后 probeNode/worker 正常退出（不 panic、无残留）。全部使用 fake Runner
-// + 临时目录 + httptest 端口，不触网、不 spawn 真实进程。
+// V1 停止扫描并发逻辑单测 + G11 异步化：RequestStop 并发中断活跃探针（stop_scan_concurrency 上限）、
+// 停止统计、停止后 probeNode/worker 正常退出（不 panic、无残留）。G11 起 RequestStop 立即返回、
+// kill 在后台 goroutine 渐进完成——测试统一先等后台收尾（waitStopDone）再断言最终状态。
+// 全部使用 fake Runner + 临时目录 + httptest 端口，不触网、不 spawn 真实进程。
 
 import (
 	"fmt"
@@ -95,8 +96,18 @@ func waitCond(t *testing.T, timeout time.Duration, cond func() bool) bool {
 	return cond()
 }
 
+// waitStopDone 轮询等待 G11 异步中断收尾：后台 kill 全部完成后 StoppedCount 爬满 StoppingCount。
+func waitStopDone(t *testing.T, ctrl *ScanController, timeout time.Duration) bool {
+	t.Helper()
+	return waitCond(t, timeout, func() bool {
+		s := ctrl.Snapshot()
+		return s.StoppedCount >= s.StoppingCount
+	})
+}
+
 // V1: RequestStop 按 stop_scan_concurrency 并发上限 kill 活跃探针
 // （登记 5 对、上限 2 → 3 批 2+2+1；全部被杀、统计正确、登记清空）。
+// G11: RequestStop 立即返回（异步），先等后台 kill 收尾再断言结果。
 func TestRequestStopInterruptsProbesBounded(t *testing.T) {
 	m := newTestManager(t)
 	if err := m.ConfigSet("stop_scan_concurrency", "2"); err != nil {
@@ -116,8 +127,17 @@ func TestRequestStopInterruptsProbesBounded(t *testing.T) {
 	if snap.Status != ScanStopping {
 		t.Fatalf("status = %s, want stopping", snap.Status)
 	}
-	if snap.StoppingCount != len(pairs) || snap.StoppedCount != len(pairs) {
-		t.Fatalf("counts = stopping %d / stopped %d, want %d", snap.StoppingCount, snap.StoppedCount, len(pairs))
+	// G11: 返回快照时仅分母立即可读（已中断数由后台渐进更新，返回瞬间未 kill 完成）。
+	if snap.StoppingCount != len(pairs) {
+		t.Fatalf("stopping count = %d, want %d", snap.StoppingCount, len(pairs))
+	}
+	// 等后台异步收尾后再断言最终计数与 kill 覆盖。
+	if !waitStopDone(t, ctrl, 5*time.Second) {
+		t.Fatalf("async interrupt not finished: %+v", ctrl.Snapshot())
+	}
+	snap = ctrl.Snapshot()
+	if snap.StoppedCount != len(pairs) {
+		t.Fatalf("stopped count = %d, want %d", snap.StoppedCount, len(pairs))
 	}
 	got := run.killedSet()
 	for _, p := range pairs {
@@ -167,6 +187,11 @@ func TestRequestStopConcurrencyCapFallback(t *testing.T) {
 				ctrl.registerProbe(w, 1000+w*10, 1000+w*10+1)
 			}
 			snap := ctrl.RequestStop()
+			// G11: 异步中断——等后台 kill 收尾后再断言最终计数与并发窗口。
+			if !waitStopDone(t, ctrl, 5*time.Second) {
+				t.Fatalf("async interrupt not finished: %+v", ctrl.Snapshot())
+			}
+			snap = ctrl.Snapshot()
 			if snap.StoppingCount != 5 || snap.StoppedCount != 5 {
 				t.Fatalf("counts = %d/%d, want 5/5", snap.StoppingCount, snap.StoppedCount)
 			}
@@ -221,8 +246,12 @@ func TestScanStopInterruptsRunningProbes(t *testing.T) {
 		t.Fatalf("no probe registered before stop")
 	}
 	snap := ctrl.RequestStop()
-	if snap.StoppingCount < 1 || snap.StoppedCount != snap.StoppingCount {
-		t.Fatalf("stop counts = stopping %d / stopped %d", snap.StoppingCount, snap.StoppedCount)
+	if snap.Status != ScanStopping || snap.StoppingCount < 1 {
+		t.Fatalf("stop = %+v", snap)
+	}
+	// G11: 异步中断——等后台 kill 收尾（StoppedCount 爬满 StoppingCount）再继续。
+	if !waitStopDone(t, ctrl, 5*time.Second) {
+		t.Fatalf("async interrupt not finished: %+v", ctrl.Snapshot())
 	}
 
 	// 扫描收尾：worker 全部退出 → run() defer 置 Done（停止后不再干等到单节点超时）。
@@ -273,8 +302,8 @@ func TestProbeNodeSkipsAfterStop(t *testing.T) {
 	}
 }
 
-// V2: 停止进度渐进可见——RequestStop 阻塞期间 StoppedCount 逐步递增，
-// 快照可观察到 0<stopped<n 的中间进度（而非 wg.Wait 后一次性置满 100%）。
+// V2: 停止进度渐进可见——G11 异步中断期间 StoppedCount 逐步递增，
+// 快照可观察到 0<stopped<n 的中间进度（而非一次性置满 100%）。
 func TestInterruptProbesProgressesStoppedCount(t *testing.T) {
 	m := newTestManager(t)
 	if err := m.ConfigSet("stop_scan_concurrency", "1"); err != nil {
@@ -290,7 +319,7 @@ func TestInterruptProbesProgressesStoppedCount(t *testing.T) {
 		ctrl.registerProbe(w, 1000+w*10, 1000+w*10+1)
 	}
 
-	// 背景采样：RequestStop 阻塞期间轮询快照，记录观察到的 StoppedCount 序列。
+	// 背景采样：RequestStop 返回后（后台异步 kill 期间）轮询快照，记录观察到的 StoppedCount 序列。
 	stop := make(chan struct{})
 	samples := make(chan int, 256)
 	var wg sync.WaitGroup
@@ -309,6 +338,10 @@ func TestInterruptProbesProgressesStoppedCount(t *testing.T) {
 	}()
 
 	snap := ctrl.RequestStop()
+	// G11: RequestStop 立即返回（不阻塞）——等后台 kill 渐进收尾后再停止采样。
+	if !waitStopDone(t, ctrl, 5*time.Second) {
+		t.Fatalf("async interrupt not finished: %+v", ctrl.Snapshot())
+	}
 	close(stop)
 	wg.Wait()
 	close(samples)
@@ -316,6 +349,7 @@ func TestInterruptProbesProgressesStoppedCount(t *testing.T) {
 	if snap.Status != ScanStopping {
 		t.Fatalf("status = %s, want stopping", snap.Status)
 	}
+	snap = ctrl.Snapshot()
 	if snap.StoppingCount != n || snap.StoppedCount != n {
 		t.Fatalf("final counts = %d/%d, want %d/%d", snap.StoppingCount, snap.StoppedCount, n, n)
 	}
@@ -347,6 +381,14 @@ func TestRequestStopNonRunningDoesNotReinterrupt(t *testing.T) {
 	}
 
 	first := ctrl.RequestStop()
+	if first.Status != ScanStopping {
+		t.Fatalf("first stop status = %s, want stopping", first.Status)
+	}
+	// G11: 异步中断——等后台收尾后再断言计数（返回瞬间 StoppedCount 尚未爬满）。
+	if !waitStopDone(t, ctrl, 5*time.Second) {
+		t.Fatalf("async interrupt not finished: %+v", ctrl.Snapshot())
+	}
+	first = ctrl.Snapshot()
 	if first.StoppingCount != 3 || first.StoppedCount != 3 {
 		t.Fatalf("first stop counts = stopping %d / stopped %d, want 3/3", first.StoppingCount, first.StoppedCount)
 	}

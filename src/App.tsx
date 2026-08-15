@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
 import { invoke } from '@tauri-apps/api/core'
 import { Server, Layers, Radar, Settings, BarChart3, ScrollText, LogOut, X } from 'lucide-react'
@@ -76,8 +76,16 @@ export default function App() {
   }
 
   // V2: 任务操作——upsertTask 按 id 新增/更新（同 id 覆盖，异 id 并存堆叠）；
-  // removeTask 仅隐藏该条（后台继续）；clearTask 完成/失败自动收起重置（短暂保留完成态后移除）。
+  // removeTask 收尾移除（完成自动收起/停止过渡取代）；clearTask 完成/失败自动收起重置（短暂保留完成态后移除）。
+  // G10: ✕ 关闭（后台继续）语义——dismissedRef 记忆已关闭的 id，busy 期间 upsert 被过滤（防 poll 秒速加回）；
+  // 收到该 id 非 busy 收尾上报或收尾移除时清除记忆（完成态短暂显示后收起，同 id 下一轮新任务不受影响）。
+  const dismissedRef = useRef<Set<string>>(new Set())
+
   const upsertTask = (task: TaskItem) => {
+    if (dismissedRef.current.has(task.id)) {
+      if (task.busy) return // 已关闭且后台仍 busy：不加回
+      dismissedRef.current.delete(task.id) // 非 busy 收尾上报：任务生命周期结束，清除关闭记忆
+    }
     setTasks((prev) => {
       const item = { ...task, lastUpdate: Date.now() }
       const idx = prev.findIndex((t) => t.id === task.id)
@@ -89,7 +97,15 @@ export default function App() {
   }
 
   const removeTask = (id: string) => {
+    dismissedRef.current.delete(id) // 收尾移除即生命周期结束，清除关闭记忆
     setTasks((prev) => prev.filter((t) => t.id !== id))
+  }
+
+  // G10: ✕ 关闭（后台继续）——仅对仍 busy（后台在跑）的任务记录 dismissed 防 poll 加回；
+  // 已完成卡片 ✕ 只移除不记录，避免压制同 id 的下一轮新任务。
+  const dismissTask = (id: string, busy = false) => {
+    removeTask(id)
+    if (busy) dismissedRef.current.add(id)
   }
 
   const clearTask = (id: string): number => {
@@ -242,7 +258,7 @@ export default function App() {
                     </span>
                     <button
                       type="button"
-                      onClick={() => removeTask(t.id)}
+                      onClick={() => dismissTask(t.id, t.busy)}
                       className="p-0.5 rounded text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100"
                       title="关闭（后台继续）"
                     >
