@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import clsx from 'clsx'
 import { invoke } from '@tauri-apps/api/core'
-import { Server, Layers, Radar, Settings, BarChart3, ScrollText, LogOut } from 'lucide-react'
+import { Server, Layers, Radar, Settings, BarChart3, ScrollText, LogOut, X } from 'lucide-react'
 import { api } from './lib/api'
 import { TitleBar } from './components/TitleBar'
 import InstancesPage from './pages/InstancesPage'
@@ -22,15 +22,41 @@ const NAV: { id: Tab; label: string; icon: typeof Server }[] = [
   { id: 'settings', label: '设置', icon: Settings },
 ]
 
+// V2: 全局任务悬浮栈——任务类型（决定进度条颜色）与任务项
+type TaskType = 'release' | 'scan' | 'stop-scan' | 'restart' | 'batch'
+
+type TaskItem = {
+  id: string
+  type: TaskType
+  title: string
+  done: number
+  total: number
+  busy?: boolean
+  /** 失败标记：悬浮窗内该行文案变红（失败明细 toast 已由页面上报） */
+  error?: boolean
+}
+
+const TASK_COLORS: Record<TaskType, string> = {
+  release: 'bg-red-500',
+  'stop-scan': 'bg-amber-500',
+  restart: 'bg-amber-500',
+  scan: 'bg-teal-500',
+  batch: 'bg-teal-500',
+}
+
+const TASK_TEXT: Record<TaskType, string> = {
+  release: '正在释放，不影响你继续操作…',
+  scan: '正在扫描，不影响你继续操作…',
+  'stop-scan': '正在停止，不影响你继续操作…',
+  restart: '正在重启实例池…',
+  batch: '正在处理，不影响你继续操作…',
+}
+
 export default function App() {
   const [tab, setTab] = useState<Tab>('instances')
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null)
-  // 全局释放进度（实例池一键释放全部时跨页面常驻显示）
-  const [release, setRelease] = useState<{ active: boolean; done: number; total: number }>({
-    active: false,
-    done: 0,
-    total: 0,
-  })
+  // V2: 全局任务悬浮栈（跨页面常驻，多任务并存堆叠）
+  const [tasks, setTasks] = useState<TaskItem[]>([])
   // D1：退出二次确认（退出并释放 / 退出不释放 / 取消）
   const [exitOpen, setExitOpen] = useState(false)
   const [exiting, setExiting] = useState(false)
@@ -38,6 +64,45 @@ export default function App() {
   const showToast = (msg: string, ok = true) => {
     setToast({ msg, ok })
     setTimeout(() => setToast(null), 3600)
+  }
+
+  // V2: 任务操作——upsertTask 按 id 新增/更新（同 id 覆盖，异 id 并存堆叠）；
+  // removeTask 仅隐藏该条（后台继续）；clearTask 完成/失败自动收起重置（短暂保留完成态后移除）。
+  const upsertTask = (task: TaskItem) => {
+    setTasks((prev) => {
+      const idx = prev.findIndex((t) => t.id === task.id)
+      if (idx === -1) return [...prev, task]
+      const next = prev.slice()
+      next[idx] = task
+      return next
+    })
+  }
+
+  const removeTask = (id: string) => {
+    setTasks((prev) => prev.filter((t) => t.id !== id))
+  }
+
+  const clearTask = (id: string): number => {
+    return window.setTimeout(() => removeTask(id), 1200)
+  }
+
+  // V2: 完成/失败自动收起重置——done>=total（或 0/0 重置信号）短暂保留后移除；空 tasks 不渲染
+  useEffect(() => {
+    if (tasks.length === 0) return
+    const timers = tasks
+      .filter((t) => t.total <= 0 || t.done >= t.total)
+      .map((t) => clearTask(t.id))
+    return () => timers.forEach(clearTimeout)
+  }, [tasks])
+
+  // V2: onRelease 兼容包装——PoolPage 现有释放调用（{active,done,total}）零改动映射到任务栈；
+  // busy 由 done/total 推导：进行中忙态文案，完成（done=total）后显示「已完成」并自动收起。
+  const onRelease = (r: { active: boolean; done: number; total: number }) => {
+    if (!r.active) {
+      removeTask('release')
+      return
+    }
+    upsertTask({ id: 'release', type: 'release', title: '释放实例', done: r.done, total: r.total, busy: r.done < r.total })
   }
 
   // 退出（不释放实例）：直接调用壳退出（实例留在后台继续运行）。
@@ -61,16 +126,16 @@ export default function App() {
         await invoke('quit_app')
         return
       }
-      setRelease({ active: true, done: 0, total: names.length })
+      upsertTask({ id: 'release', type: 'release', title: '释放实例', done: 0, total: names.length, busy: true })
       const batchSize = 4
       let done = 0
       for (let i = 0; i < names.length; i += batchSize) {
         const chunk = names.slice(i, i + batchSize)
         await Promise.allSettled(chunk.map((n) => api.removeInstance(n)))
         done += chunk.length
-        setRelease({ active: true, done, total: names.length })
+        upsertTask({ id: 'release', type: 'release', title: '释放实例', done, total: names.length, busy: true })
       }
-      setRelease({ active: true, done: names.length, total: names.length })
+      upsertTask({ id: 'release', type: 'release', title: '释放实例', done: names.length, total: names.length, busy: false })
       await invoke('quit_app')
     } catch (e) {
       setExiting(false)
@@ -106,8 +171,8 @@ export default function App() {
         {/* 内容区 */}
         <main className="flex-1 min-w-0 overflow-y-auto">
           {tab === 'instances' && <InstancesPage toast={showToast} />}
-          {tab === 'pool' && <PoolPage toast={showToast} onRelease={setRelease} />}
-          {tab === 'nodes' && <NodesPage toast={showToast} />}
+          {tab === 'pool' && <PoolPage toast={showToast} onRelease={onRelease} onTask={upsertTask} />}
+          {tab === 'nodes' && <NodesPage toast={showToast} onTask={upsertTask} />}
           {tab === 'stats' && <StatsPage toast={showToast} />}
           {tab === 'logs' && <LogsPage toast={showToast} />}
           {tab === 'settings' && <SettingsPage toast={showToast} onRequestExit={() => setExitOpen(true)} />}
@@ -127,24 +192,46 @@ export default function App() {
         </div>
       )}
 
-      {/* 全局释放进度悬浮面板（跨页面常驻，释放完成自动消失） */}
-      {release.active && (
-        <div className="fixed bottom-5 right-5 z-50 w-64 bg-white rounded-xl border border-zinc-200 shadow-xl p-3.5">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-[13px] font-semibold text-zinc-900">释放实例中</span>
-            <span className="text-[12px] text-zinc-500 tabular-nums">
-              {release.done}/{release.total}
-            </span>
-          </div>
-          <div className="h-1.5 bg-zinc-100 rounded-full overflow-hidden">
-            <div
-              className="h-full bg-red-500 rounded-full transition-all duration-300"
-              style={{ width: release.total > 0 ? `${(release.done / release.total) * 100}%` : '0%' }}
-            />
-          </div>
-          <div className="mt-1.5 text-[11px] text-zinc-400">
-            {release.done >= release.total ? '已完成' : '正在释放，不影响你继续操作…'}
-          </div>
+      {/* V2: 全局任务悬浮栈（跨页面常驻；多任务并存纵向堆叠；✕ 仅隐藏该条，后台继续） */}
+      {tasks.length > 0 && (
+        <div className="fixed bottom-5 right-5 z-50 w-72 space-y-2 pointer-events-none">
+          {tasks.map((t) => {
+            const donePct = t.total > 0 ? Math.min((t.done / t.total) * 100, 100) : 0
+            // 已完成仅当非忙态且 done>=total（停止扫描等忙态 done==total 时仍显示进行中文案）
+            const finished = !t.busy && (t.total <= 0 || t.done >= t.total)
+            return (
+              <div
+                key={t.id}
+                className="pointer-events-auto bg-white rounded-xl border border-zinc-200 shadow-xl p-3.5"
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[13px] font-semibold text-zinc-900">{t.title}</span>
+                  <span className="flex items-center gap-1.5">
+                    <span className="text-[12px] text-zinc-500 tabular-nums">
+                      {t.done}/{t.total}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => removeTask(t.id)}
+                      className="p-0.5 rounded text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100"
+                      title="关闭（后台继续）"
+                    >
+                      <X size={13} />
+                    </button>
+                  </span>
+                </div>
+                <div className="h-1.5 bg-zinc-100 rounded-full overflow-hidden">
+                  <div
+                    className={clsx('h-full rounded-full transition-all duration-300', TASK_COLORS[t.type])}
+                    style={{ width: `${donePct}%` }}
+                  />
+                </div>
+                <div className={clsx('mt-1.5 text-[11px]', t.error ? 'text-red-500' : 'text-zinc-400')}>
+                  {t.error ? '失败，详见页面提示' : finished ? '已完成' : TASK_TEXT[t.type]}
+                </div>
+              </div>
+            )
+          })}
         </div>
       )}
     {/* D1：退出二次确认弹窗 */}

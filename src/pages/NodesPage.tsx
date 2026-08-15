@@ -10,8 +10,11 @@ type ScanPhase = 'idle' | 'scanning' | 'stopping'
 
 export default function NodesPage({
   toast,
+  onTask,
 }: {
   toast: (msg: string, ok?: boolean) => void
+  /** V2: 上报全局任务悬浮窗（scan / stop-scan 进度） */
+  onTask: (t: { id: string; type: 'scan' | 'stop-scan'; title: string; done: number; total: number; busy?: boolean; error?: boolean }) => void
 }) {
   const [nodes, setNodes] = useState<NodeView[]>([])
   const [scan, setScan] = useState<ScanProgress | null>(null)
@@ -203,23 +206,32 @@ export default function NodesPage({
         if (!alive) return
         const prev = prevScanStatusRef.current
         prevScanStatusRef.current = p.status
-        // N1 三态状态机：startScan/stopScan 同步置位；poll 只做收尾确认
+        // N1 三态状态机（逻辑不变）：startScan/stopScan 同步置位；poll 只做收尾确认
         // （stopping→done 回 idle）与页面加载后的状态恢复，不再直接驱动按钮态，
         // 杜绝闪烁；停止请求后也不回填 scan（进度条立即消失、无 5/10 残留）。
+        // V2: 顺带同步全局任务悬浮窗的 scan / stop-scan 进度。
         if (phaseRef.current === 'stopping') {
-          // 已请求停止：等后端确认 done（停止完成）才回 idle；期间不回填进度条
-          if (p.status === 'done') setScanPhase('idle')
+          // 已请求停止：等后端确认 done（停止完成）才回 idle；期间持续上报停止进度
+          if (p.status === 'done') {
+            setScanPhase('idle')
+            onTask({ id: 'stop-scan', type: 'stop-scan', title: '停止扫描', done: p.stopping_count ?? 0, total: p.stopping_count ?? 0, busy: false })
+          } else {
+            onTask({ id: 'stop-scan', type: 'stop-scan', title: '停止扫描', done: p.stopped_count ?? 0, total: p.stopping_count ?? 0, busy: true })
+          }
         } else if (phaseRef.current === 'scanning') {
           if (p.status === 'running') {
             setScan(p)
+            onTask({ id: 'scan', type: 'scan', title: '扫描节点', done: p.current, total: p.total, busy: true })
           } else if (p.status === 'done') {
             setScan(p) // 结果弹窗依赖 done 快照（ok 数/可用节点列表）
+            onTask({ id: 'scan', type: 'scan', title: '扫描节点', done: p.total, total: p.total, busy: false })
             // 扫描刚完成（running → done）：弹出结果弹窗
             if (prev === 'running') setShowResult(true)
             setScanPhase('idle')
           } else if (p.status === 'stopping') {
             // 非本页发起的停止（另一会话/上次请求已到达）：跟随真实状态
             setScanPhase('stopping')
+            onTask({ id: 'stop-scan', type: 'stop-scan', title: '停止扫描', done: p.stopped_count ?? 0, total: p.stopping_count ?? 0, busy: true })
           } else {
             setScanPhase('idle')
           }
@@ -227,8 +239,10 @@ export default function NodesPage({
           // idle：页面加载/刷新后恢复真实后端状态（可能在扫或已停）
           setScan(p)
           setScanPhase('scanning')
+          onTask({ id: 'scan', type: 'scan', title: '扫描节点', done: p.current, total: p.total, busy: true })
         } else if (p.status === 'stopping') {
           setScanPhase('stopping')
+          onTask({ id: 'stop-scan', type: 'stop-scan', title: '停止扫描', done: p.stopped_count ?? 0, total: p.stopping_count ?? 0, busy: true })
         }
       } catch {
         /* ignore */
@@ -275,6 +289,7 @@ export default function NodesPage({
     try {
       const p = await api.scanStart({ nodes: names, timeout: 12 })
       setScan(p)
+      onTask({ id: 'scan', type: 'scan', title: '扫描节点', done: p.current, total: p.total, busy: true })
       toast(`开始扫描 ${names.length} 个节点…`)
     } catch (e) {
       setScanPhase('idle')
@@ -288,11 +303,14 @@ export default function NodesPage({
     setScanPhase('stopping')
     setScan(null)
     try {
-      await api.scanStop()
+      const p = await api.scanStop()
+      // V2: 上报停止进度（done=已停数, total=停止时探测中数）；后续由 poll 持续更新至完成
+      onTask({ id: 'stop-scan', type: 'stop-scan', title: '停止扫描', done: p.stopped_count ?? 0, total: p.stopping_count ?? 0, busy: true })
       toast('已请求停止扫描')
     } catch (e) {
       // 请求失败：退回扫描中，由 poll 按后端真实状态校正
       setScanPhase('scanning')
+      onTask({ id: 'stop-scan', type: 'stop-scan', title: '停止扫描', done: 0, total: 0, busy: false, error: true })
       toast(String(e), false)
     }
   }
