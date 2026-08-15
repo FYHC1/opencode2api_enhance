@@ -12,6 +12,14 @@ import (
 	"time"
 )
 
+// L5：会话 TTL——sessionTTL 有效期，鉴权时惰性删除过期条目并滑动续期。
+const sessionTTL = 24 * time.Hour
+
+// sessionEntry 登录会话条目（含过期时间）。
+type sessionEntry struct {
+	expiresAt time.Time
+}
+
 func requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if adminPassword == "" {
@@ -24,12 +32,23 @@ func requireAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		sessionsMu.Lock()
-		_, ok := sessions[cookie.Value]
-		sessionsMu.Unlock()
+		entry, ok := sessions[cookie.Value]
 		if !ok {
+			sessionsMu.Unlock()
 			http.Redirect(w, r, "/login", http.StatusFound)
 			return
 		}
+		if time.Now().After(entry.expiresAt) {
+			// L5：会话过期——惰性删除后重定向登录。
+			delete(sessions, cookie.Value)
+			sessionsMu.Unlock()
+			http.Redirect(w, r, "/login", http.StatusFound)
+			return
+		}
+		// L5：滑动续期——有效使用即刷新过期时间。
+		entry.expiresAt = time.Now().Add(sessionTTL)
+		sessions[cookie.Value] = entry
+		sessionsMu.Unlock()
 		next(w, r)
 	}
 }
@@ -151,7 +170,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		sessionsMu.Lock()
-		sessions[token] = struct{}{}
+		sessions[token] = sessionEntry{expiresAt: time.Now().Add(sessionTTL)}
 		sessionsMu.Unlock()
 		http.SetCookie(w, &http.Cookie{Name: "session", Value: token, Path: "/", HttpOnly: true})
 		http.Redirect(w, r, "/", http.StatusFound)

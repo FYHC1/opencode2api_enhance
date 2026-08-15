@@ -388,6 +388,29 @@ var (
 	callLogEnabled = true // main() 按 -gateway/-call-log 赋值；测试默认开启
 )
 
+// ======================== 并发流上限（CONC-10 L6） ========================
+// 进程级信号量：SSE 流式请求并发上限，防恶意客户端无限挂连接。
+// 非流式请求不受限；超限直接 503（与上游不可用语义区分）。
+const maxConcurrentStreams = 512
+
+// streamSlots 流式请求并发名额。
+var streamSlots = make(chan struct{}, maxConcurrentStreams)
+
+// tryAcquireStream 尝试占用一个流名额（非阻塞）；满员返回 false。
+func tryAcquireStream() bool {
+	select {
+	case streamSlots <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+// releaseStream 归还一个流名额（与 tryAcquireStream 成对，defer 覆盖所有返回路径）。
+func releaseStream() {
+	<-streamSlots
+}
+
 // ======================== SSE 调试（诊断 JSON 拼接） ========================
 // 临时诊断工具：把流式转发收到的原始行与转发行写入 sse_debug.log，
 // 便于定位 "Unexpected non-whitespace character after JSON" 的拼接现场。

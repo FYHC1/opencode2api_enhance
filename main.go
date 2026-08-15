@@ -87,6 +87,10 @@ func main() {
 	flag.BoolVar(&showVersion, "version", false, "显示版本信息")
 	flag.Parse()
 
+	// L2：flag.Parse 后（poolQualityPath 已定）惰性启动质量文件后台刷新器，
+	// 请求路径零读盘，质量刷新改由后台 ticker 驱动。
+	startPoolQualityRefresher()
+
 	initLogger()
 
 	if showVersion {

@@ -80,6 +80,19 @@ func claudeMessagesHandler(w http.ResponseWriter, r *http.Request) {
 	upstreamBody := buildUpstreamBody(&chatReq)
 
 	if claudeReq.Stream {
+		// L6：进程级流并发上限——超限直接 503（defer 覆盖所有返回路径释放名额）。
+		if !tryAcquireStream() {
+			callRec.Status = "fail"
+			callRec.ErrMsg = "并发流已达上限"
+			callRec.DurationMS = time.Since(startTime).Milliseconds()
+			callRec.Events = append(callRec.Events, CallEvent{Type: "capacity", Node: "", Detail: callRec.ErrMsg, At: time.Now()})
+			recordCall(callRec)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			json.NewEncoder(w).Encode(map[string]any{"type": "error", "error": map[string]string{"type": "overloaded", "message": "并发流已达上限，请稍后重试"}})
+			return
+		}
+		defer releaseStream()
 		upResp, status, _, proxyAddr, err := callOpenCodeAPIStream(r.Context(), upstreamBody, chatReq.Model, auth)
 		callRec.Nodes = append(callRec.Nodes, proxyAddr)
 		if err != nil || status < 200 || status >= 300 {

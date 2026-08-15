@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 )
 
 type contextKey string
@@ -99,8 +100,10 @@ var (
 	gatewayMode          bool
 	callLogFlag          bool // -call-log：实例子进程显式启用调用日志写盘
 	configMu             sync.RWMutex
-	storedResponses      = map[string]StoredResponseState{}
+	storedResponses      = map[string]storedResponseEntry{}
 	storedResponsesMu    sync.RWMutex
+	storedSeq            uint64    // storedResponses 插入序号（L5 淘汰最旧用）
+	storedLastPurge      time.Time // 上次批量清理时间（L5 节流）
 	// 厂商注册表与路由（配置驱动；applyConfig 写入）
 	providersCfg []ProviderCfg
 	routingCfg   RoutingCfg
@@ -110,6 +113,6 @@ var (
 
 var (
 	adminPassword string
-	sessions      = map[string]struct{}{}
+	sessions      = map[string]sessionEntry{}
 	sessionsMu    sync.Mutex
 )
