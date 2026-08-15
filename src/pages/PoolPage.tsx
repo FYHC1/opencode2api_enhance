@@ -331,7 +331,8 @@ export default function PoolPage({
     }
     try {
       await api.configSet('ui_poll_interval_sec', String(v))
-      toast('界面刷新配置已保存（重载页面后生效）', true)
+      setUiPollSec(v)
+      toast('界面刷新配置已保存（已生效）', true)
     } catch (e) {
       console.error('保存界面刷新配置失败', e)
       toast('保存失败', false)
@@ -1221,7 +1222,7 @@ export default function PoolPage({
                     <span className="text-[11px] text-zinc-400 w-8 shrink-0 text-right">0=关</span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-[11px] text-zinc-400">修改后重载页面生效</span>
+                    <span className="text-[11px] text-zinc-400">保存后即时生效</span>
                     <button onClick={() => void handleSaveUi()} className="bg-zinc-900 text-white rounded-lg px-4 py-2 text-[13px] hover:bg-zinc-700">
                       保存
                     </button>
