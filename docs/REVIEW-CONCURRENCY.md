@@ -13,16 +13,16 @@
 | H1 | 请求取消不穿透到下游（`context.Background()`） | 高 | CONC-1 | ✅ `d120ad6` |
 | H2 | 统计落盘每请求 spawn goroutine + 无锁并发写 | 高 | CONC-3 | ✅ `ae22129` |
 | H3 | 每请求重建 http.Client/Transport，连接池失效 | 高 | CONC-2 | ✅ `20e70ae` |
-| H4 | StopInstance 全局锁内 Kill + 全量落盘 | 高 | CONC-4 | ⬜ |
+| H4 | StopInstance 全局锁内 Kill + 全量落盘 | 高 | CONC-4 | ✅ `cd29df7` |
 | H5 | windsurf 账号可被并发借用 | 高 | CONC-6 | ⬜ |
-| H6 | 订阅导入端口记账偏移 `+10000`（应 `+2000`） | 高 | CONC-4 | ⬜ |
+| H6 | 订阅导入端口记账偏移 `+10000`（应 `+2000`） | 高 | CONC-4 | ✅ `cd29df7` |
 | M1 | 网关 Status「未运行则拉起」check-then-act 竞态 | 中 | CONC-5 | ⬜ |
 | M2 | refreshModels 无锁读 g.password（数据竞态） | 中 | CONC-5 | ⬜ |
 | M3 | 模型目录/上游目录多源串行拉取 | 中 | CONC-7 | ⬜ |
 | M4 | 调用日志锁内磁盘 IO + 文件永不轮转 + 整文件读 | 中 | CONC-3（写侧 ✅ `ae22129`）/CONC-8（读侧） | 🔄 写侧完成，读侧待 |
 | M5 | 健康巡检串行探测 + 双轮无互斥 + 旧快照重启 | 中 | CONC-7 | ⬜ |
 | M6 | 自动订阅整轮串行 + 等待间隔取最短源 | 中 | CONC-7 | ⬜ |
-| M7 | 订阅缓存 load-modify-write 无锁并发覆盖 | 中 | CONC-4 | ⬜ |
+| M7 | 订阅缓存 load-modify-write 无锁并发覆盖 | 中 | CONC-4 | ✅ `cd29df7` |
 | M8 | 每请求重建模型目录（O(catalog) 热路径） | 中 | CONC-2 | ✅ `20e70ae` |
 | M9 | 前端轮询无 in-flight 守卫（4 页） | 中 | CONC-9 | ⬜ |
 | M10 | 任务悬浮面板驱动 App 整树重渲染 | 中 | CONC-9 | ⬜ |
