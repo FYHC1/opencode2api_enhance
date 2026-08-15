@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"sync"
+	"sync/atomic"
 
 	"github.com/6Kmfi6HP/opencode2api/core/contract"
 	"github.com/6Kmfi6HP/opencode2api/vendors/opencode"
@@ -28,6 +29,29 @@ var (
 	ocAdapterOnce   sync.Once
 	ocAdapterTarget *opencode.Vendor
 )
+
+// catalogGen 模型目录代际：refreshModelCatalog 每次同步后递增。
+// syncVendorState / seedVendorCatalog 只在代际变化时执行 SetCatalog——
+// 目录 10 分钟才刷新，逐请求 O(catalog) 遍历重建是纯浪费。
+var catalogGen atomic.Int64
+
+// vendorCatalogLastGen 各厂商最近一次 SetCatalog 的代际（缺项 = 从未同步）。
+var vendorCatalogLastGenMu sync.Mutex
+var vendorCatalogLastGen = map[string]int64{}
+
+// catalogGenChanged 返回该厂商是否需要重新 SetCatalog，并原子记录本次代际。
+// 首次请求（缺项）视为代际 -1 → 强制同步；同代际并发下仅第一个调用方执行。
+func catalogGenChanged(vendorID string) bool {
+	gen := catalogGen.Load()
+	vendorCatalogLastGenMu.Lock()
+	defer vendorCatalogLastGenMu.Unlock()
+	last, ok := vendorCatalogLastGen[vendorID]
+	if ok && last == gen {
+		return false
+	}
+	vendorCatalogLastGen[vendorID] = gen
+	return true
+}
 
 // mainCodeVendor 返回全局 OpenCode 厂商。
 // 生产：优先复用聚合器（globalAgg）中已注册的 opencode 实例——目录与聊天共享同一
@@ -80,6 +104,9 @@ func modeName(mode AuthRouteMode) string {
 // 会话由厂商自身持有（vendors/opencode 内 lazy 初始化 / 测试经 SetSession 注入），
 // 本函数不再读写全局会话。
 func syncVendorState(v *opencode.Vendor) {
+	if !catalogGenChanged("opencode") {
+		return // 目录代际未变：跳过 O(catalog) 重建与 SetCatalog
+	}
 	modelMu.RLock()
 	zen, goM := modelsCache, goModelsCache
 	modelMu.RUnlock()
@@ -112,6 +139,9 @@ func seedVendorCatalog(v contract.Vendor) {
 	seeder, ok := v.(interface{ SetCatalog([]contract.Model) })
 	if !ok {
 		return
+	}
+	if !catalogGenChanged(v.ID()) {
+		return // 目录代际未变：跳过 O(catalog) 遍历与 SetCatalog
 	}
 	var mine []contract.Model
 	for _, m := range globalAgg.Catalog() {

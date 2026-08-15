@@ -100,8 +100,7 @@ func installFakeOpenCodeClient(t *testing.T, responses []fakeUpstreamResponse) *
 	oldModelsCache := modelsCache
 	oldGoModelsCache := goModelsCache
 	oldActiveSocks5 := activeSocks5
-	oldSocks5Client := socks5Client
-	oldSocks5ClientAddr := socks5ClientAddr
+	oldSocks5ClientCache := socks5ClientCache
 
 	transport := &fakeRetryTransport{
 		t:         t,
@@ -116,9 +115,10 @@ func installFakeOpenCodeClient(t *testing.T, responses []fakeUpstreamResponse) *
 
 	socks5Mu.Lock()
 	activeSocks5 = ""
-	socks5Client = nil
-	socks5ClientAddr = ""
 	socks5Mu.Unlock()
+	socks5CacheMu.Lock()
+	socks5ClientCache = map[proxyCacheKey]*http.Client{}
+	socks5CacheMu.Unlock()
 
 	// 会话已从 package 全局收拢进 vendors/opencode：直接注入 vendor 实例（跳过版本探测）。
 	mainCodeVendor().SetSession("test-version", "ses_test", "project_test")
@@ -131,9 +131,10 @@ func installFakeOpenCodeClient(t *testing.T, responses []fakeUpstreamResponse) *
 		modelMu.Unlock()
 		socks5Mu.Lock()
 		activeSocks5 = oldActiveSocks5
-		socks5Client = oldSocks5Client
-		socks5ClientAddr = oldSocks5ClientAddr
 		socks5Mu.Unlock()
+		socks5CacheMu.Lock()
+		socks5ClientCache = oldSocks5ClientCache
+		socks5CacheMu.Unlock()
 	})
 
 	return transport
