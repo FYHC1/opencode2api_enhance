@@ -23,9 +23,12 @@
   主链 A：M3~M6（验证/CI）→ S1（竞速预算）→ S5（自适应竞速）
   支线 B：E1（上游代理出口）  支线 D：S4（日志补齐）
   主链后：S2（429 感知）→ S3（质量自愈）
-第二阶段（U 系列，REQ 文档实施，✅ 已完成并验收，2026-08-14）：
+第二阶段（U 系列，✅ 已完成并验收，2026-08-14）：
   U1 节点池 poll bug 修复 → U2 实例池状态筛选 → U3 轮询配置+独享轮询
   → U4 日志分页 → U5 统计迷你图
+第三阶段（V 系列，2026-08-15 新增，待派工）：
+  V1 停止扫描并发接逻辑（N2 拍板：probeNode 取消支持 + stop_scan_concurrency 生效）
+  → V2 全局任务悬浮窗（scan/stop-scan/restart/batch/release 多任务栈）
 ```
 
 > 依赖说明：第一阶段 S/E 系列已全部合入 main 并通过验收（`go test` 全绿）。
@@ -44,6 +47,8 @@
 | 3 | **U3** | 轮询配置 `ui_poll_interval_sec` + 独享轮询 + 折叠面板 | ✅ 已完成（`f0351e9`） | 独立 |
 | 4 | **U4** | 日志页分页（每页 100） | ✅ 已完成（`1d16501`） | 独立 |
 | 5 | **U5** | 统计页纯 CSS 迷你图 | ✅ 已完成（`6f4daad`） | 独立 |
+| 6 | **V1** | 停止扫描并发接逻辑（probeNode 取消支持 + stop_scan_concurrency 生效） | ⬜ 待派工 | 🔴 拍板项 |
+| 7 | **V2** | 全局任务悬浮窗（scan/stop-scan/restart/batch/release 多任务栈） | ⬜ 待派工 | 依赖 V1 停止进度数据 |
 | — | M3~M6 | 多端收尾验证（CI/真机） | 🔶 待部署机验证 | 可穿插 |
 
 ---
@@ -251,6 +256,55 @@
 
 ---
 
+## 阶段 V1：停止扫描并发接逻辑（N2 拍板项，2026-08-15）
+
+**背景**：`stop_scan_concurrency`（默认 4）目前是**死配置**——配置项/校验/title 齐全，
+但停止逻辑从未使用；扫描停止 = `RequestStop()` 置 Stopping 标志，所有 worker 同时收到
+（已并发），正在跑的 `probeNode` 阻塞无取消机制（最长 25s 干等）——这才是停止慢的真因。
+需求文档：`docs/REQ-GLOBAL-TASK-PANEL.md` 第一节。
+
+**拍板语义**（用户确认）：`stop_scan_concurrency` = **停止时并发中断正在探测进程的上限**
+（防一次性斩断全部 worker 的资源尖峰）。
+
+**功能开发**：
+1. `core/manager/probe_node.go`：`probeNode` 加**取消支持**——探测循环可被停止信号中断，
+   中断时 `runner.Kill(sbPID/ocPID)` 清理探针进程（复用 P0 defer 清理路径）；
+2. `core/manager/probe.go`：`RequestStop(concurrency)` 接收并发上限，按限流中断正在跑的探测；
+3. 前端 `api.scanStop()` 可传并发数（或读全局配置 `stop_scan_concurrency`）；
+4. `RequestStop` 返回 `stopping_count`（当前探测中数）/ `stopped_count`（已停数），供 V2 悬浮窗进度。
+
+**测试**：取消路径单测（探测中收到停止 → 探针进程被 Kill、goroutine 无泄漏 -race）；
+并发上限边界；stopping_count/stopped_count 计数正确。
+
+**验证**：挂起节点 → 停止 → 观察正在跑的探针被快速中断（不再等 25s）；配置 4 并发时
+中断进程数 ≤4。**验收：停止响应明显变快；stop_scan_concurrency 生效。**
+
+---
+
+## 阶段 V2：全局任务悬浮窗（2026-08-15）
+
+**目标**：长耗时操作在右下角**全局悬浮窗**显示进度，**用户可切换页面，不必留在原页等**。
+需求文档：`docs/REQ-GLOBAL-TASK-PANEL.md` 第二节（含设计图）。
+
+**功能开发**（文件级）：
+1. `src/App.tsx`：`release` state 扩为**通用多任务栈** `tasks: [{id,type,title,done,total,active}]`；
+   渲染右下角悬浮栈（fixed bottom-5 right-5 z-50 w-72，多任务纵向堆叠，每任务可 ✕ 关闭）；
+   type→颜色/文案映射（release=red / scan=teal / stop-scan=amber / restart=amber / batch=teal）；
+   现有 `onRelease` 包装兼容池页调用。
+2. `src/pages/NodesPage.tsx`：扫描中上报 `scan`（Current/Total，来自轮询）；停止中上报
+   `stop-scan`（done=stopped_count, total=stopping_count——依赖 V1 后端返回）。
+3. `src/pages/PoolPage.tsx`：`doRestart` 上报 `restart`（阶段进度：停网关→停全部→释放端口→启成员→网关）；
+   批量启停/测试上报 `batch`（分块并发 done/total）。
+4. `src/pages/InstancesPage.tsx`（可选）：独享页批量操作同上报 `batch`。
+
+**测试**：多任务并存堆叠；✕ 关闭不影响后台；跨页常驻进度更新；完成自动消失；
+0/0 不崩溃；`npm run build` + tsc 全绿。
+
+**验证**（需部署机/用户）：扫描 20 节点 → 切统计页 → 悬浮窗持续显示至完成；
+停止扫描 → 切页 → 停止进度显示；多任务并存互不干扰。
+
+---
+
 ## 阶段 E1：上游代理出口（MVP）
 
 **目标**：设置页填「上游代理」（如 `socks5://127.0.0.1:7897`），所有实例 `active_socks5` 指向它，绕过本机裸连 IP 限流。已验证可行（详见 MASTER-PLAN §四·五）。
@@ -292,6 +346,8 @@
 | 10 | U3 | 轮询间隔可配 + 独享页自动轮询 + 折叠面板 | ✅ | 2026-08-14 | 配置解析单测（含 0=关持久生效）+ 前端走查（自动化 ✅）；浏览器待部署机 |
 | 11 | U4 | 日志分页：5000+ 条流畅 | ✅ | 2026-08-14 | 分页逻辑走查 + tsc（自动化 ✅）；渲染走查待部署机 |
 | 12 | U5 | 统计迷你图（纯 CSS） | ✅ | 2026-08-14 | `npm run build` + 占比/0 值走查（自动化 ✅）；目视待部署机 |
+| 13 | V1 | stop_scan_concurrency 生效：停止中断探测 ≤ 配置并发，停止明显变快 | ⬜ | | 挂节点停止实测 + 单测 |
+| 14 | V2 | 全局悬浮窗：scan/stop-scan/restart/batch/release 多任务跨页常驻 | ⬜ | | 切页走查 + 多任务堆叠 |
 
 > 维护规则：每完成一项把状态改 ✅ 并注明日期/验证命令。验证不通过 → 该行保持 ❌，
 > 下一条目阶段的「阶段开头：上阶段遗留」中声明并优先修复。
