@@ -36,18 +36,33 @@ func (a *Aggregator) Vendors() []contract.Vendor {
 	return append([]contract.Vendor(nil), a.vendors...)
 }
 
-// Refresh 遍历所有已注册厂商拉取目录并合并缓存。
+// Refresh 并行拉取所有已注册厂商目录并合并缓存。
+// 每家厂商独立预算：在总 60s 预算内派生各自 ctx，一家慢/挂起只影响自己；
 // 单个厂商失败不影响其它厂商（记录到 catalog 之外由调用方决定是否告警）。
+// 合并仍单次写锁重建倒排索引；目录按注册顺序拼接。
 func (a *Aggregator) Refresh(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	vendors := a.Vendors()
+	// 并行拉取各厂商目录（结果按下标收集，顺序与注册序一致）。
+	parts := make([][]contract.Model, len(vendors))
+	var wg sync.WaitGroup
+	for i, v := range vendors {
+		wg.Add(1)
+		go func(i int, v contract.Vendor) {
+			defer wg.Done()
+			vctx, vcancel := context.WithTimeout(ctx, 60*time.Second)
+			defer vcancel()
+			ms, err := v.ListModels(vctx)
+			if err != nil || len(ms) == 0 {
+				return
+			}
+			parts[i] = ms
+		}(i, v)
+	}
+	wg.Wait()
 	var all []contract.Model
-	for _, v := range vendors {
-		ms, err := v.ListModels(ctx)
-		if err != nil || len(ms) == 0 {
-			continue
-		}
+	for _, ms := range parts {
 		all = append(all, ms...)
 	}
 	// 倒排索引：modelID → 提供厂商（去重、保持目录出现顺序）。

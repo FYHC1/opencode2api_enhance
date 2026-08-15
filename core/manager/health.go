@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"time"
 )
 
@@ -55,18 +56,35 @@ func (m *Manager) loadHealthRecords() []HealthRecord {
 	return recs
 }
 
-// saveHealthRecords 持久化健康记录。
+// saveHealthRecords 持久化健康记录（临时文件+Rename 原子落盘，防并发读半截 JSON）。
 func (m *Manager) saveHealthRecords(recs []HealthRecord) {
 	_ = os.MkdirAll(m.paths.RuntimeDir, 0o755)
 	data, err := json.MarshalIndent(recs, "", "  ")
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile(m.healthFilePath(), data, 0o644)
+	path := m.healthFilePath()
+	tmp, err := os.CreateTemp(m.paths.RuntimeDir, "health-*.tmp")
+	if err != nil {
+		return
+	}
+	defer os.Remove(tmp.Name()) // 失败路径清理；成功后目标已不存在，无副作用
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		return
+	}
+	_ = os.Rename(tmp.Name(), path)
 }
 
+// healthProbeConcurrency 并发探活上限（M5：并行探测不放大端口风暴）。
+const healthProbeConcurrency = 8
+
 // probePort 探测实例 API 端口是否可连接（TCP connect，timeout 内成功即健康）。
-func probePort(port uint16, timeout time.Duration) bool {
+// 变量接缝：测试可替换为可控阻塞实现（对齐 netstatCmd/G22 seam 风格）。
+var probePort = func(port uint16, timeout time.Duration) bool {
 	conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", itoa(port)), timeout)
 	if err != nil {
 		return false
@@ -75,8 +93,11 @@ func probePort(port uint16, timeout time.Duration) bool {
 	return true
 }
 
-// RunHealthCheckOnce 单轮巡检：探测 Running 实例的 API 端口，达阈值自动重启。
+// RunHealthCheckOnce 单轮巡检：并发探测 Running 实例的 API 端口，达阈值自动重启。
+// healthMu 串行化轮次：后台循环与手动触发互斥，避免双轮并发对同一实例重复 stop/start。
 func (m *Manager) RunHealthCheckOnce(runner Runner) HealthSummary {
+	m.healthMu.Lock()
+	defer m.healthMu.Unlock()
 	if runner == nil {
 		runner = m.Run()
 	}
@@ -99,24 +120,38 @@ func (m *Manager) RunHealthCheckOnce(runner Runner) HealthSummary {
 		}
 	}
 
+	// 并发探测（semaphore ≤8），结果按 name 记，单实例失败不阻塞整轮。
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, healthProbeConcurrency)
 	for i := range running {
 		inst := running[i]
-		rec := byName[inst.Name]
-		if rec == nil {
-			rec = &HealthRecord{Name: inst.Name, Healthy: true, LastCheckTS: now}
-			byName[inst.Name] = rec
-		}
-		rec.LastCheckTS = now
-		if probePort(inst.Port, time.Second) {
-			rec.Healthy = true
-			rec.ConsecutiveFailures = 0
-			rec.LastError = ""
-		} else {
-			rec.Healthy = false
-			rec.ConsecutiveFailures++
-			rec.LastError = "API 端口 127.0.0.1:" + itoa(inst.Port) + " 不可达"
-		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			ok := probePort(inst.Port, time.Second)
+			mu.Lock()
+			rec := byName[inst.Name]
+			if rec == nil {
+				rec = &HealthRecord{Name: inst.Name, Healthy: true, LastCheckTS: now}
+				byName[inst.Name] = rec
+			}
+			rec.LastCheckTS = now
+			if ok {
+				rec.Healthy = true
+				rec.ConsecutiveFailures = 0
+				rec.LastError = ""
+			} else {
+				rec.Healthy = false
+				rec.ConsecutiveFailures++
+				rec.LastError = "API 端口 127.0.0.1:" + itoa(inst.Port) + " 不可达"
+			}
+			mu.Unlock()
+		}()
 	}
+	wg.Wait()
 
 	// 依据配置自动重启：仅对「当前 Running 且连续失败达阈值」的实例重启，
 	// 避免把已停止实例（含陈旧的失败计数记录）误启。
@@ -132,6 +167,17 @@ func (m *Manager) RunHealthCheckOnce(runner Runner) HealthSummary {
 		}
 	}
 	for _, name := range toRestart {
+		// 复核当前状态：轮开始快照后用户可能已手动停止该实例，不再拉起。
+		if inst, ok := m.FindInstance(name); !ok || inst.Status.State != "Running" {
+			if rec := byName[name]; rec != nil {
+				// 已停止实例清零失败计数，避免用户下次手动启动后
+				// 被陈旧计数立刻误重启。
+				rec.Healthy = true
+				rec.ConsecutiveFailures = 0
+				rec.LastError = ""
+			}
+			continue
+		}
 		stopped := m.StopInstance(runner, name) == nil
 		started := false
 		if stopped {
