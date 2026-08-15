@@ -10,7 +10,7 @@
 
 | 编号 | 问题 | 严重度 | 归属阶段 | 状态 |
 |---|---|---|---|---|
-| H1 | 请求取消不穿透到下游（`context.Background()`） | 高 | CONC-1 | ⬜ |
+| H1 | 请求取消不穿透到下游（`context.Background()`） | 高 | CONC-1 | ✅ `d120ad6` |
 | H2 | 统计落盘每请求 spawn goroutine + 无锁并发写 | 高 | CONC-3 | ⬜ |
 | H3 | 每请求重建 http.Client/Transport，连接池失效 | 高 | CONC-2 | ⬜ |
 | H4 | StopInstance 全局锁内 Kill + 全量落盘 | 高 | CONC-4 | ⬜ |
@@ -29,7 +29,7 @@
 | M11 | NodesPage 扫描状态机异常分支不收敛 | 中 | CONC-9 | ⬜ |
 | L1 | 熔断/质量路由锁粒度（排序比较器内反复加锁） | 低 | CONC-10 | ⬜ |
 | L2 | 每次竞速请求多次 loadPoolQualityCache 读盘 | 低 | CONC-10 | ⬜ |
-| L3 | 429 退避 time.Sleep 不感知 ctx 取消 | 低 | CONC-1 | ⬜ |
+| L3 | 429 退避 time.Sleep 不感知 ctx 取消 | 低 | CONC-1 | ✅ `d120ad6` |
 | L4 | windsurf preRegisterIfLow 防抖失效（局部 channel） | 低 | CONC-6 | ⬜ |
 | L5 | storedResponses 无上限/无过期 + 会话只增不减 | 低 | CONC-10 | ⬜ |
 | L6 | SSE/流无并发连接上限 | 低 | CONC-10 | ⬜ |
