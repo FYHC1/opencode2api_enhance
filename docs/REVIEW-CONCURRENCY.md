@@ -14,7 +14,7 @@
 | H2 | 统计落盘每请求 spawn goroutine + 无锁并发写 | 高 | CONC-3 | ✅ `ae22129` |
 | H3 | 每请求重建 http.Client/Transport，连接池失效 | 高 | CONC-2 | ✅ `20e70ae` |
 | H4 | StopInstance 全局锁内 Kill + 全量落盘 | 高 | CONC-4 | ✅ `cd29df7` |
-| H5 | windsurf 账号可被并发借用 | 高 | CONC-6 | ⬜ |
+| H5 | windsurf 账号可被并发借用 | 高 | CONC-6 | ✅ `df1c01f` |
 | H6 | 订阅导入端口记账偏移 `+10000`（应 `+2000`） | 高 | CONC-4 | ✅ `cd29df7` |
 | M1 | 网关 Status「未运行则拉起」check-then-act 竞态 | 中 | CONC-5 | ✅ `43f1c9c` |
 | M2 | refreshModels 无锁读 g.password（数据竞态） | 中 | CONC-5 | ✅ `43f1c9c` |
@@ -30,7 +30,7 @@
 | L1 | 熔断/质量路由锁粒度（排序比较器内反复加锁） | 低 | CONC-10 | ⬜ |
 | L2 | 每次竞速请求多次 loadPoolQualityCache 读盘 | 低 | CONC-10 | ⬜ |
 | L3 | 429 退避 time.Sleep 不感知 ctx 取消 | 低 | CONC-1 | ✅ `d120ad6` |
-| L4 | windsurf preRegisterIfLow 防抖失效（局部 channel） | 低 | CONC-6 | ⬜ |
+| L4 | windsurf preRegisterIfLow 防抖失效（局部 channel） | 低 | CONC-6 | ✅ `df1c01f` |
 | L5 | storedResponses 无上限/无过期 + 会话只增不减 | 低 | CONC-10 | ⬜ |
 | L6 | SSE/流无并发连接上限 | 低 | CONC-10 | ⬜ |
 | L7 | probe 单节点预算超支（GET/POST 各自拿预算） | 低 | CONC-10 | ⬜ |
