@@ -13,13 +13,14 @@ import (
 )
 
 // stopRunner 线程安全 fake Runner：记录 spawn/kill 并统计同时进行中的 kill 并发窗口
-// （Kill 停留 20ms 拉宽窗口，供 stop_scan_concurrency 上限断言）。
+// （Kill 停留 killDelay 拉宽窗口，默认 20ms，供 stop_scan_concurrency 上限断言）。
 type stopRunner struct {
 	mu          sync.Mutex
 	starts      int
 	killed      []int
 	inflight    int
 	maxInflight int
+	killDelay   time.Duration // 0 = 20ms
 }
 
 func (f *stopRunner) Start(spec ExecSpec) (int, error) {
@@ -30,13 +31,17 @@ func (f *stopRunner) Start(spec ExecSpec) (int, error) {
 }
 
 func (f *stopRunner) Kill(pid int) error {
+	d := f.killDelay
+	if d <= 0 {
+		d = 20 * time.Millisecond
+	}
 	f.mu.Lock()
 	f.inflight++
 	if f.inflight > f.maxInflight {
 		f.maxInflight = f.inflight
 	}
 	f.mu.Unlock()
-	time.Sleep(20 * time.Millisecond)
+	time.Sleep(d)
 	f.mu.Lock()
 	f.inflight--
 	f.killed = append(f.killed, pid)
@@ -265,5 +270,109 @@ func TestProbeNodeSkipsAfterStop(t *testing.T) {
 	ctrl.activeMu.Unlock()
 	if left != 0 {
 		t.Fatalf("activeProbes not empty: %d", left)
+	}
+}
+
+// V2: 停止进度渐进可见——RequestStop 阻塞期间 StoppedCount 逐步递增，
+// 快照可观察到 0<stopped<n 的中间进度（而非 wg.Wait 后一次性置满 100%）。
+func TestInterruptProbesProgressesStoppedCount(t *testing.T) {
+	m := newTestManager(t)
+	if err := m.ConfigSet("stop_scan_concurrency", "1"); err != nil {
+		t.Fatalf("set config: %v", err)
+	}
+	run := &stopRunner{killDelay: 100 * time.Millisecond}
+	ctrl := NewScanController(m, run)
+	ctrl.mu.Lock()
+	ctrl.progress.Status = ScanRunning
+	ctrl.mu.Unlock()
+	const n = 5
+	for w := 0; w < n; w++ {
+		ctrl.registerProbe(w, 1000+w*10, 1000+w*10+1)
+	}
+
+	// 背景采样：RequestStop 阻塞期间轮询快照，记录观察到的 StoppedCount 序列。
+	stop := make(chan struct{})
+	samples := make(chan int, 256)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				samples <- ctrl.Snapshot().StoppedCount
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+	}()
+
+	snap := ctrl.RequestStop()
+	close(stop)
+	wg.Wait()
+	close(samples)
+
+	if snap.Status != ScanStopping {
+		t.Fatalf("status = %s, want stopping", snap.Status)
+	}
+	if snap.StoppingCount != n || snap.StoppedCount != n {
+		t.Fatalf("final counts = %d/%d, want %d/%d", snap.StoppingCount, snap.StoppedCount, n, n)
+	}
+	// 必须观察到渐进中间值（0 < stopped < n）——一次性置满则永远观察不到。
+	seenMid := false
+	for c := range samples {
+		if c > 0 && c < n {
+			seenMid = true
+			break
+		}
+	}
+	if !seenMid {
+		snap2 := ctrl.Snapshot()
+		t.Fatalf("StoppedCount never observed mid-progress (0<stopped<%d), final %d/%d", n, snap2.StoppingCount, snap2.StoppedCount)
+	}
+}
+
+// V2: 状态已非 Running 时重复 RequestStop 直接返回快照——
+// 不重入 interruptProbes（避免清空计数 / 重复 kill）。
+func TestRequestStopNonRunningDoesNotReinterrupt(t *testing.T) {
+	m := newTestManager(t)
+	run := &stopRunner{}
+	ctrl := NewScanController(m, run)
+	ctrl.mu.Lock()
+	ctrl.progress.Status = ScanRunning
+	ctrl.mu.Unlock()
+	for w := 0; w < 3; w++ {
+		ctrl.registerProbe(w, 1000+w*10, 1000+w*10+1)
+	}
+
+	first := ctrl.RequestStop()
+	if first.StoppingCount != 3 || first.StoppedCount != 3 {
+		t.Fatalf("first stop counts = stopping %d / stopped %d, want 3/3", first.StoppingCount, first.StoppedCount)
+	}
+	killed := len(run.killed)
+
+	// 已 stopping：重复 stop 保持计数、不再 kill。
+	again := ctrl.RequestStop()
+	if again.Status != ScanStopping {
+		t.Fatalf("second stop status = %s, want stopping", again.Status)
+	}
+	if again.StoppingCount != 3 || again.StoppedCount != 3 {
+		t.Fatalf("second stop clobbered counts = %d/%d, want 3/3", again.StoppingCount, again.StoppedCount)
+	}
+	if len(run.killed) != killed {
+		t.Fatalf("second stop killed again: %d -> %d", killed, len(run.killed))
+	}
+
+	// done 状态下 stop 同样保持快照、不回退。
+	ctrl.mu.Lock()
+	ctrl.progress.Status = ScanDone
+	ctrl.mu.Unlock()
+	afterDone := ctrl.RequestStop()
+	if afterDone.Status != ScanDone {
+		t.Fatalf("status after done = %s, want done", afterDone.Status)
+	}
+	if afterDone.StoppingCount != 3 || afterDone.StoppedCount != 3 {
+		t.Fatalf("done stop clobbered counts = %d/%d, want 3/3", afterDone.StoppingCount, afterDone.StoppedCount)
 	}
 }

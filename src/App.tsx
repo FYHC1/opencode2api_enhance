@@ -34,7 +34,16 @@ type TaskItem = {
   busy?: boolean
   /** 失败标记：悬浮窗内该行文案变红（失败明细 toast 已由页面上报） */
   error?: boolean
+  /** 最近一次 upsert 时间戳（V2 超时兜底：busy scan 任务超过预计时长无更新的收尾移除） */
+  lastUpdate?: number
 }
+
+// V2: scan 任务无更新超时——扫描中切走页面后 NodesPage poll 停止、无人上报 done 时，
+// 防止 busy scan 任务在悬浮窗永久冻结；按扫描规模估算（下限 60s，页面内 poll 每 800ms
+// 刷新 lastUpdate，正常运行不会触发）。
+const SCAN_STALE_BASE_MS = 60_000
+const SCAN_STALE_PER_NODE_MS = 5_000
+const scanStaleMs = (total: number) => Math.min(600_000, SCAN_STALE_BASE_MS + total * SCAN_STALE_PER_NODE_MS)
 
 const TASK_COLORS: Record<TaskType, string> = {
   release: 'bg-red-500',
@@ -70,10 +79,11 @@ export default function App() {
   // removeTask 仅隐藏该条（后台继续）；clearTask 完成/失败自动收起重置（短暂保留完成态后移除）。
   const upsertTask = (task: TaskItem) => {
     setTasks((prev) => {
+      const item = { ...task, lastUpdate: Date.now() }
       const idx = prev.findIndex((t) => t.id === task.id)
-      if (idx === -1) return [...prev, task]
+      if (idx === -1) return [...prev, item]
       const next = prev.slice()
-      next[idx] = task
+      next[idx] = item
       return next
     })
   }
@@ -86,14 +96,34 @@ export default function App() {
     return window.setTimeout(() => removeTask(id), 1200)
   }
 
-  // V2: 完成/失败自动收起重置——done>=total（或 0/0 重置信号）短暂保留后移除；空 tasks 不渲染
+  // V2: 完成/失败自动收起重置——仅非忙态且 done>=total（或 0/0 重置信号）短暂保留后移除；
+  // busy 任务（停止扫描等 done==total 仍进行中）不参与自动收起；空 tasks 不渲染。
   useEffect(() => {
     if (tasks.length === 0) return
     const timers = tasks
-      .filter((t) => t.total <= 0 || t.done >= t.total)
+      .filter((t) => !t.busy && (t.total <= 0 || t.done >= t.total))
       .map((t) => clearTask(t.id))
     return () => timers.forEach(clearTimeout)
   }, [tasks])
+
+  // V2: busy scan 任务超时兜底——每 5s 检查超过预计时长无更新的 scan 任务，
+  // 置为非忙（0/0 由上方收起 effect 移除），防「扫描中切页后无人上报 done」冻结。
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setTasks((prev) => {
+        const now = Date.now()
+        let changed = false
+        const next = prev.map((t) => {
+          if (t.type !== 'scan' || !t.busy) return t
+          if (now - (t.lastUpdate ?? now) <= scanStaleMs(t.total)) return t
+          changed = true
+          return { ...t, busy: false, done: 0, total: 0 }
+        })
+        return changed ? next : prev
+      })
+    }, 5000)
+    return () => window.clearInterval(timer)
+  }, [])
 
   // V2: onRelease 兼容包装——PoolPage 现有释放调用（{active,done,total}）零改动映射到任务栈；
   // busy 由 done/total 推导：进行中忙态文案，完成（done=total）后显示「已完成」并自动收起。
@@ -172,7 +202,7 @@ export default function App() {
         <main className="flex-1 min-w-0 overflow-y-auto">
           {tab === 'instances' && <InstancesPage toast={showToast} />}
           {tab === 'pool' && <PoolPage toast={showToast} onRelease={onRelease} onTask={upsertTask} />}
-          {tab === 'nodes' && <NodesPage toast={showToast} onTask={upsertTask} />}
+          {tab === 'nodes' && <NodesPage toast={showToast} onTask={upsertTask} onRemove={removeTask} />}
           {tab === 'stats' && <StatsPage toast={showToast} />}
           {tab === 'logs' && <LogsPage toast={showToast} />}
           {tab === 'settings' && <SettingsPage toast={showToast} onRequestExit={() => setExitOpen(true)} />}
