@@ -24,11 +24,11 @@ func resetStatsHandler(w http.ResponseWriter, r *http.Request) {
 	tokenStatsMu.Lock()
 	tokenStats = &TokenStatsData{Models: map[string]*ModelStats{}}
 	tokenStatsMu.Unlock()
-	saveTokenStats()
+	flushTokenStatsNow()
 	nodeStatsMu.Lock()
 	nodeStats = &NodeStatsData{Nodes: map[string]*NodeStat{}}
 	nodeStatsMu.Unlock()
-	saveNodeStats()
+	flushNodeStatsNow()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }

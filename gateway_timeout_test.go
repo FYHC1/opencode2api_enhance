@@ -59,8 +59,10 @@ func TestCallLogJSONLFile(t *testing.T) {
 	path := filepath.Join(dir, "call_log.jsonl")
 	l := NewEventLog(10)
 	l.SetPath(path)
+	defer l.Stop() // 停掉后台写者，避免测试泄漏 ticker goroutine
 	l.Append(CallRecord{ReqID: "r1", Status: "ok", Model: "m1", Events: []CallEvent{{Type: "switch", Node: "a", Detail: "ttft", At: time.Now()}}})
 	l.Append(CallRecord{ReqID: "r2", Status: "fail", ErrMsg: "boom"})
+	l.Flush() // 异步单写者：读文件前同步排空待写缓冲
 	restored, err := LoadCallLogFromFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -111,7 +113,9 @@ func TestSetTimeoutConfigFromApp(t *testing.T) {
 	}
 	// 恢复，避免影响其他测试
 	timeoutCfg = DefaultTimeoutConfig()
+	oldLog := callLog
 	callLog = NewEventLog(DefaultCallLogMax)
+	oldLog.Stop() // 停掉残留后台写者
 	_ = os.Remove("call_log.jsonl")
 }
 

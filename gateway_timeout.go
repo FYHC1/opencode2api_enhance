@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -73,6 +75,27 @@ func (c TimeoutConfig) RandomProbeN() int {
 // ======================== 全流程调用日志 ========================
 // 记录每个请求的完整决策链：接口/模型/节点/路由模式/连接结果/超时/切换/结果。
 // 前端日志页按「成功一行简短、异常整块详细」渲染，每条以【成功】/【失败】开头。
+// CONC-3（M4 写侧）：落盘移出请求路径——Append 锁内只更新内存 ring + 入队待写缓冲，
+// 由后台单写者周期批量写 JSONL（写者/Flush 串行，请求路径零文件 IO）。
+
+const (
+	// maxPendingLines/maxPendingBytes 待写缓冲上限：超限丢最旧待写行并告警一次
+	//（内存 ring 完整，读侧不受影响；文件最多滞后一个写周期）。
+	maxPendingLines = 1024
+	maxPendingBytes = 1 << 20
+)
+
+// callLogRotateBytes 单文件轮转阈值（atomic：测试可注入小阈值）：超过后滚动为 <path>.1。
+// 读侧对 .1 的尾部读取在 CONC-8 补齐（本阶段只做写侧轮转）。
+var callLogRotateBytes atomic.Int64
+
+// callLogWriteInterval 后台写者周期（atomic：测试可缩短注入）。
+var callLogWriteInterval atomic.Int64
+
+func init() {
+	callLogRotateBytes.Store(64 << 20)
+	callLogWriteInterval.Store(int64(500 * time.Millisecond))
+}
 
 type CallEvent struct {
 	Type   string    `json:"type"`
@@ -108,18 +131,165 @@ type EventLog struct {
 	mu         sync.Mutex
 	maxRecords int
 	records    []CallRecord
-	path       string // 非空时同步落盘 JSONL
+	path       string // 非空时写者落盘 JSONL（异步单写者）
+
+	// 待写缓冲：Append 在锁内入队，写者/Flush 锁外批量写盘
+	pendingWrite []byte
+	pendingLines int
+	droppedLines int
+	dropWarned   bool
+
+	writeMu sync.Mutex // 串行化文件写（写者与 Flush 共享 fd）
+	f       *os.File   // 复用 fd；换路径/出错/轮转时重开
+
+	writerOnce sync.Once
+	startCh    chan struct{} // 写者启动时关闭（Stop 判断是否需等待）
+	writerDone chan struct{} // 写者退出时关闭（含 fd 关闭）
+	stopCh     chan struct{}
+	stopOnce   sync.Once
 }
 
 func NewEventLog(maxRecords int) *EventLog {
-	return &EventLog{maxRecords: maxRecords}
+	return &EventLog{
+		maxRecords: maxRecords,
+		startCh:    make(chan struct{}),
+		writerDone: make(chan struct{}),
+		stopCh:     make(chan struct{}),
+	}
 }
 
-// SetPath 启用 JSONL 落盘（路径的父目录需存在）
+// SetPath 启用 JSONL 落盘（路径的父目录需存在）。
+// 首次设置即惰性启动后台单写者；换路径关闭旧 fd，已有待写缓冲在下一次 flush 写新路径。
 func (l *EventLog) SetPath(path string) {
 	l.mu.Lock()
-	defer l.mu.Unlock()
+	oldPath := l.path
 	l.path = path
+	l.mu.Unlock()
+	if path != "" && path != oldPath {
+		l.writeMu.Lock()
+		if l.f != nil {
+			l.f.Close()
+			l.f = nil
+		}
+		l.writeMu.Unlock()
+		l.startWriter()
+	}
+}
+
+// SetMaxRecords 就地调整环形上限（热加载迁移用：保留已聚合记录与写者生命周期，
+// 不再整体替换对象导致内存记录整批丢失）。
+func (l *EventLog) SetMaxRecords(n int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if n > 0 {
+		l.maxRecords = n
+	}
+	if len(l.records) > l.maxRecords {
+		l.records = l.records[len(l.records)-l.maxRecords:]
+	}
+}
+
+// startWriter 惰性启动后台单写者（仅一次）。
+func (l *EventLog) startWriter() {
+	l.writerOnce.Do(func() { go l.writerLoop() })
+}
+
+// writerLoop 后台单写者：周期排空待写缓冲（间隔每次动态读取，便于测试缩短）。
+func (l *EventLog) writerLoop() {
+	close(l.startCh)
+	defer close(l.writerDone)
+	defer l.closeFile()
+	for {
+		select {
+		case <-l.stopCh:
+			return
+		case <-time.After(time.Duration(callLogWriteInterval.Load())):
+			l.flushPending()
+		}
+	}
+}
+
+// Stop 幂等停止后台写者并等待其退出（fd 已关闭；测试/替换实例用）。
+// 停止后仍可 Append（仅内存 ring）/ReadAll，持久化只剩显式 Flush。
+func (l *EventLog) Stop() {
+	l.stopOnce.Do(func() { close(l.stopCh) })
+	select {
+	case <-l.startCh:
+		<-l.writerDone // 写者已启动：等其退出，确保 fd 关闭后再返回
+	default:
+		// 写者未启动（无 path）：无 fd，无需等待
+	}
+}
+
+// Flush 同步排空待写缓冲落盘（测试与管理端需要即时可见时调用）。
+func (l *EventLog) Flush() {
+	l.flushPending()
+}
+
+// flushPending 排空待写缓冲到文件：循环直到无新 pending（写者/Flush 共用，
+// 写盘全程在 lock 外）。
+func (l *EventLog) flushPending() {
+	for {
+		data, path := l.takePending()
+		if len(data) == 0 {
+			return
+		}
+		l.writeToFile(data, path)
+	}
+}
+
+// takePending 锁内取走全部待写缓冲（返回目标路径供锁外写盘）。
+func (l *EventLog) takePending() ([]byte, string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	data := l.pendingWrite
+	l.pendingWrite = nil
+	l.pendingLines = 0
+	return data, l.path
+}
+
+// writeToFile 把一批序列化行追加到 JSONL（fd 复用；被外部删除/写失败时重开）。
+// 写前检查文件大小，超过轮转阈值时滚动为 .1（Windows 下 os.Rename 不覆盖
+// 已存在目标，先删旧 .1 再改名）。
+func (l *EventLog) writeToFile(data []byte, path string) {
+	l.writeMu.Lock()
+	defer l.writeMu.Unlock()
+	if l.f != nil {
+		if _, err := os.Stat(path); err != nil {
+			// 文件被外部删除（如管理端清空日志）：重开重建
+			l.f.Close()
+			l.f = nil
+		}
+	}
+	if l.f != nil {
+		if st, err := l.f.Stat(); err == nil && st.Size() > callLogRotateBytes.Load() {
+			l.f.Close()
+			l.f = nil
+			_ = os.Remove(path + ".1")
+			_ = os.Rename(path, path+".1")
+		}
+	}
+	if l.f == nil {
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			return // 打开失败：本批丢弃，下次 flush 重试（请求路径无 IO）
+		}
+		l.f = f
+	}
+	if _, err := l.f.Write(data); err != nil {
+		l.f.Close()
+		l.f = nil // 写失败：丢弃本批并重开
+	}
+}
+
+// closeFile 关闭复用 fd（写者退出时调用）。
+func (l *EventLog) closeFile() {
+	l.writeMu.Lock()
+	defer l.writeMu.Unlock()
+	if l.f != nil {
+		l.f.Close()
+		l.f = nil
+	}
 }
 
 func (l *EventLog) MaxRecords() int { return l.maxRecords }
@@ -136,13 +306,24 @@ func (l *EventLog) Append(rec CallRecord) error {
 		if err != nil {
 			return err
 		}
-		f, err := os.OpenFile(l.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		if _, err := f.Write(append(b, '\n')); err != nil {
-			return err
+		l.pendingWrite = append(l.pendingWrite, b...)
+		l.pendingWrite = append(l.pendingWrite, '\n')
+		l.pendingLines++
+		// 待写缓冲超限：丢最旧待写行（内存 ring 完整），告警一次
+		for l.pendingLines > maxPendingLines || len(l.pendingWrite) > maxPendingBytes {
+			l.droppedLines++
+			if !l.dropWarned {
+				l.dropWarned = true
+				slog.Warn("call log 待写缓冲超限，丢弃最旧待写记录", "dropped", l.droppedLines)
+			}
+			idx := bytes.IndexByte(l.pendingWrite, '\n')
+			if idx < 0 {
+				l.pendingWrite = nil
+				l.pendingLines = 0
+				break
+			}
+			l.pendingWrite = l.pendingWrite[idx+1:]
+			l.pendingLines--
 		}
 	}
 	return nil
@@ -274,7 +455,7 @@ func recordCall(rec CallRecord) {
 			rec.Events[i].Node = direct
 		}
 	}
-	// callLog 指针可能被热加载替换（setTimeoutConfigFromApp），加锁读取
+	// callLog 指针启动时可能被替换（initCallLog），加锁读取
 	callLogMu.RLock()
 	l := callLog
 	callLogMu.RUnlock()
@@ -304,8 +485,9 @@ func setTimeoutConfigFromApp(cfg AppConfig) {
 	timeoutCfgMu.Unlock()
 	if cfg.CallLogMax > 0 {
 		callLogMu.Lock()
-		callLog = NewEventLog(cfg.CallLogMax)
-		callLog.SetPath(callLogPath)
+		// CONC-3（M4 写侧）热加载迁移：就地改上限，不整体替换对象——
+		// 保留已聚合内存记录与写者生命周期（原整批丢失问题随整体替换消除）
+		callLog.SetMaxRecords(cfg.CallLogMax)
 		callLogMu.Unlock()
 	}
 }

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"os"
 	"sync"
+	"sync/atomic"
+	"time"
 )
 
 type ModelStats struct {
@@ -24,7 +26,18 @@ var (
 	tokenStats     = &TokenStatsData{Models: map[string]*ModelStats{}}
 	tokenStatsMu   sync.Mutex
 	tokenStatsPath = "stats.json"
+	// CONC-3（H2）：统计写盘合并为单写者——recordXxx 锁内只累加 + 置 dirty，
+	// 写盘由进程级后台 goroutine 周期执行，杜绝每请求 spawn 写盘 goroutine。
+	tokenStatsDirty    bool
+	tokenStatsFlushCnt int64 // 实际落盘次数（测试断言 dirty 机制用）
 )
+
+// statsFlushInterval 后台统计写盘周期（atomic：测试可动态注入缩短）。
+var statsFlushInterval atomic.Int64
+
+func init() {
+	statsFlushInterval.Store(int64(5 * time.Second))
+}
 
 // ======================== 节点 Token 统计 ========================
 // 网关/代理池模式下按实际选中的 SOCKS5 出口（节点）累计 token 统计，
@@ -43,10 +56,36 @@ type NodeStatsData struct {
 }
 
 var (
-	nodeStats     = &NodeStatsData{Nodes: map[string]*NodeStat{}}
-	nodeStatsMu   sync.Mutex
-	nodeStatsPath = "node_stats.json"
+	nodeStats         = &NodeStatsData{Nodes: map[string]*NodeStat{}}
+	nodeStatsMu       sync.Mutex
+	nodeStatsPath     = "node_stats.json"
+	nodeStatsDirty    bool
+	nodeStatsFlushCnt int64 // 实际落盘次数（测试断言 dirty 机制用）
 )
+
+// markNodeStatsDirty 置 dirty 并惰性启动进程级单写者（首次记录时）。
+func markNodeStatsDirty() {
+	nodeStatsMu.Lock()
+	nodeStatsDirty = true
+	nodeStatsMu.Unlock()
+	startStatsWriter()
+	wakeStatsWriter()
+}
+
+// flushNodeStatsNow 同步落盘当前内存节点统计（管理端重置统计/测试用；
+// 常规写盘由后台单写者周期执行）。
+func flushNodeStatsNow() {
+	nodeStatsMu.Lock()
+	nodeStatsDirty = false
+	nodeStatsFlushCnt++
+	data, err := json.MarshalIndent(nodeStats, "", "  ")
+	path := nodeStatsPath
+	nodeStatsMu.Unlock()
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(path, data, 0644)
+}
 
 func loadNodeStats() {
 	data, err := os.ReadFile(nodeStatsPath)
@@ -63,16 +102,6 @@ func loadNodeStats() {
 	}
 	nodeStats = &st
 	nodeStatsMu.Unlock()
-}
-
-func saveNodeStats() {
-	nodeStatsMu.Lock()
-	data, err := json.MarshalIndent(nodeStats, "", "  ")
-	nodeStatsMu.Unlock()
-	if err != nil {
-		return
-	}
-	os.WriteFile(nodeStatsPath, data, 0644)
 }
 
 func recordNodeUsage(addr string, promptTokens, completionTokens, totalTokens int64) {
@@ -93,7 +122,8 @@ func recordNodeUsage(addr string, promptTokens, completionTokens, totalTokens in
 	ns.CompletionTokens += completionTokens
 	ns.TotalTokens += totalTokens
 	nodeStatsMu.Unlock()
-	go saveNodeStats()
+	// CONC-3（H2）：只置 dirty，写盘交给后台单写者（不再每请求 go save）
+	markNodeStatsDirty()
 }
 
 // ======================== 数据模型 ========================
