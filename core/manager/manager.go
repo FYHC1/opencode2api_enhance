@@ -85,6 +85,10 @@ type Manager struct {
 	runner Runner
 	gw     *Gateway
 	scan   *ScanController
+
+	// poolProbeMu 串行化链路探活轮（后台循环与手动触发互斥执行），防止并发
+	// load+save pool_quality.json；配合 savePoolQuality 临时文件+Rename 原子落盘。
+	poolProbeMu sync.Mutex
 }
 
 // New 创建管理器。

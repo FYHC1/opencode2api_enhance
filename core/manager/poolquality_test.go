@@ -745,3 +745,51 @@ func TestRunPoolQualityOnce(t *testing.T) {
 		t.Fatalf("view total=%d, want 1", view.Total)
 	}
 }
+
+// G9：并发执行 RunPoolQualityOnce（模拟后台探活轮与手动触发同时触发）——
+// 探活互斥保证轮次串行，pool_quality.json 不撕裂、样本不丢失（-race 验证无数据竞争）。
+func TestRunPoolQualityOnceConcurrent(t *testing.T) {
+	m := New(t.TempDir())
+
+	back := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer back.Close()
+
+	goodSocks := startTestSocks5(t, socksModeProxy)
+	_ = m.AddInstance(Instance{Name: "good", Port: 14410, SingboxPort: socksPort(t, goodSocks), Node: "n1", Password: "sk"})
+	for _, inst := range m.ListInstances() {
+		inst.Status = StatusRunning()
+		_ = m.UpdateInstance(inst)
+	}
+	_ = m.ConfigSet("base_url", back.URL+"/v1")
+	_ = m.ConfigSet("pool_probe_timeout_sec", "2")
+
+	// 多 goroutine 同时触发探活轮。
+	const rounds = 4
+	results := make([]PoolQualitySummary, rounds)
+	var wg sync.WaitGroup
+	for i := 0; i < rounds; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			results[i] = m.RunPoolQualityOnce(&fakeRunner{})
+		}(i)
+	}
+	wg.Wait()
+
+	// 每轮结果完整（互斥串行，不撕裂）。
+	for i, s := range results {
+		if s.Total != 1 || s.Healthy != 1 {
+			t.Fatalf("round %d total=%d healthy=%d, want 1/1", i, s.Total, s.Healthy)
+		}
+	}
+	// 文件是完整 JSON 且每轮样本都保留（并发不丢失/回退）。
+	loaded := m.loadPoolQuality()
+	if len(loaded) != 1 {
+		t.Fatalf("persisted %d records, want 1", len(loaded))
+	}
+	if got := len(loaded[0].Samples); got != rounds {
+		t.Fatalf("samples=%d, want %d (concurrent rounds must not lose samples)", got, rounds)
+	}
+}
