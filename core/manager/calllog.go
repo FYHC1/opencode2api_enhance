@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -78,6 +80,8 @@ func (m *Manager) InstanceCallLogPath(name string) string {
 // ReadCallLog 聚合读取最新 max 条：统一网关日志 + 各 Running 实例（含独享）
 // call_log.jsonl，按实例名标注 Source、按时间合并升序（旧→新，与既有 API 语义一致）。
 // 每个文件只取末尾 callLogAggregateTail 条限制 IO；缺失/损坏 → 跳过。
+// 多文件并发读取（semaphore ≤8），结果按下标收集后按「网关 → 实例顺序」拼接，
+// 保证同时间戳记录的稳定排序 tie-break 语义不因并发完成顺序而乱。
 func (m *Manager) ReadCallLog(max int) []CallLogRecord {
 	if max <= 0 {
 		max = 1
@@ -85,12 +89,38 @@ func (m *Manager) ReadCallLog(max int) []CallLogRecord {
 	if max > 50000 {
 		max = 50000
 	}
-	all := readCallLogFileTail(m.CallLogPath(), "", callLogAggregateTail)
+	// 待读文件列表：下标 0 = 统一网关；其后按 ListInstances 顺序的 Running 实例。
+	type logFile struct {
+		path   string // 主文件
+		source string // 来源标注（"" = 统一网关）
+	}
+	var files []logFile
+	files = append(files, logFile{path: m.CallLogPath()})
 	for _, inst := range m.ListInstances() {
 		if inst.Status.State != "Running" {
 			continue
 		}
-		all = append(all, readCallLogFileTail(m.InstanceCallLogPath(inst.Name), inst.Name, callLogAggregateTail)...)
+		files = append(files, logFile{path: m.InstanceCallLogPath(inst.Name), source: inst.Name})
+	}
+	// 并发读各文件尾部：每 goroutine 只写下标 i 自己的槽位（无共享写竞态）。
+	parts := make([][]CallLogRecord, len(files))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, callLogReadConcurrency)
+	for i := range files {
+		f := files[i]
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			parts[i] = readCallLogFileTail(f.path, f.source, callLogAggregateTail)
+		}()
+	}
+	wg.Wait()
+
+	var all []CallLogRecord
+	for i := range parts {
+		all = append(all, parts[i]...)
 	}
 	// 按时间合并升序（稳定排序：同时间戳保持 网关 → 实例 读取顺序）。
 	sort.SliceStable(all, func(i, j int) bool {
@@ -106,22 +136,116 @@ func (m *Manager) ReadCallLog(max int) []CallLogRecord {
 	return all
 }
 
-// readCallLogFileTail 读取单个日志文件末尾最多 tail 条（按文件顺序，最后为最新）。
+// callLogReadConcurrency 日志文件并发读取上限（聚合时控制文件句柄数）。
+const callLogReadConcurrency = 8
+
+// callLogTailWindow 大文件尾部读取窗口（字节）：文件超过该值不再整文件载入内存，
+// 只读末尾固定窗口。小文件（≤ 窗口）仍整读。测试可注入小值。
+var callLogTailWindow atomic.Int64
+
+// callLogWindowBytes 读取当前尾部窗口大小（延迟初始化 8MB）。
+func callLogWindowBytes() int64 {
+	if v := callLogTailWindow.Load(); v > 0 {
+		return v
+	}
+	callLogTailWindow.Store(8 << 20)
+	return 8 << 20
+}
+
+// readCallLogFileTail 读取单个日志文件的「有效尾部」：.1 轮转旧段 + 主文件。
+// .1 内容更旧在前、主文件在后，拼接后取最后 tail 条；缺失 .1 不报错（现状行为）。
+// 返回语义：按文件顺序、最后为最新、最多 tail 条；文件缺失 → nil。
 func readCallLogFileTail(path, source string, tail int) []CallLogRecord {
-	data, err := os.ReadFile(path)
+	prev := readCallLogFilePart(path+".1", source, tail)
+	main := readCallLogFilePart(path, source, tail)
+	merged := append(prev, main...)
+	if len(merged) > tail {
+		merged = merged[len(merged)-tail:]
+	}
+	return merged
+}
+
+// readCallLogFilePart 读取单个日志文件尾部最多 tail 条记录（保持旧→新文件顺序）。
+// 大文件只读末尾 callLogWindowBytes 字节窗口；窗口内记录不足 tail（行超长）时
+// 回退整读兜底（防丢数据）。
+func readCallLogFilePart(path, source string, tail int) []CallLogRecord {
+	st, err := os.Stat(path)
 	if err != nil {
 		return nil
 	}
+	if st.Size() <= callLogWindowBytes() {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		return parseCallLogRecords(data, source, tail)
+	}
+	data, ok := readLogTailWindow(path, callLogWindowBytes())
+	if !ok {
+		return nil
+	}
+	records := parseLogLines(data, source)
+	if len(records) < tail {
+		// 窗口内不足 tail 条：行超长导致窗口未覆盖足够记录，回退整读防丢数据。
+		full, err := os.ReadFile(path)
+		if err != nil {
+			return records
+		}
+		return parseCallLogRecords(full, source, tail)
+	}
+	if len(records) > tail {
+		records = records[len(records)-tail:]
+	}
+	return records
+}
+
+// readLogTailWindow 读取文件末尾 n 字节，返回其中的完整行（旧→新）：
+// 窗口前置读 1 字节判定起点——起点不在行首（前一字节非换行）时首段是残行，
+// 直接截掉；起点恰在行首则保留整行。窗口覆盖整文件（off=0）时不做截断。
+func readLogTailWindow(path string, n int64) ([][]byte, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, false
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return nil, false
+	}
+	// 窗口提前 1 字节：若该字节是换行说明窗口起点恰在行首，否则首段必为残行。
+	off := st.Size() - n - 1
+	if off < 0 {
+		off = 0
+	}
+	buf := make([]byte, st.Size()-off)
+	if _, err := f.ReadAt(buf, off); err != nil {
+		return nil, false
+	}
+	lines := splitCallLog(buf, '\n')
+	if off > 0 && buf[0] != '\n' {
+		lines = lines[1:]
+	}
+	return lines, true
+}
+
+// parseCallLogRecords 解析整文件字节为记录，截尾最多 tail 条（保持文件顺序）。
+func parseCallLogRecords(data []byte, source string, tail int) []CallLogRecord {
+	records := parseLogLines(splitCallLog(data, '\n'), source)
+	if len(records) > tail {
+		records = records[len(records)-tail:]
+	}
+	return records
+}
+
+// parseLogLines 解析行切片为记录（保持顺序，丢弃空白/损坏行）。
+func parseLogLines(lines [][]byte, source string) []CallLogRecord {
 	records := make([]CallLogRecord, 0, 64)
-	for _, line := range splitCallLog(data, '\n') {
+	for _, line := range lines {
 		if len(bytes.TrimSpace(line)) == 0 {
 			continue
 		}
 		var rec CallLogRecord
 		if json.Unmarshal(line, &rec) == nil {
-			if len(records) >= tail {
-				records = records[1:]
-			}
 			rec.Source = source
 			records = append(records, rec)
 		}
@@ -139,11 +263,14 @@ func callLogTime(ts string) time.Time {
 }
 
 // ClearCallLog 清空统一网关调用日志（删除文件；Go 网关 Append 只追加，内存环形缓冲不回写）。
+// 同时删除轮转旧段 .1：读侧合并 .1 + 主文件，只删主文件会让旧段残留并重返日志页。
 func (m *Manager) ClearCallLog() error {
 	path := m.CallLogPath()
-	if _, err := os.Stat(path); err == nil {
-		if err := os.Remove(path); err != nil {
-			return fmt.Errorf("删除日志文件失败: %w", err)
+	for _, p := range []string{path, path + ".1"} {
+		if _, err := os.Stat(p); err == nil {
+			if err := os.Remove(p); err != nil {
+				return fmt.Errorf("删除日志文件失败: %w", err)
+			}
 		}
 	}
 	return nil
