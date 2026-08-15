@@ -812,3 +812,42 @@ func TestRaceCandidatesProbeFillsShortfall(t *testing.T) {
 		t.Fatalf("shortfall must be filled with half-open probe, got %+v", got)
 	}
 }
+
+// G16：压力阈值倒挂钳制——Low >= High 的分段组合在 applyConfig 处被忽略
+// （保持默认/上一次合法值，.Store 原子写），避免 raceCopies 判定反转。
+func TestApplyConfigPressureClamp(t *testing.T) {
+	resetPoolPerfState()
+
+	// 双侧合法：0.3 < 0.9 → 都写入。
+	applyConfig(AppConfig{PoolRacePressureLow: 0.3, PoolRacePressureHigh: 0.9})
+	if got := poolRacePressureLow.Load().(float64); got != 0.3 {
+		t.Fatalf("low=%v, want 0.3", got)
+	}
+	if got := poolRacePressureHigh.Load().(float64); got != 0.9 {
+		t.Fatalf("high=%v, want 0.9", got)
+	}
+
+	// 双侧倒挂：Low=0.8 >= High=0.5 → 整对忽略，保持上一次合法组合。
+	applyConfig(AppConfig{PoolRacePressureLow: 0.8, PoolRacePressureHigh: 0.5})
+	if got := poolRacePressureLow.Load().(float64); got != 0.3 {
+		t.Fatalf("inverted low=%v, want 0.3（保持）", got)
+	}
+	if got := poolRacePressureHigh.Load().(float64); got != 0.9 {
+		t.Fatalf("inverted high=%v, want 0.9（保持）", got)
+	}
+
+	// 单侧与另一侧（当前值）倒挂 → 忽略该侧；合法单侧 → 写入。
+	resetPoolPerfState()
+	applyConfig(AppConfig{PoolRacePressureHigh: 0.4}) // 当前 Low 默认 0.5，0.4 < 0.5 倒挂
+	if got := poolRacePressureHigh.Load().(float64); got != 1.0 {
+		t.Fatalf("high-alone-inverted=%v, want 1.0（默认保持）", got)
+	}
+	applyConfig(AppConfig{PoolRacePressureLow: 0.2}) // 0.2 < 1.0 合法
+	if got := poolRacePressureLow.Load().(float64); got != 0.2 {
+		t.Fatalf("low-alone=%v, want 0.2", got)
+	}
+	applyConfig(AppConfig{PoolRacePressureLow: 2.0}) // 2.0 >= 1.0 倒挂
+	if got := poolRacePressureLow.Load().(float64); got != 0.2 {
+		t.Fatalf("low-alone-inverted=%v, want 0.2（保持）", got)
+	}
+}

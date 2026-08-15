@@ -793,3 +793,64 @@ func TestRunPoolQualityOnceConcurrent(t *testing.T) {
 		t.Fatalf("samples=%d, want %d (concurrent rounds must not lose samples)", got, rounds)
 	}
 }
+
+// ---- G22：后台循环停止句柄 ----
+
+// TestLoopStopHandles G22：StartPoolQualityLoop / StartHealthLoop 返回停止函数，
+// 停止后循环退出——后台轮不再写 runtime 文件（文件 mtime 保持静止）。
+func TestLoopStopHandles(t *testing.T) {
+	t.Run("pool quality", func(t *testing.T) {
+		m := newTestManager(t)
+		if err := m.saveConfig(Config{PoolProbeIntervalSec: 1}); err != nil {
+			t.Fatalf("saveConfig: %v", err)
+		}
+		stop := m.StartPoolQualityLoop()
+		waitLoopWrite(t, m.poolQualityFilePath(), "pool quality probe")
+		stop()
+		assertLoopStopped(t, m.poolQualityFilePath(), "pool quality loop")
+	})
+	t.Run("health", func(t *testing.T) {
+		m := newTestManager(t)
+		if err := m.saveConfig(Config{HealthCheckIntervalSec: 1}); err != nil {
+			t.Fatalf("saveConfig: %v", err)
+		}
+		stop := m.StartHealthLoop()
+		waitLoopWrite(t, m.healthFilePath(), "health check")
+		stop()
+		assertLoopStopped(t, m.healthFilePath(), "health loop")
+	})
+}
+
+// waitLoopWrite 等到后台轮把结果文件写出来（循环确认在运行）。
+func waitLoopWrite(t *testing.T, path, what string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s did not write %s", what, path)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// assertLoopStopped 停止后等待超过一轮间隔，文件 mtime 不再变 → 循环已退出。
+func assertLoopStopped(t *testing.T, path, what string) {
+	t.Helper()
+	// 等取消收尾（若恰在轮次中，让该轮落定后再取基准）。
+	time.Sleep(300 * time.Millisecond)
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	time.Sleep(1600 * time.Millisecond)
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s after: %v", path, err)
+	}
+	if after.ModTime().After(before.ModTime()) {
+		t.Fatalf("%s still running after stop: mtime %v -> %v", what, before.ModTime(), after.ModTime())
+	}
+}

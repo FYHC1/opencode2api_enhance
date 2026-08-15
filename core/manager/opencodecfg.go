@@ -4,6 +4,7 @@ package manager
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"sort"
 	"strconv"
@@ -35,23 +36,37 @@ func reasoningMap() map[string]string {
 // upstreamProxyAddr 把配置的 upstream_proxy 归一化为裸 host:port。
 // socks.go 的 socks5Dial 直接 net.Dial("tcp", addr)，地址不接受带 scheme 的前缀——
 // 因此 socks5:// 与 http:// 前缀在此剥离（Clash mixed-port 同时支持两种协议，统一
-// 存 host:port）。空串 / 无法解析出 host:port（如无端口）返回 ""（回退直连 = 现状）。
+// 存 host:port）。空串（未配置）返回 "" 走本地直连；已配置但非法（无端口 / // 前缀 /
+// 端口 0 等）也返回 "" 并告警（G24：静默回退会让用户以为走了代理、实际直连，无从排查）。
 func upstreamProxyAddr(raw string) string {
 	addr := strings.TrimSpace(raw)
-	if i := strings.Index(addr, "://"); i >= 0 {
-		addr = addr[i+len("://"):]
-	}
 	if addr == "" {
 		return ""
 	}
-	if _, port, err := net.SplitHostPort(addr); err != nil {
+	if i := strings.Index(addr, "://"); i >= 0 {
+		addr = addr[i+len("://"):]
+	}
+	// G24：// 前缀（如 "socks5:////127.0.0.1:5" 归一化后剩 "//127.0.0.1:5"）判非法——
+	// SplitHostPort 能拆出它，但 socks5Dial 的 net.Dial 会必失败。
+	if strings.HasPrefix(addr, "//") {
+		upstreamProxyWarn(raw)
 		return ""
-	} else if _, err := strconv.ParseUint(port, 10, 16); err != nil {
+	}
+	if _, port, err := net.SplitHostPort(addr); err != nil {
+		upstreamProxyWarn(raw)
+		return ""
+	} else if n, err := strconv.ParseUint(port, 10, 16); err != nil || n == 0 {
 		// SplitHostPort 不校验端口数字（如 "7897/path" 也能拆出），
-		// socks5Dial 直接 net.Dial 需要数字端口。
+		// socks5Dial 直接 net.Dial 需要数字端口；端口 0 也是病态输入（G24）。
+		upstreamProxyWarn(raw)
 		return ""
 	}
 	return addr
+}
+
+// upstreamProxyWarn 告警一次非法 upstream_proxy（G24：失败回退不再静默）。
+func upstreamProxyWarn(raw string) {
+	slog.Warn("upstream_proxy invalid, falling back to local direct", "value", raw)
 }
 
 // buildOpenCodeCfg 单实例配置：默认本地 sing-box 作为唯一 SOCKS5 出口；

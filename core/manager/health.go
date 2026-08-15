@@ -9,6 +9,7 @@
 package manager
 
 import (
+	"context"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -171,12 +172,23 @@ func (m *Manager) RunHealthCheckOnce(runner Runner) HealthSummary {
 }
 
 // StartHealthLoop 后台巡检循环：按配置间隔（health_check_interval_sec，0 则不巡检）运行。
-func (m *Manager) StartHealthLoop() {
+// 返回停止函数（G22：测试/热重建可关闭 goroutine；生产启动忽略返回值）。
+func (m *Manager) StartHealthLoop() (stop func()) {
+	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
 			interval := m.loadConfig().HealthCheckIntervalSec
 			if interval <= 0 {
-				time.Sleep(30 * time.Second)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(30 * time.Second):
+				}
 				continue
 			}
 			started := time.Now()
@@ -186,9 +198,14 @@ func (m *Manager) StartHealthLoop() {
 			if wait < time.Second {
 				wait = time.Second
 			}
-			time.Sleep(wait)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(wait):
+			}
 		}
 	}()
+	return cancel
 }
 
 // HealthCheckHandler POST 手动触发一轮巡检。

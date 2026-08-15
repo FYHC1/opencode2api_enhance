@@ -455,6 +455,13 @@ func raceMarkOutcome(mark func(string, int, error), o raceOutcome) {
 // mark 上报落选候选的失败结果（G6：池健康/冷却可见；赢家与全败返回的候选由 call 统一标记，避免重复）。
 func (v *Vendor) raceDo(ctx context.Context, racer contract.Racer, req *http.Request, streaming bool, tier contract.Tier, copies int, mark func(string, int, error)) (*http.Response, string, error) {
 	clients, addrs := racer.CandidateClients(tier, streaming, copies)
+	// G14：契约未强制 clients/addrs 等长——按下标访问（addrs[i]）前按短者截断，
+	// 防止某 transport 实现返回不等长列表时越界 panic 拖崩整个网关进程。
+	if len(addrs) < len(clients) {
+		clients = clients[:len(addrs)]
+	} else if len(clients) < len(addrs) {
+		addrs = addrs[:len(clients)]
+	}
 	if len(clients) == 0 {
 		return nil, "", nil
 	}
@@ -629,6 +636,8 @@ func raceDrain(wg *sync.WaitGroup, results chan raceOutcome, mark func(string, i
 
 // activeRequests 当前活跃请求数（S5 压力系数分子）：Chat/ChatStream 入口 +1、
 // 返回时 -1（流式在返回流时即释放，不计流消费时长）——所有返回路径成对。
+// G18：流式消费期不计入是已声明的设计取舍——客户端慢消费下压力被低估、
+// 可能开出偏高竞速副本；若要精确需在流关闭时再 -1，取舍而非缺陷，保持现状。
 var activeRequests atomic.Int64
 
 // ActiveRequests 返回当前活跃请求数（供代理池计算压力系数）。

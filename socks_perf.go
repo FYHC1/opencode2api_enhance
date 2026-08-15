@@ -66,25 +66,28 @@ type poolQualityEntry struct {
 var (
 	poolQualityMu     sync.RWMutex
 	poolQualityCache  map[string]poolQualityEntry
-	poolQualityStamp  time.Time // 上次读取时的文件 mtime
+	poolQualityStamp  time.Time // 上次读取时的文件 mtime（仅记录，G19 起不参与节流判定）
 	poolQualityLoaded time.Time
 )
 
-// loadPoolQualityCache 读取质量文件；mtime 未变且 5s 内已读则跳过。
+// loadPoolQualityCache 读取质量文件；距上次加载 <5s 时跳过（节流与 mtime 无关）。
 func loadPoolQualityCache() {
 	if poolQualityPath == "" {
 		return
 	}
-	info, err := os.Stat(poolQualityPath)
-	if err != nil {
-		return
-	}
 	// G7：节流字段在 poolQualityMu 下读判（写侧同锁保护），命中节流直接返回；
 	// 未命中才进入加载逻辑（ReadFile 不持锁，仅写回缓存时持写锁）。
+	// G19：节流仅按 5s 窗口——mtime 未变且距上次加载 >5s 时不再逐请求重复读盘
+	// （旧条件只在 5s 内挡「mtime 未变」，5s 后每个请求仍会重新 ReadFile）；
+	// mtime 倒退（时钟回拨）由 5s 过期兜底刷新，不再可能永不刷新。
 	poolQualityMu.RLock()
-	throttled := !info.ModTime().After(poolQualityStamp) && time.Since(poolQualityLoaded) < 5*time.Second
+	throttled := time.Since(poolQualityLoaded) < 5*time.Second
 	poolQualityMu.RUnlock()
 	if throttled {
+		return
+	}
+	info, err := os.Stat(poolQualityPath)
+	if err != nil {
 		return
 	}
 	data, err := os.ReadFile(poolQualityPath)
@@ -105,7 +108,7 @@ func loadPoolQualityCache() {
 	}
 	poolQualityMu.Lock()
 	poolQualityCache = cache
-	poolQualityStamp = info.ModTime()
+	poolQualityStamp = info.ModTime() // 仅记录 mtime（诊断用；G19 起不参与节流判定）
 	poolQualityLoaded = time.Now()
 	poolQualityMu.Unlock()
 }
@@ -188,10 +191,16 @@ var (
 )
 
 // proxyInflightAdd 对节点在途计数加 delta（首次访问自动创建计数）。
+// G17：代理列表重建会整体清空本 map——清空后配对另一半（如竞速收尾的 -1）
+// 先到时不创建负值条目（无记录按 0 处理，语义一致），避免永久 -1 干扰候选排序。
 func proxyInflightAdd(addr string, delta int) {
 	proxyInFlightMu.Lock()
 	c := proxyInFlight[addr]
 	if c == nil {
+		if delta <= 0 {
+			proxyInFlightMu.Unlock()
+			return
+		}
 		c = &atomic.Int64{}
 		proxyInFlight[addr] = c
 	}
@@ -214,6 +223,9 @@ func proxyInflightOf(addr string) int {
 
 // raceHealthyNodeCount 可竞速健康节点数（压力系数分母）：poolquality 缓存中
 // known 且非 down/flaky/unknown 的节点数（与 raceCandidates 的候选口径一致）。
+// G20：分母为近似——冷却/坏池/熔断中的节点仍计入（raceCandidates 实际会排除），
+// 压力系数因此偏小（高压下竞速副本偏温和）；与候选口径完全对齐需逐一查健康表，
+// 此处延续 loadPoolQualityCache 快照的简单口径，属可接受近似，不进入候选计数核心。
 func raceHealthyNodeCount() int {
 	loadPoolQualityCache()
 	poolQualityMu.RLock()

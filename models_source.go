@@ -149,6 +149,9 @@ func newAggregator() *aggregator.Aggregator {
 }
 
 // vendorParams 按厂商类型注入运行时必需的装配参数（Transport/AdminPassword 等）。
+// G15：本函数只在 newAggregator 装配时读一次生效值并快照进 Vendor.cfg——
+// 运行中修改 pool_race_copies / race_budget_ms / 压力阈值 / 429 参数
+// 需重启实例/网关才生效（applyConfig 热重载不重建已装配的 Vendor）。
 func vendorParams(t string) map[string]any {
 	switch t {
 	case "opencode":
