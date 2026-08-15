@@ -26,9 +26,13 @@
 第二阶段（U 系列，✅ 已完成并验收，2026-08-14）：
   U1 节点池 poll bug 修复 → U2 实例池状态筛选 → U3 轮询配置+独享轮询
   → U4 日志分页 → U5 统计迷你图
-第三阶段（V 系列，2026-08-15 新增，待派工）：
+第三阶段（V 系列，✅ 已完成并验收，2026-08-15）：
   V1 停止扫描并发接逻辑（N2 拍板：probeNode 取消支持 + stop_scan_concurrency 生效）
   → V2 全局任务悬浮窗（scan/stop-scan/restart/batch/release 多任务栈）
+第四阶段（CONC 系列，2026-08-15 新增，待派工）：
+  CONC-1 请求取消穿透 → CONC-2 连接复用 → CONC-3 写盘合并 → CONC-4 实例/订阅
+  → CONC-5 网关 → CONC-6 windsurf → CONC-7 聚合/健康/订阅并行 → CONC-8 日志读侧/统计并行
+  → CONC-9 前端 → CONC-10 后端低危批
 ```
 
 > 依赖说明：第一阶段 S/E 系列已全部合入 main 并通过验收（`go test` 全绿）。
@@ -47,9 +51,19 @@
 | 3 | **U3** | 轮询配置 `ui_poll_interval_sec` + 独享轮询 + 折叠面板 | ✅ 已完成（`f0351e9`） | 独立 |
 | 4 | **U4** | 日志页分页（每页 100） | ✅ 已完成（`1d16501`） | 独立 |
 | 5 | **U5** | 统计页纯 CSS 迷你图 | ✅ 已完成（`6f4daad`） | 独立 |
-| 6 | **V1** | 停止扫描并发接逻辑（probeNode 取消支持 + stop_scan_concurrency 生效） | ⬜ 待派工 | 🔴 拍板项 |
-| 7 | **V2** | 全局任务悬浮窗（scan/stop-scan/restart/batch/release 多任务栈） | ⬜ 待派工 | 依赖 V1 停止进度数据 |
+| 6 | **V1** | 停止扫描并发接逻辑（probeNode 取消支持 + stop_scan_concurrency 生效） | ✅ 已完成（`145a677`） | 🔴 拍板项 |
+| 7 | **V2** | 全局任务悬浮窗（scan/stop-scan/restart/batch/release 多任务栈） | ✅ 已完成（`afaa1fc` + review 修复 `0d2f8bb`） | 依赖 V1 停止进度数据 |
 | — | M3~M6 | 多端收尾验证（CI/真机） | 🔶 待部署机验证 | 可穿插 |
+| 8 | **CONC-1** | 请求取消穿透（H1）+ 429 退避感知 ctx（L3） | ⬜ 待派工 | 🔴 热路径正确性 |
+| 9 | **CONC-2** | http.Client 按 addr 缓存（H3）+ 模型目录 generation（M8） | ⬜ 待派工 | 独立 |
+| 10 | **CONC-3** | 统计/调用日志写盘合并（H2 + M4 写侧） | ⬜ 待派工 | 独立 |
+| 11 | **CONC-4** | Stop 短锁化（H4）+ 订阅端口记账（H6）+ 订阅缓存互斥（M7） | ⬜ 待派工 | 独立 |
+| 12 | **CONC-5** | 网关启动互斥（M1）+ 密钥快照（M2） | ⬜ 待派工 | 独立 |
+| 13 | **CONC-6** | windsurf 账号借用互斥（H5/L4）+ midstream 锁内网络 IO（M1'） | ⬜ 待派工 | 🔴 风险高 |
+| 14 | **CONC-7** | 聚合/健康/订阅并行（M3 + M5 + M6） | ⬜ 待派工 | 独立 |
+| 15 | **CONC-8** | 日志读侧尾部 + 管理端统计并行（M4 读侧 + L9） | ⬜ 待派工 | 独立 |
+| 16 | **CONC-9** | 前端：轮询守卫（M9）+ App 重渲染（M10）+ 扫描状态机（M11）+ L10/杂项 | ⬜ 待派工 | 依赖后端无 |
+| 17 | **CONC-10** | 后端低危批（L1/L2/L5/L6/L7/L8） | ⬜ 待派工 | 独立 |
 
 ---
 
@@ -330,6 +344,133 @@
 
 ---
 
+## 第四阶段（CONC 系列）：并发优化（2026-08-15 新增）
+
+**背景**：系统性并发审查（`docs/REVIEW-CONCURRENCY.md`）产出 27 项（高 6 / 中 11 / 低 10），
+按子系统分 10 个阶段实施。每阶段独立 worktree + 全绿验证（`go test -count=1 ./...` +
+`go test -count=1 -race ./...` + 前端 `npm run build`）+ 代码审查后才合入 main；
+验证不通过项抄入下一阶段「上阶段遗留」优先修复。
+
+### 阶段 CONC-1：请求取消穿透 + 429 退避感知 ctx（H1 + L3）
+
+**目标**：客户端断开 → 下游竞速候选/重试链/账号等待立即取消，配额与 goroutine 秒级回收。
+
+**功能开发**
+1. `upstream.go` `callOpenCodeAPI`/`callOpenCodeAPIStream` 加 ctx 参数，从 handler（`chat_handler.go`/`claude.go`/`responses.go`）一路透传 `r.Context()`；`chatViaVendor(Stream)` → `v.Chat(ctx,msg)`。
+2. `gateway_timeout.go` `streamWithResume` 重连改用 `r.Context()`；`EnsureReady` 用请求 ctx（不自造 Background+6min）。
+3. `chat.go` 429 退避：`time.Sleep` → `select { <-ctx.Done(): return; <-time.After(backoff): }`。
+
+**测试**：fake transport 断言 cancel 传播（`-race`）；429 退避被 ctx 中断单测；全绿。
+**验证**：取消穿透单测全绿；客户端断开后上游连接数回落（需部署机观察）。
+
+### 阶段 CONC-2：连接复用 + 模型目录 generation（H3 + M8）
+
+**目标**：请求热路径去掉每请求新建 Transport 与 O(catalog) 目录重建。
+
+**功能开发**
+1. `socks.go`：`clientForProxy` 按 addr 缓存 `http.Client`（`socks5CacheMu` 扩为 map，代理列表/applyConfig 变更整体失效）；流式浅拷贝去 Timeout 逻辑保留；`models_source.go` CandidateClients 从缓存取。
+2. `upstream.go`：`syncVendorState` 后记目录 generation，请求侧仅版本变化才 `SetCatalog`。
+
+**测试**：缓存单测（同 addr 同指针、变更后重建、流式浅拷贝不串 Timeout）；现有 socks/poolvendor 测试不回归；`-race`。
+**验证**：全绿 + 高并发请求下 Transport 数量不再线性增长（观察）。
+
+### 阶段 CONC-3：统计/调用日志写盘合并（H2 + M4 写侧）
+
+**目标**：请求路径不再 spawn 写盘 goroutine、不再在锁内做磁盘 IO。
+
+**功能开发**
+1. `stats_fns.go`/`stats.go`：计数锁内累加 + 单写者 goroutine（ticker + dirty flag + 退出 flush）；管理端主动刷新保留同步 flush 入口。
+2. `gateway_timeout.go` `EventLog`：Append 只入队（有界 channel），单写者批量写文件；热加载 `CallLogMax` 迁移旧记录不丢（原 L9 数据丢失项并入）；写侧按大小轮转（滚动 `.1`）。
+
+**测试**：并发写入不丢记录、flush 时机、热加载迁移、轮转触发；现有 calllog 测试不回归；`-race`。
+**验证**：全绿 + 高并发下无写盘 goroutine 堆积（观察）。
+
+### 阶段 CONC-4：Stop 短锁化 + 订阅端口记账 + 订阅缓存互斥（H4 + H6 + M7）
+
+**目标**：批量停止真并行；批量导入端口零冲突；订阅缓存并发安全。
+
+**功能开发**
+1. `core/manager/instance.go` `StopInstance`/`RemoveInstanceAlive` 两段式（锁内快照+置 Stopping → 锁外 Kill → 锁内写回 Stopped/移除）；`BatchStop/BatchDelete/RestartPool` 随动收益。
+2. `core/manager/subscribe.go:1251`：`usedPorts[port+singboxPortOffset]`。
+3. 订阅缓存 load/save 加 `cacheMu` + 临时文件+rename 原子替换。
+
+**测试**：Stop 短锁时序测试（fakeRunner 记录 Kill 在锁外）；订阅同批端口冲突场景单测（A.singbox==B.api）；缓存并发写不丢分组；probe_stop_test 不回归；`-race`。
+**验证**：全绿 + 一键重启池时长显著缩短（需部署机）。
+
+### 阶段 CONC-5：网关启动互斥 + 密钥快照（M1 + M2）
+
+**目标**：网关子进程绝不双启；密钥热更新无数据竞态。
+
+**功能开发**
+1. `core/manager/gateway.go`：新增 `startMu` 串行化 Status 自动拉起 / ApplyKey 重启 / sync 路径。
+2. `refreshModels` goroutine 内在 `g.mu` 临界区快照 `pwd/port` 再发请求。
+
+**测试**：并发 Status 只 spawn 一次（fakeRunner 计数）；ApplyKey 与 refreshModels 并发 `-race` 干净。
+**验证**：全绿 + 双 tab 轮询下无重复网关进程（需部署机）。
+
+### 阶段 CONC-6：windsurf 账号并发安全（H5 + L4 + midstream）
+
+**目标**：账号同一时刻只被一个请求借用；取消/关闭不被锁内网络 IO 饿死。
+
+**功能开发**
+1. `vendors/windsurf/pool.go`：acquire 标记占用（usable 排除 InUse），release/markExhausted/touch 解除；`persistLocked` 写盘移出锁（或节流）。
+2. `windsurf.go` `preRegisterIfLow`：防抖通道提为字段（或复用 registering 标志 + sync.Once 风格）。
+3. `midstream.go`：`Read` 不再整段持锁做网络读/重连（最小改法：closed 标记 + Close 不等待锁内 I/O；若重构风险过高则文档化取舍并在验收表注明）。
+
+**测试**：并发 acquire 不重号；preRegister 防抖单测；midstream 取消/Close 及时返回；现有 windsurf 测试不回归；`-race`。
+**验证**：全绿 + 多账号并发请求下账号无重复借用（需部署机）。
+
+### 阶段 CONC-7：聚合/健康/订阅并行（M3 + M5 + M6）
+
+**目标**：目录刷新、健康巡检、订阅拉取从「串行和」收敛到「并行最慢项」。
+
+**功能开发**
+1. `core/aggregator/aggregator.go`：Refresh 并行（errgroup）+ 每厂商独立预算；合并仍单次写锁重建索引。
+2. `core/manager/health.go`：probePort 并行（semaphore ≤8）+ `healthMu` 串行轮次 + 重启前复核仍 Running + health.json 临时文件+rename。
+3. `core/manager/subscriptions.go`：每源独立 goroutine + 各自 IntervalMin 调度（semaphore 门控 ≤4）；两条后台循环入口加唯一启动保护。
+
+**测试**：聚合并行（fake 慢厂商不等）；健康并发轮互斥 + 旧快照不拉起已停实例；订阅独立调度；现有测试不回归；`-race`。
+**验证**：全绿 + 慢源不拖累其它源（需部署机）。
+
+### 阶段 CONC-8：日志读侧 + 管理端统计并行（M4 读侧 + L9）
+
+**目标**：日志页大文件不整读；统计聚合/重置并行。
+
+**功能开发**
+1. `core/manager/calllog.go`：`readCallLogFileTail` 大文件尾部 Seek 读取（小文件整读）、多实例并发读 + 归并排序。
+2. `core/manager/stats.go`：`AggregateStats` 并发读实例目录；`ResetStats` 并发发 DELETE（小并发数）。
+
+**测试**：大文件尾部读单测；并发聚合正确性；现有 calllog/stats 测试不回归；`-race`。
+**验证**：全绿 + 大日志文件日志页秒开（需部署机）。
+
+### 阶段 CONC-9：前端（M9 + M10 + M11 + L10 + 杂项）
+
+**目标**：轮询不叠加不回退；任务更新不带动全页重渲染；扫描状态机全路径收敛。
+
+**功能开发**
+1. `LogsPage/InstancesPage/PoolPage/StatsPage`：轮询加代次序号/inFlightRef 守卫（复用 `dayReqSeq` 模式）。
+2. `App.tsx`：任务面板抽 memo 组件 + `useCallback` 稳定回调 + busy 进度节流；toast 单 timer 复位；收起 timer 按任务自 upsert 后计时；dismissedRef 按任务实例记忆；退出/批量操作 ref 级防重入。
+3. `NodesPage.tsx`：error 分支同步收尾任务；stopping 把 error/idle 与 done 等价收敛；App stale 兜底覆盖 `stop-scan`。
+4. `SettingsPage.tsx`：`toastRef` + effect deps `[]`（对齐 G31）。
+
+**测试**：`npm run build`（tsc -b && vite build）+ 代码走查；无前端测试框架，行为靠走查 + 用户浏览器验收。
+**验证**：build 全绿 + 六页走查（浏览器需用户/部署机）。
+
+### 阶段 CONC-10：后端低危批（L1/L2/L5/L6/L7/L8）
+
+**目标**：锁粒度收窄、读盘消除、内存有界、预算精确。
+
+**功能开发**
+1. `socks_perf.go`：候选排序前一次性快照 in-flight（比较器只读局部）；`socks5HealthMu` 收窄为只保护健康表；质量刷新上移为节流定时器（请求路径只读缓存）。
+2. `responses.go`：storedResponses 加条数上限 + TTL 定期清理；`auth.go` 会话惰性过期。
+3. `gateway_timeout.go`：进程级并发流上限（复用 activeRequests），超限 429/503。
+4. `core/manager/probe_node.go`+`probe_completion.go`：GET/POST 共享 deadline 动态拆账；`probe_run.go` defer 保留 ScanError。
+
+**测试**：各改动对应单测；现有测试全绿；`-race`。
+**验证**：全绿 + 长跑内存稳定（需部署机观察）。
+
+---
+
 ## 附：验收计划表（同事逐项打勾）
 
 | 执行序 | 阶段 | 验收项 | 状态 | 完成日期 | 验证方式 |
@@ -347,7 +488,17 @@
 | 11 | U4 | 日志分页：5000+ 条流畅 | ✅ | 2026-08-14 | 分页逻辑走查 + tsc（自动化 ✅）；渲染走查待部署机 |
 | 12 | U5 | 统计迷你图（纯 CSS） | ✅ | 2026-08-14 | `npm run build` + 占比/0 值走查（自动化 ✅）；目视待部署机 |
 | 13 | V1 | stop_scan_concurrency 生效：停止中断探测 ≤ 配置并发，停止明显变快 | ⬜ | | 挂节点停止实测 + 单测 |
-| 14 | V2 | 全局悬浮窗：scan/stop-scan/restart/batch/release 多任务跨页常驻 | ⬜ | | 切页走查 + 多任务堆叠 |
+| 14 | V2 | 全局悬浮窗：scan/stop-scan/restart/batch/release 多任务跨页常驻 | ✅ | 2026-08-15 | 切页走查 + 多任务堆叠 |
+| 15 | CONC-1 | 客户端断开 → 下游请求立即取消；429 退避感知取消 | ⬜ | | 取消传播单测 + 观察上游连接回落 |
+| 16 | CONC-2 | 连接按 addr 复用；请求热路径不再重建目录 | ⬜ | | 缓存单测 + 高并发观察 |
+| 17 | CONC-3 | 统计/日志写盘单写者合并；日志按大小轮转 | ⬜ | | 并发写入单测 + 观察无 goroutine 堆积 |
+| 18 | CONC-4 | 批量停止真并行；订阅导入零端口冲突；缓存并发安全 | ⬜ | | Stop 时序/端口冲突单测 + 一键重启时长实测 |
+| 19 | CONC-5 | 网关不双启；密钥热更新无竞态 | ⬜ | | 并发 Status 单测 + 双 tab 实测 |
+| 20 | CONC-6 | windsurf 账号单请求独占；关闭不被锁内 IO 饿死 | ⬜ | | acquire 不重号单测 + 多账号并发实测 |
+| 21 | CONC-7 | 目录刷新/健康巡检/订阅拉取并行 | ⬜ | | fake 慢厂商单测 + 慢源不拖累实测 |
+| 22 | CONC-8 | 日志页大文件不整读；统计聚合/重置并行 | ⬜ | | 尾部读单测 + 大日志秒开实测 |
+| 23 | CONC-9 | 轮询不叠加不回退；任务更新不带动全页重渲染；扫描状态机收敛 | ⬜ | | build 全绿 + 六页浏览器走查 |
+| 24 | CONC-10 | 锁粒度收窄；读盘消除；内存有界；预算精确 | ⬜ | | 单测全绿 + 长跑内存观察 |
 
 > 维护规则：每完成一项把状态改 ✅ 并注明日期/验证命令。验证不通过 → 该行保持 ❌，
 > 下一条目阶段的「阶段开头：上阶段遗留」中声明并优先修复。
