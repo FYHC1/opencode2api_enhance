@@ -14,9 +14,12 @@ function statusBadge(st: Instance['status']): [string, string] {
 export default function PoolPage({
   toast,
   onRelease,
+  onTask,
 }: {
   toast: (msg: string, ok?: boolean) => void
   onRelease: (r: { active: boolean; done: number; total: number }) => void
+  /** V2: 上报全局任务悬浮窗（restart / batch 进度） */
+  onTask: (t: { id: string; type: 'restart' | 'batch'; title: string; done: number; total: number; busy?: boolean; error?: boolean }) => void
 }) {
   const [gw, setGw] = useState<GatewayStatus | null>(null)
   const [instances, setInstances] = useState<Instance[]>([])
@@ -189,14 +192,18 @@ export default function PoolPage({
   const doRestart = async () => {
     if (!confirm('确定一键重启实例池？\n将停止全部实例与网关、强制释放被占用的端口，再启动全部池成员。')) return
     setRestarting(true)
+    // V2: 一键重启为单次后端调用、无中间回调——用 0→1 两态进度，完成由 App 自动收起
+    onTask({ id: 'restart', type: 'restart', title: '一键重启池', done: 0, total: 1, busy: true })
     try {
       const r = await api.restartPool()
+      onTask({ id: 'restart', type: 'restart', title: '一键重启池', done: 1, total: 1, busy: false, error: !!r.error })
       const parts = [`已停止 ${r.stopped} 个`, `启动 ${r.started} 个`]
       if (r.freed_ports.length > 0) parts.push(`强制释放端口 ${r.freed_ports.join(', ')}`)
       parts.push(`网关${r.gateway_running ? '运行中' : '未启动'}`)
       toast(parts.join(' · ') + (r.error ? `（${r.error}）` : ''), !r.error)
       await load()
     } catch (e) {
+      onTask({ id: 'restart', type: 'restart', title: '一键重启池', done: 1, total: 1, busy: false, error: true })
       toast(String(e), false)
     } finally {
       setRestarting(false)
@@ -449,6 +456,11 @@ export default function PoolPage({
       return
     }
     setAllBusy(kind)
+    // V2: 批量启停/测试上报 batch 任务（id 按动作区分，可与其它任务并存堆叠）
+    const taskId = `batch-${kind}`
+    const reportBatch = (done: number, total: number, busy: boolean, error?: boolean) =>
+      onTask({ id: taskId, type: 'batch', title: '批量启停', done, total, busy, error })
+    reportBatch(0, names.length, true)
     try {
       let ok = 0
       let fail = 0
@@ -464,10 +476,24 @@ export default function PoolPage({
         const runningNames = scope.filter((i) => i.status === 'Running').map((i) => i.name)
         const skipped = names.length - runningNames.length
         if (runningNames.length === 0) {
+          reportBatch(names.length, names.length, false)
           toast(`池成员均未启动（${names.length} 个），无需测试`, false)
           return
         }
-        const results = await Promise.allSettled(runningNames.map((n) => api.testInstance(n)))
+        // 逐条测试完成即上报 done（并发行为不变，仅加计数回调）
+        let testDone = 0
+        const results = await Promise.allSettled(
+          runningNames.map(async (n) => {
+            try {
+              const r = await api.testInstance(n)
+              reportBatch(++testDone, runningNames.length, true)
+              return r
+            } catch (e) {
+              reportBatch(++testDone, runningNames.length, true)
+              throw e
+            }
+          }),
+        )
         const updated: Record<string, TestResult> = {}
         runningNames.forEach((n, i) => {
           const r = results[i]!
@@ -493,7 +519,12 @@ export default function PoolPage({
       const label = kind === 'start' ? '启动' : kind === 'stop' ? '停止' : '测试'
       const skippedPart = kind === 'start' && skippedCount > 0 ? `，跳过已运行 ${skippedCount}` : ''
       toast(`池成员${label}完成：成功 ${ok} 个，失败 ${fail} 个${skippedPart}`, fail === 0)
+      reportBatch(names.length, names.length, false, fail > 0)
       await load()
+    } catch (e) {
+      // 关闭任务（失败标记红色）并 toast，避免悬浮窗残留忙态
+      reportBatch(names.length, names.length, false, true)
+      toast(String(e), false)
     } finally {
       setAllBusy(null)
     }

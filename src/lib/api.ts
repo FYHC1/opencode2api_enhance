@@ -98,6 +98,9 @@ export type ScanProgress = {
   socks_port: number
   started_ms: number | null
   finished_ms: number | null
+  /** V1: 停止扫描统计（stop-scan 悬浮窗进度）：停止时活跃探针数 / 已中断探针对数 */
+  stopping_count?: number
+  stopped_count?: number
 }
 
 export type ConfigView = {
