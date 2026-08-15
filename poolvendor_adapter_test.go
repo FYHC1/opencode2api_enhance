@@ -64,7 +64,7 @@ func TestPoolVendorEnsureReadyInvoked(t *testing.T) {
 	v := &fakePoolVendor{id: "pool"}
 	installPoolRouter(t, v)
 
-	body, status, _, _, err := callOpenCodeAPI([]byte(`{"model":"swe-1-6-slow","messages":[]}`), "swe-1-6-slow", UpstreamAuth{Mode: AuthRoutePublic})
+	body, status, _, _, err := callOpenCodeAPI(context.Background(), []byte(`{"model":"swe-1-6-slow","messages":[]}`), "swe-1-6-slow", UpstreamAuth{Mode: AuthRoutePublic})
 	if err != nil {
 		t.Fatalf("callOpenCodeAPI: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestPoolVendorEnsureReadyFailureStopsRequest(t *testing.T) {
 	v := &fakePoolVendor{id: "pool", ensureErr: errors.New("windsurf: 无可用账号且自动注册失败: boom")}
 	installPoolRouter(t, v)
 
-	body, status, _, _, err := callOpenCodeAPI([]byte(`{"model":"swe-1-6-slow","messages":[]}`), "swe-1-6-slow", UpstreamAuth{Mode: AuthRoutePublic})
+	body, status, _, _, err := callOpenCodeAPI(context.Background(), []byte(`{"model":"swe-1-6-slow","messages":[]}`), "swe-1-6-slow", UpstreamAuth{Mode: AuthRoutePublic})
 	if err == nil {
 		t.Fatal("err = nil, want EnsureReady failure to abort request")
 	}

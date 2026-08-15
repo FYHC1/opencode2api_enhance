@@ -1,8 +1,10 @@
 // 上游调用适配层（P2-B3 切流后）。
 //
-// callOpenCodeAPI / callOpenCodeAPIStream 签名保持不变（handler / 测试 / 网关续写
-// 均不感知），内部桥接到全局 OpenCode 厂商（vendors/opencode，实现 contract.Vendor）。
-// 传输层经 rootTransport 复用既有 SOCKS5 池/健康/冷却逻辑。
+// callOpenCodeAPI / callOpenCodeAPIStream 接收请求上下文（ctx），从 handler /
+// 网关续写一路透传到厂商 Chat/ChatStream——客户端断开时竞速候选、重试链、
+// EnsureReady 立即收到取消，不空跑预算。内部桥接到全局 OpenCode 厂商
+// （vendors/opencode，实现 contract.Vendor）。传输层经 rootTransport 复用
+// 既有 SOCKS5 池/健康/冷却逻辑。
 package main
 
 import (
@@ -12,7 +14,6 @@ import (
 	"io"
 	"net/http"
 	"sync"
-	"time"
 
 	"github.com/6Kmfi6HP/opencode2api/core/contract"
 	"github.com/6Kmfi6HP/opencode2api/vendors/opencode"
@@ -122,7 +123,7 @@ func seedVendorCatalog(v contract.Vendor) {
 }
 
 // chatViaVendor 经单个厂商发起非流式上游调用。
-func chatViaVendor(v contract.Vendor, upstreamBody []byte, modelID string, auth UpstreamAuth) (*contract.Reply, error) {
+func chatViaVendor(ctx context.Context, v contract.Vendor, upstreamBody []byte, modelID string, auth UpstreamAuth) (*contract.Reply, error) {
 	if oc, ok := v.(*opencode.Vendor); ok && oc == mainCodeVendor() {
 		syncVendorState(oc)
 		// opencode 上游一律无 key（免费档）：客户端携带的任何 key 都不转发给 opencode，
@@ -132,9 +133,8 @@ func chatViaVendor(v contract.Vendor, upstreamBody []byte, modelID string, auth 
 		seedVendorCatalog(v)
 	}
 	// 池型厂商（PoolVendor）：请求前保证可用账号——池空自动注册，用户无感。
+	// 等待受请求 ctx 约束（客户端断开立即中止），不自造 Background + 固定超时。
 	if pv, ok := v.(contract.PoolVendor); ok {
-		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
-		defer cancel()
 		if err := pv.EnsureReady(ctx); err != nil {
 			return nil, fmt.Errorf("%s: 无可用账号且自动注册失败: %w", v.ID(), err)
 		}
@@ -151,11 +151,11 @@ func chatViaVendor(v contract.Vendor, upstreamBody []byte, modelID string, auth 
 			opencode.KeyMaxRetries: maxRouteRetries(),
 		},
 	}
-	return v.Chat(context.Background(), msg)
+	return v.Chat(ctx, msg)
 }
 
 // chatViaVendorStream 构造单个厂商的流式上游调用。
-func chatViaVendorStream(v contract.Vendor, upstreamBody []byte, modelID string, auth UpstreamAuth) (*contract.Stream, error) {
+func chatViaVendorStream(ctx context.Context, v contract.Vendor, upstreamBody []byte, modelID string, auth UpstreamAuth) (*contract.Stream, error) {
 	if oc, ok := v.(*opencode.Vendor); ok && oc == mainCodeVendor() {
 		syncVendorState(oc)
 		// opencode 上游一律无 key（免费档）：不转发客户端 key（同 chatViaVendor）。
@@ -164,9 +164,8 @@ func chatViaVendorStream(v contract.Vendor, upstreamBody []byte, modelID string,
 		seedVendorCatalog(v)
 	}
 	// 池型厂商（PoolVendor）：请求前保证可用账号——池空自动注册，用户无感。
+	// 等待受请求 ctx 约束（客户端断开立即中止），不自造 Background + 固定超时。
 	if pv, ok := v.(contract.PoolVendor); ok {
-		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
-		defer cancel()
 		if err := pv.EnsureReady(ctx); err != nil {
 			return nil, fmt.Errorf("%s: 无可用账号且自动注册失败: %w", v.ID(), err)
 		}
@@ -182,7 +181,7 @@ func chatViaVendorStream(v contract.Vendor, upstreamBody []byte, modelID string,
 			opencode.KeyMaxRetries: maxRouteRetries(),
 		},
 	}
-	return v.ChatStream(context.Background(), msg)
+	return v.ChatStream(ctx, msg)
 }
 
 // rawBodyToContractMessages 从 OpenAI Chat 形态请求体提取归一化消息。
@@ -233,13 +232,13 @@ func shouldSwitchVendor(v contract.Vendor, status int, _ error) bool {
 }
 
 // callOpenCodeAPI 非流式上游调用（适配层；路由 + 厂商级 failover）。
-func callOpenCodeAPI(upstreamBody []byte, modelID string, auth UpstreamAuth) ([]byte, int, http.Header, string, error) {
+func callOpenCodeAPI(ctx context.Context, upstreamBody []byte, modelID string, auth UpstreamAuth) ([]byte, int, http.Header, string, error) {
 	cands := chatCandidates(modelID)
 
 	var lastReply *contract.Reply
 	var lastErr error
 	for i, v := range cands {
-		reply, err := chatViaVendor(v, upstreamBody, modelID, auth)
+		reply, err := chatViaVendor(ctx, v, upstreamBody, modelID, auth)
 		if err == nil && reply != nil && reply.Status >= 200 && reply.Status < 300 {
 			return reply.Body, reply.Status, reply.Headers, reply.NodeAddr, nil
 		}
@@ -261,14 +260,14 @@ func callOpenCodeAPI(upstreamBody []byte, modelID string, auth UpstreamAuth) ([]
 	return lastReply.Body, lastReply.Status, lastReply.Headers, lastReply.NodeAddr, lastErr
 }
 
-// callOpenCodeAPIStream 流式上游调用（适配层；路由 + 厂商级 failover；签名与历史一致）。
-func callOpenCodeAPIStream(upstreamBody []byte, modelID string, auth UpstreamAuth) (io.ReadCloser, int, http.Header, string, error) {
+// callOpenCodeAPIStream 流式上游调用（适配层；路由 + 厂商级 failover）。
+func callOpenCodeAPIStream(ctx context.Context, upstreamBody []byte, modelID string, auth UpstreamAuth) (io.ReadCloser, int, http.Header, string, error) {
 	cands := chatCandidates(modelID)
 
 	var lastStream *contract.Stream
 	var lastErr error
 	for i, v := range cands {
-		stream, err := chatViaVendorStream(v, upstreamBody, modelID, auth)
+		stream, err := chatViaVendorStream(ctx, v, upstreamBody, modelID, auth)
 		if err == nil && stream != nil && stream.Status >= 200 && stream.Status < 300 {
 			return stream.ReadCloser, stream.Status, nil, stream.NodeAddr, nil
 		}

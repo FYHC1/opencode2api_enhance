@@ -101,7 +101,7 @@ func TestAdapterVendorFailover(t *testing.T) {
 	chatRouterVar = installFailoverRouter(t, v1, v2)
 	t.Cleanup(func() { chatRouterVar = oldRouter })
 
-	body, status, _, _, err := callOpenCodeAPI([]byte(`{"model":"m-shared","messages":[]}`), "m-shared", UpstreamAuth{Mode: AuthRoutePublic})
+	body, status, _, _, err := callOpenCodeAPI(context.Background(), []byte(`{"model":"m-shared","messages":[]}`), "m-shared", UpstreamAuth{Mode: AuthRoutePublic})
 	if err != nil {
 		t.Fatalf("callOpenCodeAPI: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestAdapterNoFailoverOnNonSwitchable(t *testing.T) {
 	chatRouterVar = installFailoverRouter(t, v1, v2)
 	t.Cleanup(func() { chatRouterVar = oldRouter })
 
-	body, status, _, _, err := callOpenCodeAPI([]byte(`{"model":"m-shared","messages":[]}`), "m-shared", UpstreamAuth{Mode: AuthRoutePublic})
+	body, status, _, _, err := callOpenCodeAPI(context.Background(), []byte(`{"model":"m-shared","messages":[]}`), "m-shared", UpstreamAuth{Mode: AuthRoutePublic})
 	if err == nil {
 		t.Fatal("error = nil, want upstream error (403 not switchable)")
 	}

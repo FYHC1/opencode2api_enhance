@@ -363,7 +363,7 @@ func streamWithResume(w http.ResponseWriter, r *http.Request, upstreamBody []byt
 		// 若需要重连（initial 为 nil 或上次超时）
 		if upResp == nil {
 			var err error
-			upResp, _, _, proxyAddr, err = callOpenCodeAPIStream(currentBody, model, auth)
+			upResp, _, _, proxyAddr, err = callOpenCodeAPIStream(r.Context(), currentBody, model, auth)
 			if err != nil {
 				res.ErrMsg = err.Error()
 				callRec.Events = append(callRec.Events, CallEvent{Type: "connect_error", Node: proxyAddr, Detail: err.Error(), At: time.Now()})
@@ -586,8 +586,10 @@ func streamWithResume(w http.ResponseWriter, r *http.Request, upstreamBody []byt
 			return res
 		}
 
-		// 客户端主动断开：不惩罚节点、不续写重连（避免浪费上游配额 + 误伤健康节点）
-		if clientGone {
+		// 客户端主动断开：不惩罚节点、不续写重连（避免浪费上游配额 + 误伤健康节点）。
+		// 注：请求 ctx 已取消时，上游 body 读也会被中止并在 lineCh 先报错（竞态），
+		// 因此除 clientGone 标志外，ctx 已取消同样按客户端断开处理。
+		if clientGone || r.Context().Err() != nil {
 			res.OK = false
 			res.ErrMsg = "client disconnected"
 			res.DoneAt = time.Now()
