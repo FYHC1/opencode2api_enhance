@@ -12,17 +12,17 @@ import (
 
 // resetPoolPerfState 复位 P2 全局状态（避免测试间污染）。
 func resetPoolPerfState() {
-	poolPerfMode = true
-	poolBreakerThreshold = 3
-	poolHalfOpenIntervalSec = 60
+	poolPerfMode.Store(true)
+	poolBreakerThreshold.Store(3)
+	poolHalfOpenIntervalSec.Store(60)
 	poolQualityPath = ""
 	poolQualityCache = nil
 	poolQualityStamp = time.Time{}
 	poolQualityLoaded = time.Time{}
 	poolFeedback = map[string][]poolFbSample{}
 	poolBreakers = map[string]*poolBreaker{}
-	poolRacePressureLow = 0.5
-	poolRacePressureHigh = 1.0
+	poolRacePressureLow.Store(0.5)
+	poolRacePressureHigh.Store(1.0)
 	racePressureFn = racePressure
 	proxyInFlightMu.Lock()
 	proxyInFlight = map[string]*atomic.Int64{}
@@ -144,8 +144,8 @@ func TestPickWeightedProxyAllCoolingFallback(t *testing.T) {
 
 func TestBreakerOpensAfterThreshold(t *testing.T) {
 	resetPoolPerfState()
-	poolBreakerThreshold = 3
-	poolHalfOpenIntervalSec = 60
+	poolBreakerThreshold.Store(3)
+	poolHalfOpenIntervalSec.Store(60)
 	addr := "127.0.0.1:28101"
 
 	// 连续 2 次失败不熔断。
@@ -167,8 +167,8 @@ func TestBreakerOpensAfterThreshold(t *testing.T) {
 
 func TestBreakerHalfOpenThenRecover(t *testing.T) {
 	resetPoolPerfState()
-	poolBreakerThreshold = 2
-	poolHalfOpenIntervalSec = 60
+	poolBreakerThreshold.Store(2)
+	poolHalfOpenIntervalSec.Store(60)
 	addr := "127.0.0.1:28101"
 
 	applyPoolResult(addr, 503, nil)
@@ -190,8 +190,8 @@ func TestBreakerHalfOpenThenRecover(t *testing.T) {
 
 func TestBreakerHalfOpenFailKeepsOpen(t *testing.T) {
 	resetPoolPerfState()
-	poolBreakerThreshold = 2
-	poolHalfOpenIntervalSec = 60
+	poolBreakerThreshold.Store(2)
+	poolHalfOpenIntervalSec.Store(60)
 	addr := "127.0.0.1:28101"
 
 	applyPoolResult(addr, 503, nil)
@@ -252,7 +252,7 @@ func TestPoolFeedbackReflectsResults(t *testing.T) {
 
 func TestPoolPerfModeOffBaseline(t *testing.T) {
 	resetPoolPerfState()
-	poolPerfMode = false
+	poolPerfMode.Store(false)
 	proxies := []Socks5Proxy{mkProxy(28101), mkProxy(28102)}
 	now := time.Now()
 	socks5HealthMu.Lock()

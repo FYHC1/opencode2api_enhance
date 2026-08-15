@@ -25,24 +25,36 @@ import (
 
 var (
 	// poolPerfMode 性能模式开关（默认开启；关闭 = 基线行为）。
-	poolPerfMode = true
+	poolPerfMode atomic.Bool
 	// poolBreakerThreshold 连续失败熔断阈值（默认 3）。
-	poolBreakerThreshold = 3
+	poolBreakerThreshold atomic.Int64
 	// poolHalfOpenIntervalSec 熔断后半开放行间隔（秒，默认 60）。
-	poolHalfOpenIntervalSec = 60
+	poolHalfOpenIntervalSec atomic.Int64
 	// poolQualityPath 质量文件路径（-pool-quality 注入；空 = 无质量文件）。
 	poolQualityPath string
 	// poolRaceCopies 请求级竞速并行数上限（默认 2；1 = 退化为串行）。
 	// S5 起语义为上限：实际副本由压力系数分段动态决定（见 raceCopies）。
-	poolRaceCopies = 2
+	poolRaceCopies atomic.Int64
 	// raceBudgetMS 竞速整体预算（毫秒，默认 10000；0 回退默认）。
-	raceBudgetMS = 10000
+	raceBudgetMS atomic.Int64
 	// poolRacePressureLow / poolRacePressureHigh 压力系数分段阈值（S5，默认 0.5 / 1.0）：
 	// pressure < low → 全速竞速（用满上限）；low ≤ pressure < high → 温和竞速（2）；
 	// pressure ≥ high → 退化单发（等效分散路由）。
-	poolRacePressureLow  = 0.5
-	poolRacePressureHigh = 1.0
+	// 本工具链 sync/atomic 无 Float64 → 用 atomic.Value（恒存 float64）。
+	poolRacePressureLow  atomic.Value
+	poolRacePressureHigh atomic.Value
 )
+
+// G5：上述阈值/开关由配置热重载（applyConfig）原子写、请求路径原子读；默认值写于 init。
+func init() {
+	poolPerfMode.Store(true)
+	poolBreakerThreshold.Store(3)
+	poolHalfOpenIntervalSec.Store(60)
+	poolRaceCopies.Store(2)
+	raceBudgetMS.Store(10000)
+	poolRacePressureLow.Store(0.5)
+	poolRacePressureHigh.Store(1.0)
+}
 
 // ---- 质量文件缓存（读 runtime/pool_quality.json，节流刷新） ----
 
@@ -67,7 +79,12 @@ func loadPoolQualityCache() {
 	if err != nil {
 		return
 	}
-	if !info.ModTime().After(poolQualityStamp) && time.Since(poolQualityLoaded) < 5*time.Second {
+	// G7：节流字段在 poolQualityMu 下读判（写侧同锁保护），命中节流直接返回；
+	// 未命中才进入加载逻辑（ReadFile 不持锁，仅写回缓存时持写锁）。
+	poolQualityMu.RLock()
+	throttled := !info.ModTime().After(poolQualityStamp) && time.Since(poolQualityLoaded) < 5*time.Second
+	poolQualityMu.RUnlock()
+	if throttled {
 		return
 	}
 	data, err := os.ReadFile(poolQualityPath)
@@ -351,8 +368,8 @@ func applyPoolResult(addr string, status int, requestErr error) {
 		poolBreakers[addr] = b
 	}
 	b.failures++
-	if b.failures >= poolBreakerThreshold {
-		b.openUntil = time.Now().Add(time.Duration(poolHalfOpenIntervalSec) * time.Second)
+	if b.failures >= int(poolBreakerThreshold.Load()) {
+		b.openUntil = time.Now().Add(time.Duration(poolHalfOpenIntervalSec.Load()) * time.Second)
 		b.probeUsed = false
 		slog.Warn("pool breaker opened", "addr", addr, "failures", b.failures)
 	}
@@ -487,7 +504,7 @@ type raceCandidate struct {
 // 避免恢复探测在竞速路径饿死；候选充足时不消费探针（不偷单发路径的半开放行）。
 // 无任何可用候选时回退一个"冷却最早结束"的节点；n<=1 或池空返回 nil（不竞速）。
 func raceCandidates(n int) []Socks5Proxy {
-	if n <= 1 || !poolPerfMode {
+	if n <= 1 || !poolPerfMode.Load() {
 		return nil
 	}
 	now := time.Now()

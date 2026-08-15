@@ -155,13 +155,13 @@ func vendorParams(t string) map[string]any {
 		return map[string]any{
 			opencode.ParamTransport:        rootTransport{},
 			opencode.ParamAdminPassword:    adminPassword,
-			opencode.ParamRaceCopies:       poolRaceCopies,
-			opencode.ParamRaceBudgetMS:     raceBudgetMS,
-			opencode.ParamRacePressureLow:  poolRacePressureLow,
-			opencode.ParamRacePressureHigh: poolRacePressureHigh,
-			opencode.ParamRateLimitCooldownSec:  rateLimitCooldownSec,
-			opencode.ParamRateLimitBackoffBaseMS: rateLimitBackoffBaseMS,
-			opencode.ParamRateLimitBackoffCapMS:  rateLimitBackoffCapMS,
+			opencode.ParamRaceCopies:       int(poolRaceCopies.Load()),
+			opencode.ParamRaceBudgetMS:     int(raceBudgetMS.Load()),
+			opencode.ParamRacePressureLow:  poolRacePressureLow.Load().(float64),
+			opencode.ParamRacePressureHigh: poolRacePressureHigh.Load().(float64),
+			opencode.ParamRateLimitCooldownSec:  int(rateLimitCooldownSec.Load()),
+			opencode.ParamRateLimitBackoffBaseMS: int(rateLimitBackoffBaseMS.Load()),
+			opencode.ParamRateLimitBackoffCapMS:  int(rateLimitBackoffCapMS.Load()),
 		}
 	case "windsurf":
 		return map[string]any{}

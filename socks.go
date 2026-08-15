@@ -173,7 +173,8 @@ var socks5RRIndex uint32
 //   - smart（默认）：failover 游标逻辑 + 健康计数/坏池/超时切换完整容错
 //   - failover：成功不动游标、失败才切换（无健康计数附加层）
 //   - round_robin：轮询分发
-var routeMode = "smart"
+// G5：配置热重载原子写（applyConfig Store），请求路径无锁 Load；默认 "smart" 写于 init。
+var routeMode atomic.Value
 
 var (
 	socks5Client     *http.Client // 缓存的 SOCKS5 客户端
@@ -198,7 +199,13 @@ const badThreshold = 3
 // badPoolResetSec 链路类坏池自动恢复间隔（秒，默认 300；S3）。
 // 链路类坏池（如 503 服务不可用）到期后放行 1 次探测，成功清状态 / 失败重新坏池；
 // 账号类（401/402/429）不自动恢复（badUntil 零值永久禁用）。
-var badPoolResetSec = 300
+// G5：配置热重载原子写（applyConfig Store），请求路径无锁 Load；默认值写于 init。
+var badPoolResetSec atomic.Int64
+
+func init() {
+	routeMode.Store("smart")
+	badPoolResetSec.Store(300)
+}
 
 type socks5HealthState struct {
 	failures  int
@@ -225,10 +232,10 @@ func badPoolAccountClass(status int) bool {
 
 // badPoolResetDuration 链路类坏池恢复间隔生效时长。
 func badPoolResetDuration() time.Duration {
-	if badPoolResetSec <= 0 {
+	if badPoolResetSec.Load() <= 0 {
 		return 300 * time.Second
 	}
-	return time.Duration(badPoolResetSec) * time.Second
+	return time.Duration(badPoolResetSec.Load()) * time.Second
 }
 
 // badPoolProbeReady 非消费式检查：链路类坏池已过期且探测配额未消费。
@@ -267,7 +274,7 @@ func pickHealthyProxy(proxies []Socks5Proxy, start int) Socks5Proxy {
 		return Socks5Proxy{}
 	}
 	// P2 性能模式：质量加权路由 + 熔断/半开（关闭时走基线逻辑）。
-	if poolPerfMode {
+	if poolPerfMode.Load() {
 		return pickWeightedProxy(proxies, start)
 	}
 	now := time.Now()
@@ -378,7 +385,7 @@ func getHTTPClientWithProxy() (*http.Client, string) {
 		if len(socks5Proxies) == 0 {
 			return httpClient, ""
 		}
-		if routeMode == "round_robin" {
+		if routeMode.Load().(string) == "round_robin" {
 			// round_robin：每次请求推进游标
 			start := int(atomic.AddUint32(&socks5RRIndex, 1) % uint32(len(socks5Proxies)))
 			proxy = pickHealthyProxy(socks5Proxies, start)

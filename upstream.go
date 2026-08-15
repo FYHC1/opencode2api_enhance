@@ -46,13 +46,13 @@ func mainCodeVendor() *opencode.Vendor {
 			Name:               "OpenCode",
 			Transport:          rootTransport{},
 			AdminPassword:      adminPassword,
-			RaceCopies:         poolRaceCopies,
-			RaceBudgetMS:       raceBudgetMS,
-			RacePressureLow:    poolRacePressureLow,
-			RacePressureHigh:   poolRacePressureHigh,
-			RateLimitCooldownSec:  rateLimitCooldownSec,
-			RateLimitBackoffBaseMS: rateLimitBackoffBaseMS,
-			RateLimitBackoffCapMS:  rateLimitBackoffCapMS,
+			RaceCopies:         int(poolRaceCopies.Load()),
+			RaceBudgetMS:       int(raceBudgetMS.Load()),
+			RacePressureLow:    poolRacePressureLow.Load().(float64),
+			RacePressureHigh:   poolRacePressureHigh.Load().(float64),
+			RateLimitCooldownSec:  int(rateLimitCooldownSec.Load()),
+			RateLimitBackoffBaseMS: int(rateLimitBackoffBaseMS.Load()),
+			RateLimitBackoffCapMS:  int(rateLimitBackoffCapMS.Load()),
 		})
 	})
 	return ocAdapterTarget

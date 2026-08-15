@@ -34,11 +34,18 @@ func saveConfig(path string, cfg AppConfig) error {
 // rateLimitCooldownSec / rateLimitBackoffBaseMS / rateLimitBackoffCapMS 429 感知（S2）：
 // 冷却秒 / 指数退避起点与上限毫秒（默认 30 / 1000 / 30000；<=0 回退默认）。
 // 声明于 config.go：socks_perf.go 由 S3 并行维护，不做 S2 改动。
+// G5：热重载（applyConfig）原子写、请求路径原子读，默认值写于 init。
 var (
-	rateLimitCooldownSec    = 30
-	rateLimitBackoffBaseMS  = 1000
-	rateLimitBackoffCapMS   = 30000
+	rateLimitCooldownSec    atomic.Int64
+	rateLimitBackoffBaseMS  atomic.Int64
+	rateLimitBackoffCapMS   atomic.Int64
 )
+
+func init() {
+	rateLimitCooldownSec.Store(30)
+	rateLimitBackoffBaseMS.Store(1000)
+	rateLimitBackoffCapMS.Store(30000)
+}
 
 func applyConfig(cfg AppConfig) {
 	configMu.Lock()
@@ -59,47 +66,47 @@ func applyConfig(cfg AppConfig) {
 	routingCfg = cfg.Routing
 
 	if cfg.RouteMode == "round_robin" || cfg.RouteMode == "failover" || cfg.RouteMode == "smart" {
-		routeMode = cfg.RouteMode
+		routeMode.Store(cfg.RouteMode)
 	}
 	setTimeoutConfigFromApp(cfg)
 	applyBadStatusConfig(cfg)
 
 	// P2 性能模式：质量加权路由 + 熔断/半开（未设置保持当前值；关闭时路由行为与基线一致）。
 	if cfg.PoolPerformanceMode != nil {
-		poolPerfMode = *cfg.PoolPerformanceMode
+		poolPerfMode.Store(*cfg.PoolPerformanceMode)
 	}
 	if cfg.PoolBreakerThreshold > 0 {
-		poolBreakerThreshold = cfg.PoolBreakerThreshold
+		poolBreakerThreshold.Store(int64(cfg.PoolBreakerThreshold))
 	}
 	if cfg.PoolHalfOpenIntervalSec > 0 {
-		poolHalfOpenIntervalSec = cfg.PoolHalfOpenIntervalSec
+		poolHalfOpenIntervalSec.Store(int64(cfg.PoolHalfOpenIntervalSec))
 	}
 	// S3 链路类坏池自动恢复间隔（>0 才覆盖，未配置保持当前值/默认 300）。
 	if cfg.BadPoolResetSec > 0 {
-		badPoolResetSec = cfg.BadPoolResetSec
+		badPoolResetSec.Store(int64(cfg.BadPoolResetSec))
 	}
 	if cfg.PoolRaceCopies > 0 {
-		poolRaceCopies = cfg.PoolRaceCopies
+		poolRaceCopies.Store(int64(cfg.PoolRaceCopies))
 	}
 	if cfg.RaceBudgetMS > 0 {
-		raceBudgetMS = cfg.RaceBudgetMS
+		raceBudgetMS.Store(int64(cfg.RaceBudgetMS))
 	}
 	// S5 压力系数分段阈值（>0 才覆盖，未配置保持当前值/默认）。
 	if cfg.PoolRacePressureLow > 0 {
-		poolRacePressureLow = cfg.PoolRacePressureLow
+		poolRacePressureLow.Store(cfg.PoolRacePressureLow)
 	}
 	if cfg.PoolRacePressureHigh > 0 {
-		poolRacePressureHigh = cfg.PoolRacePressureHigh
+		poolRacePressureHigh.Store(cfg.PoolRacePressureHigh)
 	}
 	// S2 429 感知（>0 才覆盖，未配置保持当前值/默认）。
 	if cfg.RateLimitCooldownSec > 0 {
-		rateLimitCooldownSec = cfg.RateLimitCooldownSec
+		rateLimitCooldownSec.Store(int64(cfg.RateLimitCooldownSec))
 	}
 	if cfg.RateLimitBackoffBaseMS > 0 {
-		rateLimitBackoffBaseMS = cfg.RateLimitBackoffBaseMS
+		rateLimitBackoffBaseMS.Store(int64(cfg.RateLimitBackoffBaseMS))
 	}
 	if cfg.RateLimitBackoffCapMS > 0 {
-		rateLimitBackoffCapMS = cfg.RateLimitBackoffCapMS
+		rateLimitBackoffCapMS.Store(int64(cfg.RateLimitBackoffCapMS))
 	}
 
 	socks5Mu.Lock()
