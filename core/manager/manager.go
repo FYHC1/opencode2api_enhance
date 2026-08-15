@@ -90,14 +90,29 @@ type Manager struct {
 	// load+save pool_quality.json；配合 savePoolQuality 临时文件+Rename 原子落盘。
 	poolProbeMu sync.Mutex
 
+	// healthMu 串行化健康巡检轮（后台循环与手动触发互斥执行），防止双轮并发
+	// 对同一实例重复 stop/start；配合 saveHealthRecords 临时文件+Rename 原子落盘。
+	healthMu sync.Mutex
+
 	// subscriptionCacheMu 串行化订阅缓存读写（load→merge→save 全程持锁，防止后台
 	// 自动导入与手动导入并发基于旧快照互相覆盖）；落盘用临时文件+Rename 原子替换。
 	subscriptionCacheMu sync.Mutex
+
+	// subscribeLoopOnce 订阅后台循环唯一启动保护：多源调度（RunAllSubscriptionLoop）
+	// 与旧单条入口（StartSubscribeLoop）二选一，防迁移期双循环并发拉同一 URL。
+	subscribeLoopOnce sync.Once
+	// subscribeSched 已启动的订阅调度句柄（Once 执行后非 nil，stop 可停）。
+	subscribeSched *subscriptionScheduler
+	// subscribeFetchSem 订阅拉取并发门控（≤4），防多源到点同步尖峰。
+	subscribeFetchSem chan struct{}
 }
 
 // New 创建管理器。
 func New(dataDir string) *Manager {
-	return &Manager{paths: ResolvePaths(dataDir)}
+	return &Manager{
+		paths:            ResolvePaths(dataDir),
+		subscribeFetchSem: make(chan struct{}, subscribeFetchConcurrency),
+	}
 }
 
 // SetDeps 装配运行依赖（进程执行器 / 网关 / 扫描控制器；任一可为 nil）。

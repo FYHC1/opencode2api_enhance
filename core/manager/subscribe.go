@@ -14,7 +14,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -1302,28 +1301,12 @@ func (m *Manager) importSubscription(url string, joinGateway bool) (int, error) 
 	return imported, nil
 }
 
-// StartSubscribeLoop 后台订阅循环：按配置间隔自动拉取并入实例。
-// intervalMin <= 0 或 URL 为空时休眠 30s 再查配置（配置变更无需重启）。
+// StartSubscribeLoop 旧版单条订阅后台循环（迁移期遗留，已废弃）：
+// 旧 config.subscribe_url 会经 loadSubscriptions 迁移进多源订阅列表，功能已由
+// RunAllSubscriptionLoop 取代。保留入口仅为兼容旧调用方：与多源调度共享
+// subscribeLoopOnce 唯一启动保护，二者不会双启、不会并发拉同一 URL。
 func (m *Manager) StartSubscribeLoop() {
-	go func() {
-		for {
-			cfg := m.loadConfig()
-			intervalMin := cfg.SubscribeIntervalMin
-			url := cfg.SubscribeURL
-			if intervalMin > 0 && url != "" {
-				if n, err := m.importSubscription(url, false); err != nil {
-					slog.Warn("订阅自动拉取失败", "error", err)
-				} else {
-					slog.Info("订阅自动拉取完成", "imported", n)
-				}
-			}
-			wait := time.Duration(intervalMin) * time.Minute
-			if wait < 30*time.Second {
-				wait = 30 * time.Second
-			}
-			time.Sleep(wait)
-		}
-	}()
+	m.RunAllSubscriptionLoop()
 }
 
 // ---------- HTTP handlers ----------

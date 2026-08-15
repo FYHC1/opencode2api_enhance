@@ -5,6 +5,7 @@
 package manager
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -139,38 +141,151 @@ func (m *Manager) ImportSubscriptionNow(url string) (int, string, error) {
 	}
 }
 
-// RunAllSubscriptionLoop 后台自动拉取循环：遍历所有订阅源，按各自间隔拉取。
-// 每轮完成后休眠至最近的下一次到期；订阅源变更（增删/改间隔）无需重启。
-func (m *Manager) RunAllSubscriptionLoop() {
-	go func() {
-		for {
-			list := m.loadSubscriptions()
-			next := time.Hour // 最近到期时间（兜底 1h，避免空列表忙转）
-			now := time.Now()
-			// 简单实现：每轮遍历所有 interval>0 的订阅源拉取一次，
-			// 然后休眠 min(各源间隔, 60s) —— 用最短间隔驱动"到点即拉"。
-			shortest := 0
-			for _, s := range list {
-				if s.IntervalMin > 0 {
-					if shortest == 0 || s.IntervalMin < shortest {
-						shortest = s.IntervalMin
-					}
-					if n, err := m.importSubscriptionForSource(s); err != nil {
-						slog.Warn("订阅自动拉取失败", "url", s.URL, "error", err)
-					} else {
-						slog.Info("订阅自动拉取完成", "url", s.URL, "imported", n)
-					}
+// subscribeFetchConcurrency 订阅拉取并发上限（防多源到点同步尖峰）。
+const subscribeFetchConcurrency = 4
+
+// subscribeSupervisorTick 监督循环重读订阅源列表的周期：源增删/改间隔无需重启，
+// 最长一个 tick 内生效。
+const subscribeSupervisorTick = 30 * time.Second
+
+// subscriptionScheduler 订阅后台调度句柄：唯一启动保护 + 可等待的停止路径。
+type subscriptionScheduler struct {
+	cancel         context.CancelFunc
+	supervisorDone sync.WaitGroup // supervisor 完全退出（关闭全部源循环并等齐）后才返回
+	loops          sync.WaitGroup // 各源循环 goroutine
+}
+
+// RunAllSubscriptionLoop 启动后台订阅调度：为每个 interval>0 的订阅源启动独立
+// goroutine（拉取一次 → 睡该源自己的 IntervalMin），慢源只拖自己。与旧单条入口
+// StartSubscribeLoop 经 subscribeLoopOnce 唯一启动保护（二选一，防迁移期双循环
+// 并发拉同一 URL）。返回停止函数：取消调度并等待全部源循环退出，返回后无残留
+// goroutine（测试/停服干净收尾；生产启动忽略返回值）。
+func (m *Manager) RunAllSubscriptionLoop() (stop func()) {
+	m.subscribeLoopOnce.Do(func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		sched := &subscriptionScheduler{cancel: cancel}
+		sched.supervisorDone.Add(1)
+		go func() {
+			defer sched.supervisorDone.Done()
+			m.subscriptionSupervisor(ctx, &sched.loops)
+		}()
+		m.subscribeSched = sched
+	})
+	if m.subscribeSched == nil {
+		// 被 StartSubscribeLoop 抢先启动（二选一），无独立调度可停。
+		return func() {}
+	}
+	return func() {
+		m.subscribeSched.cancel()
+		m.subscribeSched.supervisorDone.Wait()
+	}
+}
+
+// subscriptionSupervisor 订阅源调度监督循环：周期性重读源列表，为每个 interval>0
+// 的源维护独立调度 goroutine；已删除/禁用源停掉对应循环，短暂删后重加的源能重新拉起。
+// 全部 loops.Add 均在本 goroutine 内同步完成、退出前才 Wait，保证无 Add/Wait 竞争。
+func (m *Manager) subscriptionSupervisor(ctx context.Context, loops *sync.WaitGroup) {
+	type handle struct {
+		stop chan struct{}
+		done chan struct{}
+	}
+	running := map[string]*handle{} // url → 该源循环句柄
+	for {
+		list := m.loadSubscriptions()
+		want := map[string]SubscriptionSource{}
+		for _, s := range list {
+			if s.IntervalMin > 0 {
+				want[s.URL] = s
+			}
+		}
+		// 停掉已删除/禁用的源循环（stop 关闭后循环自退出并通知 done）。
+		for url, h := range running {
+			if _, ok := want[url]; !ok {
+				close(h.stop)
+				delete(running, url)
+			}
+		}
+		// 为新增源启动独立循环；已自退出（源曾被删）的旧循环重新拉起。
+		for url, s := range want {
+			h, ok := running[url]
+			if ok {
+				select {
+				case <-h.done:
+					delete(running, url)
+				default:
+					continue
 				}
 			}
-			_ = next
-			_ = now
-			wait := time.Duration(shortest) * time.Minute
-			if wait < 30*time.Second {
-				wait = 30 * time.Second
-			}
-			<-time.After(wait)
+			h = &handle{stop: make(chan struct{}), done: make(chan struct{})}
+			running[url] = h
+			loops.Add(1)
+			go func(s SubscriptionSource, h *handle) {
+				defer loops.Done()
+				defer close(h.done)
+				m.subscriptionSourceLoop(s, h.stop)
+			}(s, h)
 		}
-	}()
+		select {
+		case <-ctx.Done():
+			// 停止全部源循环并等待最后一个在途拉取返回（单次 fetch 超时有界），
+			// 确保 stop() 返回后不再有订阅 goroutine 落盘。
+			for _, h := range running {
+				close(h.stop)
+			}
+			loops.Wait()
+			return
+		case <-time.After(subscribeSupervisorTick):
+		}
+	}
+}
+
+// subscriptionSourceLoop 单源调度循环：拉取一次 → 睡该源自己的 IntervalMin。
+// 每轮重读源配置（增删/改间隔无需重启）；源被删除或禁用时自退出。
+// 并发门控与休眠均 select stop，停止后立即让出、不留尾。
+func (m *Manager) subscriptionSourceLoop(s SubscriptionSource, stop <-chan struct{}) {
+	for {
+		cur, ok := m.subscriptionSourceByURL(s.URL)
+		if !ok || cur.IntervalMin <= 0 {
+			return
+		}
+		// 并发拉取门控（≤4），防多源到点同步尖峰。
+		select {
+		case m.subscribeFetchSem <- struct{}{}:
+		case <-stop:
+			return
+		}
+		n, err := m.importSubscriptionForSource(cur)
+		<-m.subscribeFetchSem
+		if err != nil {
+			slog.Warn("订阅自动拉取失败", "url", cur.URL, "error", err)
+		} else {
+			slog.Info("订阅自动拉取完成", "url", cur.URL, "imported", n)
+		}
+		select {
+		case <-stop:
+			return
+		case <-time.After(subscriptionWaitOf(cur)):
+		}
+	}
+}
+
+// subscriptionWaitOf 单源调度休眠时长：该源自己的 IntervalMin（下限 30s）。
+func subscriptionWaitOf(s SubscriptionSource) time.Duration {
+	wait := time.Duration(s.IntervalMin) * time.Minute
+	if wait < 30*time.Second {
+		wait = 30 * time.Second
+	}
+	return wait
+}
+
+// subscriptionSourceByURL 按 URL 查订阅源（取最新配置）。
+func (m *Manager) subscriptionSourceByURL(url string) (SubscriptionSource, bool) {
+	for _, s := range m.loadSubscriptions() {
+		if s.URL == url {
+			return s, true
+		}
+	}
+	return SubscriptionSource{}, false
 }
 
 // importSubscriptionForSource 按订阅源目标导入。

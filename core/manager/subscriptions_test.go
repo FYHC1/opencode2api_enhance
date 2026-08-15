@@ -4,7 +4,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // T3: 订阅源列表 CRUD + 迁移 + 立即拉取（含 HTTP 契约）。
@@ -192,4 +194,180 @@ func TestCountInstancesForGroup(t *testing.T) {
 	if running != 0 || stopped != 0 {
 		t.Fatalf("不存在 running=%d stopped=%d, want 0/0", running, stopped)
 	}
+}
+
+// ---------- CONC-7 M6：每源独立调度 ----------
+
+const testSubNodeBody = "vless://uuid@x.example.com:443?security=tls#X"
+
+// TestSubscriptionWaitPerSource 结构性断言：每源循环睡自己的 IntervalMin
+// （避免真实长 sleep）。
+func TestSubscriptionWaitPerSource(t *testing.T) {
+	if got := subscriptionWaitOf(SubscriptionSource{IntervalMin: 1}); got != time.Minute {
+		t.Fatalf("interval 1 = %v, want 1m", got)
+	}
+	if got := subscriptionWaitOf(SubscriptionSource{IntervalMin: 1440}); got != 24*time.Hour {
+		t.Fatalf("interval 1440 = %v, want 24h", got)
+	}
+}
+
+// TestSubscriptionSourcesIndependentLoops 每源独立循环：慢源首轮拉取阻塞期间，
+// 快源必须完成自己的首轮拉取（串行整轮实现会被慢源拖住）。
+func TestSubscriptionSourcesIndependentLoops(t *testing.T) {
+	m := New(t.TempDir())
+	var aMu, bMu sync.Mutex
+	aCalls, bCalls := 0, 0
+	aEntered := make(chan struct{}, 4)
+	aRelease := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseNow := func() { releaseOnce.Do(func() { close(aRelease) }) }
+
+	srvA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		aMu.Lock()
+		aCalls++
+		aMu.Unlock()
+		select {
+		case aEntered <- struct{}{}:
+		default:
+		}
+		<-aRelease // 慢源：首轮挂起直到放行
+		_, _ = w.Write([]byte(testSubNodeBody))
+	}))
+	srvB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		bMu.Lock()
+		bCalls++
+		bMu.Unlock()
+		_, _ = w.Write([]byte(testSubNodeBody))
+	}))
+	defer srvA.Close()
+	defer srvB.Close()
+	_ = m.AddSubscription(srvA.URL, 1, TargetPoolOnly)
+	_ = m.AddSubscription(srvB.URL, 1, TargetPoolOnly)
+
+	stop := m.RunAllSubscriptionLoop()
+	defer stop()
+	defer releaseNow() // 先放行阻塞的 fetch，再停循环（stop 会等循环退出）
+
+	<-aEntered // 慢源已进入拉取（阻塞中）
+	// 慢源阻塞期间，快源应完成自己的首轮拉取。
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		bMu.Lock()
+		n := bCalls
+		bMu.Unlock()
+		if n >= 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("快源首轮拉取被慢源拖住（未每源独立调度）")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	releaseNow()
+}
+
+// TestSubscriptionFetchConcurrencyCapped 并发拉取 ≤ 门控（4）：
+// 6 个源同时到点，同时只有 4 个在途。
+func TestSubscriptionFetchConcurrencyCapped(t *testing.T) {
+	m := New(t.TempDir())
+	const total = 6
+	entered := make(chan struct{}, total)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseNow := func() { releaseOnce.Do(func() { close(release) }) }
+	var gateMu sync.Mutex
+	active, maxActive := 0, 0
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		gateMu.Lock()
+		active++
+		if active > maxActive {
+			maxActive = active
+		}
+		gateMu.Unlock()
+		entered <- struct{}{}
+		<-release
+		gateMu.Lock()
+		active--
+		gateMu.Unlock()
+		_, _ = w.Write([]byte(testSubNodeBody))
+	}
+	for i := 0; i < total; i++ {
+		srv := httptest.NewServer(http.HandlerFunc(handler))
+		defer srv.Close()
+		_ = m.AddSubscription(srv.URL, 1, TargetPoolOnly)
+	}
+
+	stop := m.RunAllSubscriptionLoop()
+	defer stop()
+	defer releaseNow() // 先放行阻塞的 fetch，再停循环（stop 会等循环退出）
+
+	// 首轮 6 源到点：门控应恰好放 4 个进 fetch。
+	for i := 0; i < 4; i++ {
+		select {
+		case <-entered:
+		case <-time.After(3 * time.Second):
+			t.Fatalf("第 %d 个拉取未进入（门控异常）", i)
+		}
+	}
+	// 未放行前不应出现第 5 个并发在途。
+	select {
+	case <-entered:
+		t.Fatal("并发拉取超过门控上限 4")
+	case <-time.After(300 * time.Millisecond):
+	}
+	releaseNow()
+	// 放行后余下 2 个也应各自完成首轮。
+	for i := 0; i < total-4; i++ {
+		select {
+		case <-entered:
+		case <-time.After(3 * time.Second):
+			t.Fatalf("放行后第 %d 个拉取未完成", i)
+		}
+	}
+	if maxActive != 4 {
+		t.Fatalf("最大并发拉取数 = %d, want 4", maxActive)
+	}
+}
+
+// TestSubscriptionLoopStartsOnce 双入口唯一启动：StartSubscribeLoop 与
+// RunAllSubscriptionLoop 只启动一套调度，不会并发拉同一 URL。
+func TestSubscriptionLoopStartsOnce(t *testing.T) {
+	m := New(t.TempDir())
+	var mu sync.Mutex
+	calls := 0
+	firstEntered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseNow := func() { releaseOnce.Do(func() { close(release) }) }
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls++
+		n := calls
+		mu.Unlock()
+		if n == 1 {
+			close(firstEntered)
+			<-release
+		}
+		_, _ = w.Write([]byte(testSubNodeBody))
+	}))
+	defer srv.Close()
+	_ = m.AddSubscription(srv.URL, 1, TargetPoolOnly)
+
+	stop := m.RunAllSubscriptionLoop()
+	m.StartSubscribeLoop() // 旧入口：应被唯一启动保护挡住
+	defer stop()
+	defer releaseNow() // 先放行阻塞的 fetch，再停循环（stop 会等循环退出）
+
+	<-firstEntered // 首次拉取在途（阻塞）
+	// 观察窗口：不得出现第二次在途拉取（双循环并发会发出第二个请求）。
+	time.Sleep(200 * time.Millisecond)
+	mu.Lock()
+	n := calls
+	mu.Unlock()
+	if n > 1 {
+		t.Fatalf("双入口启动了双循环，同一 URL 并发拉取 %d 次", n)
+	}
+	releaseNow()
 }
