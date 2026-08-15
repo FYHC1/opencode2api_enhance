@@ -388,7 +388,21 @@ func (m *Manager) savePoolQuality(recs []QualityRecord) {
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile(m.poolQualityFilePath(), data, 0o644)
+	// G9：临时文件 + Rename 原子落盘——truncate+write 非原子，并发读写可能
+	// 读到半截 JSON；Rename 保证目标路径任一时刻都是完整旧文件或完整新文件。
+	tmp, err := os.CreateTemp(m.paths.RuntimeDir, "pool_quality-*.tmp")
+	if err != nil {
+		return
+	}
+	defer os.Remove(tmp.Name()) // 失败路径清理；成功后目标已不存在，无副作用
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		return
+	}
+	_ = os.Rename(tmp.Name(), m.poolQualityFilePath())
 }
 
 // ---- 探活调度 ----
@@ -396,6 +410,10 @@ func (m *Manager) savePoolQuality(recs []QualityRecord) {
 // RunPoolQualityOnce 单轮链路探活：并发探测全部 Running 实例并经 sing-box
 // SOCKS 出口发真实 HTTP 请求，更新质量记录并持久化。
 func (m *Manager) RunPoolQualityOnce(runner Runner) PoolQualitySummary {
+	// G9：探活轮互斥——后台循环与手动触发并发时只允许一轮执行，
+	// 避免两轮同时 load+save 同一文件（配合 savePoolQuality 原子落盘）。
+	m.poolProbeMu.Lock()
+	defer m.poolProbeMu.Unlock()
 	if runner == nil {
 		runner = m.Run()
 	}

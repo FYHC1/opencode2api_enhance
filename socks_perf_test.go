@@ -200,10 +200,82 @@ func TestBreakerHalfOpenFailKeepsOpen(t *testing.T) {
 	poolBreakers[addr].openUntil = time.Now().Add(-time.Second)
 	poolBreakerMu.Unlock()
 
-	// 半开探测失败 → 重新 open（计数继续累计）。
+	// 半开放行探针被消费，随后探测失败 → 重新 open（重新计时）。
+	if got := breakerState(addr); got != "halfopen" {
+		t.Fatalf("state=%s, want halfopen", got)
+	}
 	applyPoolResult(addr, 503, nil)
 	if got := breakerState(addr); got != "open" {
 		t.Fatalf("after failed probe state=%s, want open", got)
+	}
+}
+
+// G8：跳闸瞬间已在途的请求陆续失败，不应把半开恢复窗口向后顺延。
+func TestBreakerLateFailuresDoNotPushOpenUntil(t *testing.T) {
+	resetPoolPerfState()
+	poolBreakerThreshold.Store(3)
+	poolHalfOpenIntervalSec.Store(60)
+	addr := "127.0.0.1:28101"
+
+	// 第 3 次失败触发 close→open 跳变。
+	applyPoolResult(addr, 503, nil)
+	applyPoolResult(addr, 503, nil)
+	applyPoolResult(addr, 503, nil)
+	poolBreakerMu.Lock()
+	trippedUntil := poolBreakers[addr].openUntil
+	poolBreakerMu.Unlock()
+	if trippedUntil.IsZero() {
+		t.Fatal("3rd failure should open breaker")
+	}
+
+	// 跳闸后在途的迟到失败：只累计计数，openUntil 不得顺延。
+	for i := 0; i < 5; i++ {
+		applyPoolResult(addr, 503, nil)
+	}
+	poolBreakerMu.Lock()
+	lateFailures := poolBreakers[addr].failures
+	lateUntil := poolBreakers[addr].openUntil
+	poolBreakerMu.Unlock()
+	if lateFailures <= 3 {
+		t.Fatalf("failures=%d, want > 3 (late failures must count)", lateFailures)
+	}
+	if !lateUntil.Equal(trippedUntil) {
+		t.Fatalf("late failures moved openUntil %v -> %v, want unchanged", trippedUntil, lateUntil)
+	}
+	// 到期前仍剔除（open）。
+	if got := breakerState(addr); got != "open" {
+		t.Fatalf("state=%s, want open", got)
+	}
+}
+
+// G8：半开探测失败 → 重推 openUntil（重新计时）并复位 probeUsed。
+func TestBreakerHalfOpenFailRearmsOpenUntil(t *testing.T) {
+	resetPoolPerfState()
+	poolBreakerThreshold.Store(2)
+	poolHalfOpenIntervalSec.Store(60)
+	addr := "127.0.0.1:28101"
+
+	applyPoolResult(addr, 503, nil)
+	applyPoolResult(addr, 503, nil)
+	// 半开窗口到达并消费探针。
+	poolBreakerMu.Lock()
+	poolBreakers[addr].openUntil = time.Now().Add(-time.Second)
+	poolBreakerMu.Unlock()
+	if got := breakerState(addr); got != "halfopen" {
+		t.Fatalf("state=%s, want halfopen", got)
+	}
+
+	// 探测失败 → 重新 open：probeUsed 复位、openUntil 重新计时。
+	applyPoolResult(addr, 503, nil)
+	poolBreakerMu.Lock()
+	b := poolBreakers[addr]
+	rearmed := !b.openUntil.IsZero() && !b.probeUsed
+	poolBreakerMu.Unlock()
+	if !rearmed {
+		t.Fatalf("probe failure must re-arm openUntil and reset probeUsed")
+	}
+	if got := breakerState(addr); got != "open" {
+		t.Fatalf("state=%s, want open after failed probe", got)
 	}
 }
 

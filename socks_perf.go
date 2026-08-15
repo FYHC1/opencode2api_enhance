@@ -368,7 +368,11 @@ func applyPoolResult(addr string, status int, requestErr error) {
 		poolBreakers[addr] = b
 	}
 	b.failures++
-	if b.failures >= int(poolBreakerThreshold.Load()) {
+	// G8：只在 close→open 跳变（failures 恰好达到阈值）或半开探测失败
+	// （probeUsed 已消费，需重新计时）时重推 openUntil；跳闸后在途失败
+	// 只累计计数，不再把半开恢复窗口向后顺延。
+	threshold := int(poolBreakerThreshold.Load())
+	if b.failures == threshold || (b.probeUsed && b.failures >= threshold) {
 		b.openUntil = time.Now().Add(time.Duration(poolHalfOpenIntervalSec.Load()) * time.Second)
 		b.probeUsed = false
 		slog.Warn("pool breaker opened", "addr", addr, "failures", b.failures)
