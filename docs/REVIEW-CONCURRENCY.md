@@ -12,7 +12,7 @@
 |---|---|---|---|---|
 | H1 | 请求取消不穿透到下游（`context.Background()`） | 高 | CONC-1 | ✅ `d120ad6` |
 | H2 | 统计落盘每请求 spawn goroutine + 无锁并发写 | 高 | CONC-3 | ⬜ |
-| H3 | 每请求重建 http.Client/Transport，连接池失效 | 高 | CONC-2 | ⬜ |
+| H3 | 每请求重建 http.Client/Transport，连接池失效 | 高 | CONC-2 | ✅ `20e70ae` |
 | H4 | StopInstance 全局锁内 Kill + 全量落盘 | 高 | CONC-4 | ⬜ |
 | H5 | windsurf 账号可被并发借用 | 高 | CONC-6 | ⬜ |
 | H6 | 订阅导入端口记账偏移 `+10000`（应 `+2000`） | 高 | CONC-4 | ⬜ |
@@ -23,7 +23,7 @@
 | M5 | 健康巡检串行探测 + 双轮无互斥 + 旧快照重启 | 中 | CONC-7 | ⬜ |
 | M6 | 自动订阅整轮串行 + 等待间隔取最短源 | 中 | CONC-7 | ⬜ |
 | M7 | 订阅缓存 load-modify-write 无锁并发覆盖 | 中 | CONC-4 | ⬜ |
-| M8 | 每请求重建模型目录（O(catalog) 热路径） | 中 | CONC-2 | ⬜ |
+| M8 | 每请求重建模型目录（O(catalog) 热路径） | 中 | CONC-2 | ✅ `20e70ae` |
 | M9 | 前端轮询无 in-flight 守卫（4 页） | 中 | CONC-9 | ⬜ |
 | M10 | 任务悬浮面板驱动 App 整树重渲染 | 中 | CONC-9 | ⬜ |
 | M11 | NodesPage 扫描状态机异常分支不收敛 | 中 | CONC-9 | ⬜ |
