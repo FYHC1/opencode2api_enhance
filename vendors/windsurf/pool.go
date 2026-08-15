@@ -21,6 +21,7 @@ type Account struct {
 	CoolUntil            time.Time `json:"cool_until"`                       // 冷却截止（防滥用/换号后）
 	CreatedAt            time.Time `json:"created_at"`
 	LastUsedAt           time.Time `json:"last_used_at"`
+	inUse                bool      `json:"-"` // 借用中（并发互斥；不持久化）
 }
 
 // quotaPct 取该账号"实际剩余额度%"（daily/weekly 取小；未知视为 100 乐观值）。
@@ -38,9 +39,9 @@ func (a *Account) quotaPct() float64 {
 	return m
 }
 
-// usable 判断账号当前是否可用（未冷却、未耗尽）。
+// usable 判断账号当前是否可用（未冷却、未耗尽、未被借用）。
 func (a *Account) usable(now time.Time) bool {
-	if a.Dry {
+	if a.inUse || a.Dry {
 		return false
 	}
 	return !a.CoolUntil.After(now)
@@ -72,10 +73,8 @@ func (p *Pool) add(a *Account) {
 	p.persistLocked()
 }
 
-// available 返回当前可用账号（按健康排序：额度小者优先用）。
-func (p *Pool) available(now time.Time) []*Account {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+// availableLocked 需持锁：返回当前可用账号（按健康排序：额度小者优先用）。
+func (p *Pool) availableLocked(now time.Time) []*Account {
 	var out []*Account
 	for _, a := range p.accounts {
 		if a.usable(now) {
@@ -95,17 +94,26 @@ func (p *Pool) available(now time.Time) []*Account {
 	return out
 }
 
-// acquire 借出一个可用账号（受冷却/健康约束）；无可用返回 ErrNoAccount。
+// available 返回当前可用账号（按健康排序：额度小者优先用）。
+func (p *Pool) available(now time.Time) []*Account {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.availableLocked(now)
+}
+
+// acquire 借出一个可用且未被占用的账号（单次持锁内完成选择+标记占用）；
+// 无可用返回 ErrNoAccount。
 func (p *Pool) acquire(now time.Time) (*Account, error) {
-	avail := p.available(now)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	avail := p.availableLocked(now)
 	if len(avail) == 0 {
 		return nil, ErrNoAccount
 	}
 	a := avail[0]
-	p.mu.Lock()
+	a.inUse = true
 	a.LastUsedAt = now
 	p.persistLocked()
-	p.mu.Unlock()
 	return a, nil
 }
 
@@ -124,6 +132,7 @@ func (p *Pool) release(email string, now time.Time, exhausted bool) {
 			a.Trouble++
 			a.CoolUntil = now.Add(p.cooldown)
 		}
+		a.inUse = false
 		a.LastUsedAt = now
 		p.persistLocked()
 		return
@@ -142,7 +151,8 @@ func (p *Pool) tokenOf(email string) string {
 	return ""
 }
 
-// touch 标记账号最近使用时间（成功会话后）。
+// touch 标记账号最近使用时间（流式打开/换号成功后记账；不清 inUse——
+// 流仍占用该账号，归还由 Close/oneSwitch 的 release 负责）。
 func (p *Pool) touch(email string, now time.Time) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -218,6 +228,8 @@ func (p *Pool) count() int {
 }
 
 // persistLocked 写 JSON 持久化（需持锁）。
+// 注：写盘仍在锁内——锁外写需引入快照代次去重（旧快照不得覆盖新快照），
+// 为保持最小改动（CONC-6 非本阶段重点）暂保留；账号池文件写量极小，影响可控。
 func (p *Pool) persistLocked() {
 	if p.file == "" {
 		return
