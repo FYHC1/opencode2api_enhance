@@ -355,6 +355,12 @@ export default function PoolPage({
     try {
       await api.removeInstance(name)
       toast(`已释放实例 ${name}`)
+      // G3: 释放后从勾选集剔除
+      setPoolSelected((prev) => {
+        const n = new Set(prev)
+        n.delete(name)
+        return n
+      })
       await load()
     } catch (e) {
       toast(String(e), false)
@@ -409,6 +415,12 @@ export default function PoolPage({
       }
       onRelease({ active: true, done: names.length, total: names.length })
       toast(`已释放 ${done} 个成员${fail ? `，失败 ${fail}` : ''}`, fail === 0)
+      // G3: 释放后从勾选集剔除（失败项仍保留在列表，可重新勾选）
+      setPoolSelected((prev) => {
+        const n = new Set(prev)
+        names.forEach((x) => n.delete(x))
+        return n
+      })
       await load()
     } catch (e) {
       toast(String(e), false)
@@ -537,7 +549,9 @@ export default function PoolPage({
   const selScope = members.filter((i) => poolSelected.has(i.name))
   const selTotal = selScope.length
   const selRunning = selScope.filter((i) => i.status === 'Running').length
-  const allChecked = members.length > 0 && poolSelected.size === members.length
+  // G3: 批量按钮计数/禁用口径统一为「可见且选中」集——切筛选或搜索收窄后，隐藏的选中项不计入
+  const visibleSelected = new Set(selScope.map((i) => i.name))
+  const allChecked = members.length > 0 && visibleSelected.size === members.length
 
   return (
     <div className="p-6 space-y-4">
@@ -729,51 +743,51 @@ export default function PoolPage({
             <Network size={15} className="text-teal-600" />
             <span className="text-[14px] font-semibold text-zinc-900">池成员</span>
             <span className="text-[12px] text-zinc-400">已入池的实例会聚合到统一网关地址，未入池实例保持独享</span>
-            {poolSelected.size > 0 && (
+            {visibleSelected.size > 0 && (
               <button
                 onClick={() => setPoolSelected(new Set())}
                 className="text-[11px] px-2 py-0.5 rounded-md bg-zinc-100 text-zinc-600 hover:bg-zinc-200"
               >
-                已选 {poolSelected.size} · 清除
+                已选 {visibleSelected.size} · 清除
               </button>
             )}
           </div>
           <div className="flex items-center gap-2">
             <button
               onClick={() => void doAll('start')}
-              disabled={poolSelected.size === 0 || !!allBusy}
-              title={poolSelected.size === 0 ? '请先勾选池成员' : `批量启动 ${poolSelected.size} 个`}
+              disabled={visibleSelected.size === 0 || !!allBusy}
+              title={visibleSelected.size === 0 ? '请先勾选池成员' : `批量启动 ${visibleSelected.size} 个`}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-white bg-green-600 hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-40"
             >
               {allBusy === 'start' ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
-              批量启动{poolSelected.size > 0 ? `（${poolSelected.size}）` : ''}
+              批量启动{visibleSelected.size > 0 ? `（${visibleSelected.size}）` : ''}
             </button>
             <button
               onClick={() => void doAll('stop')}
-              disabled={poolSelected.size === 0 || !!allBusy}
-              title={poolSelected.size === 0 ? '请先勾选池成员' : `批量停止 ${poolSelected.size} 个`}
+              disabled={visibleSelected.size === 0 || !!allBusy}
+              title={visibleSelected.size === 0 ? '请先勾选池成员' : `批量停止 ${visibleSelected.size} 个`}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-zinc-700 bg-white border border-zinc-200 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-40"
             >
               {allBusy === 'stop' ? <Loader2 size={14} className="animate-spin" /> : <Square size={14} />}
-              批量停止{poolSelected.size > 0 ? `（${poolSelected.size}）` : ''}
+              批量停止{visibleSelected.size > 0 ? `（${visibleSelected.size}）` : ''}
             </button>
             <button
               onClick={() => void doAll('test')}
-              disabled={poolSelected.size === 0 || !!allBusy}
-              title={poolSelected.size === 0 ? '请先勾选池成员' : `批量测试 ${poolSelected.size} 个`}
+              disabled={visibleSelected.size === 0 || !!allBusy}
+              title={visibleSelected.size === 0 ? '请先勾选池成员' : `批量测试 ${visibleSelected.size} 个`}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-teal-700 bg-teal-50 border border-teal-100 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-40"
             >
               {allBusy === 'test' ? <Loader2 size={14} className="animate-spin" /> : <TestTube2 size={14} />}
-              批量测试{poolSelected.size > 0 ? `（${poolSelected.size}）` : ''}
+              批量测试{visibleSelected.size > 0 ? `（${visibleSelected.size}）` : ''}
             </button>
             <button
               onClick={() => setReleaseMode('all')}
-              disabled={poolSelected.size === 0 || !!releaseAllBusy}
-              title={poolSelected.size === 0 ? '请先勾选池成员' : `批量释放 ${poolSelected.size} 个`}
+              disabled={visibleSelected.size === 0 || !!releaseAllBusy}
+              title={visibleSelected.size === 0 ? '请先勾选池成员' : `批量释放 ${visibleSelected.size} 个`}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-red-600 bg-red-50 border border-red-100 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-40"
             >
               {releaseAllBusy ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
-              批量释放{poolSelected.size > 0 ? `（${poolSelected.size}）` : ''}
+              批量释放{visibleSelected.size > 0 ? `（${visibleSelected.size}）` : ''}
             </button>
             <select
               value={filter}
