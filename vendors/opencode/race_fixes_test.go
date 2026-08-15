@@ -6,6 +6,7 @@ package opencode
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -255,6 +256,59 @@ func TestRaceAllFailCandidatesAllMarked(t *testing.T) {
 	}
 	if len(marks) != 2 {
 		t.Fatalf("marks=%v, want 全败两候选各 1 次", marks)
+	}
+}
+
+// cancelRT 立即回放 context.Canceled（模拟客户端断开 / 上游连接被取消）。
+type cancelRT struct{}
+
+func (rt *cancelRT) RoundTrip(_ *http.Request) (*http.Response, error) {
+	return nil, context.Canceled
+}
+
+// TestRaceAllFailCanceledNotMarked G32：竞速全败且错误为 ctx.Canceled 时，
+// call() 不得把 Canceled 连带真实 addr Mark 到节点（不污染冷却/熔断）。
+// raceMarkOutcome 已排除 Canceled，此处补 all-fail 返回路径的缺口。
+func TestRaceAllFailCanceledNotMarked(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		streaming bool
+	}{
+		{"non-stream", false},
+		{"stream", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tr := &g6Racer{
+				clients: []*http.Client{{Transport: &cancelRT{}}, {Transport: &cancelRT{}}},
+				addrs:   []string{"c1", "c2"},
+			}
+			v := newRaceVendor(tr, 2)
+			raw := `{"model":"m-free","messages":[{"role":"user","content":"hi"}]}`
+			if tc.streaming {
+				raw = `{"model":"m-free","stream":true,"messages":[{"role":"user","content":"hi"}]}`
+			}
+			if tc.streaming {
+				st, err := v.ChatStream(context.Background(), msgWith(raw, "m-free", "public", ""))
+				if st != nil {
+					st.Close()
+				}
+				if err == nil {
+					t.Fatalf("ChatStream err=nil, want 全败失败")
+				}
+			} else {
+				if _, err := v.Chat(context.Background(), msgWith(raw, "m-free", "public", "")); !errors.Is(err, context.Canceled) {
+					t.Fatalf("Chat err=%v, want context.Canceled", err)
+				}
+			}
+			// raceDrain 异步收尾，轮询等待其落定后再断言无 Mark。
+			deadline := time.Now().Add(2 * time.Second)
+			for len(tr.markSnapshot()) != 0 && time.Now().Before(deadline) {
+				time.Sleep(5 * time.Millisecond)
+			}
+			if marks := tr.markSnapshot(); len(marks) != 0 {
+				t.Fatalf("marks=%v, want 0（ctx.Canceled 不得标记到节点）", marks)
+			}
+		})
 	}
 }
 

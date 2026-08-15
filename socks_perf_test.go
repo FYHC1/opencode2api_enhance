@@ -279,6 +279,68 @@ func TestBreakerHalfOpenFailRearmsOpenUntil(t *testing.T) {
 	}
 }
 
+// G33：熔断已 open 后阈值热重载调高越过 failures → 半开探测失败仍重推
+// （不被新阈值钳制，不永久剔除直到重启）。
+func TestBreakerThresholdRaisedProbeFailRearms(t *testing.T) {
+	resetPoolPerfState()
+	poolBreakerThreshold.Store(3)
+	poolHalfOpenIntervalSec.Store(60)
+	addr := "127.0.0.1:28101"
+
+	// 连续 3 次失败 → open（failures=3）。
+	applyPoolResult(addr, 503, nil)
+	applyPoolResult(addr, 503, nil)
+	applyPoolResult(addr, 503, nil)
+	if got := breakerState(addr); got != "open" {
+		t.Fatalf("state=%s, want open", got)
+	}
+	// 阈值热重载调高越过当前 failures（模拟 applyConfig：3→10）。
+	poolBreakerThreshold.Store(10)
+	// 半开窗口到达并消费探针。
+	poolBreakerMu.Lock()
+	poolBreakers[addr].openUntil = time.Now().Add(-time.Second)
+	poolBreakerMu.Unlock()
+	if got := breakerState(addr); got != "halfopen" {
+		t.Fatalf("state=%s, want halfopen", got)
+	}
+	// 半开探测失败（failures=4 < 新阈值 10）：仍必须重推 openUntil。
+	applyPoolResult(addr, 503, nil)
+	poolBreakerMu.Lock()
+	b := poolBreakers[addr]
+	rearmed := !b.openUntil.IsZero() && !b.probeUsed && b.tripped
+	poolBreakerMu.Unlock()
+	if !rearmed {
+		t.Fatalf("raised-threshold probe failure must re-arm openUntil, got %+v", b)
+	}
+	if got := breakerState(addr); got != "open" {
+		t.Fatalf("state=%s, want open after rearm", got)
+	}
+}
+
+// G33：阈值热重载调低且 failures 已越过新阈值（未跳闸）→ 后续失败仍能跳闸
+// （failures >= threshold && !tripped 生效，而非 ==threshold 精确相等）。
+func TestBreakerThresholdLoweredStillTrips(t *testing.T) {
+	resetPoolPerfState()
+	poolBreakerThreshold.Store(10)
+	poolHalfOpenIntervalSec.Store(60)
+	addr := "127.0.0.1:28101"
+
+	// 高阈值 10 下累计 5 次失败：5 < 10，未跳闸。
+	for i := 0; i < 5; i++ {
+		applyPoolResult(addr, 503, nil)
+	}
+	if got := breakerState(addr); got != "closed" {
+		t.Fatalf("state=%s, want closed under threshold 10", got)
+	}
+	// 阈值热重载调低到 3（failures=5 已越过新阈值）。
+	poolBreakerThreshold.Store(3)
+	// 后续失败（failures=6）必须跳闸。
+	applyPoolResult(addr, 503, nil)
+	if got := breakerState(addr); got != "open" {
+		t.Fatalf("lowered-threshold next failure must trip, state=%s", got)
+	}
+}
+
 // 半开放行：到期后 pick 放行 1 个熔断节点。
 func TestPickWeightedProxyHalfOpenProbe(t *testing.T) {
 	resetPoolPerfState()
