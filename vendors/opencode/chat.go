@@ -211,6 +211,9 @@ func (v *Vendor) call(ctx context.Context, msg *contract.Message, streaming bool
 			lastErr = err
 			break
 		}
+		// 请求携带调用方 ctx：单发/重试链的 client.Do 同样感知客户端断开
+		// （竞速候选由 raceDo 内部按候选派生 ctx，不在此列）。
+		up = up.WithContext(ctx)
 		tr := v.transport()
 		// P2b 请求级竞速：首轮并行扇出 N 个候选，首个 2xx（流式 = 首个 chunk 到达）胜出。
 		// G1：付费层（TierPaid）跳过竞速直接走单发（与单发路径一致，付费 token 不走代理池扇出）。
@@ -270,8 +273,13 @@ func (v *Vendor) call(ctx context.Context, msg *contract.Message, streaming bool
 			if resp.StatusCode == http.StatusTooManyRequests {
 				// S2 429 感知：记录最近 429 时间戳（下个请求冷却内跳过竞速），
 				// 重试前指数退避 sleep(min(base*2^n, cap))，不放大限流。
+				// L3：退避感知 ctx——客户端断开立即返回取消错误，不硬睡最长 30s。
 				v.last429.Store(time.Now().UnixNano())
-				time.Sleep(v.rateLimitBackoff(retry429Count))
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-time.After(v.rateLimitBackoff(retry429Count)):
+				}
 				retry429Count++
 			}
 			if resp.StatusCode == http.StatusUnauthorized {

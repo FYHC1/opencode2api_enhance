@@ -781,7 +781,7 @@ func responsesHandler(w http.ResponseWriter, r *http.Request) {
 	upstreamBody := buildUpstreamBody(&chatReq)
 
 	if respReq.Stream {
-		upResp, status, _, proxyAddr, err := callOpenCodeAPIStream(upstreamBody, chatReq.Model, auth)
+		upResp, status, _, proxyAddr, err := callOpenCodeAPIStream(r.Context(), upstreamBody, chatReq.Model, auth)
 		callRec.Nodes = append(callRec.Nodes, proxyAddr)
 		if err != nil || status < 200 || status >= 300 {
 			callRec.Status = "fail"
@@ -816,7 +816,7 @@ func responsesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respBody, status, _, proxyAddr, err := callOpenCodeAPI(upstreamBody, chatReq.Model, auth)
+	respBody, status, _, proxyAddr, err := callOpenCodeAPI(r.Context(), upstreamBody, chatReq.Model, auth)
 	callRec.Nodes = append(callRec.Nodes, proxyAddr)
 	if err != nil || status < 200 || status >= 300 {
 		callRec.Status = "fail"

@@ -63,7 +63,7 @@ func TestAdapterSeedsContractMessages(t *testing.T) {
 
 	body := []byte(`{"model":"m-shared","messages":[{"role":"user","content":"continue please"}]}`)
 
-	if _, status, _, _, err := callOpenCodeAPI(body, "m-shared", UpstreamAuth{Mode: AuthRoutePublic}); err != nil || status != http.StatusOK {
+	if _, status, _, _, err := callOpenCodeAPI(context.Background(), body, "m-shared", UpstreamAuth{Mode: AuthRoutePublic}); err != nil || status != http.StatusOK {
 		t.Fatalf("callOpenCodeAPI: %d %v", status, err)
 	}
 	rec.mu.Lock()
@@ -76,7 +76,7 @@ func TestAdapterSeedsContractMessages(t *testing.T) {
 	rec.mu.Lock()
 	rec.got = nil
 	rec.mu.Unlock()
-	if _, status, _, _, err := callOpenCodeAPIStream(body, "m-shared", UpstreamAuth{Mode: AuthRoutePublic}); err != nil || status != http.StatusOK {
+	if _, status, _, _, err := callOpenCodeAPIStream(context.Background(), body, "m-shared", UpstreamAuth{Mode: AuthRoutePublic}); err != nil || status != http.StatusOK {
 		t.Fatalf("callOpenCodeAPIStream: %d %v", status, err)
 	}
 	rec.mu.Lock()

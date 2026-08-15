@@ -4,6 +4,7 @@ package opencode
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -138,6 +139,45 @@ func TestChat429BackoffSleepApplied(t *testing.T) {
 	// 3 次尝试 → 2 次退避：10ms + 20ms（cap）。
 	if elapsed < 25*time.Millisecond {
 		t.Fatalf("elapsed=%v, want >= 25ms（10ms+20ms 退避已生效）", elapsed)
+	}
+}
+
+// TestChat429BackoffInterruptedByCancel L3：429 退避 sleep 期间取消 ctx——
+// 调用立即返回（远小于退避上限 30s），不硬睡。
+func TestChat429BackoffInterruptedByCancel(t *testing.T) {
+	rt := &fakeRT{responses: s2Many429(3)}
+	v := newS2SingleVendor(rt, 3600, 30000, 60000) // 退避 base 30s cap 60s，远超测试窗口
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := v.Chat(ctx, s2Msg())
+		done <- err
+	}()
+
+	// 等第一个 429 已发出（进入退避 sleep）再取消。
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		rt.mu.Lock()
+		n := len(rt.urls)
+		rt.mu.Unlock()
+		if n > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("上游请求未发出")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled（退避被取消中断）", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("429 退避未感知 ctx 取消，调用未及时返回（硬睡 30s）")
 	}
 }
 
