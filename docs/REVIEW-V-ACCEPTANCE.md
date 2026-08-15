@@ -1,8 +1,8 @@
 # 验收报告：V 系列实施检查（2026-08-15）
 
-> 验收人：海鸥（只读分析，未改代码）
-> 验收基线：`main@145a677`（V1 已合入）
-> 测试状态：`go test -count=1 ./...` **全绿**（9 包，core/manager 8.9s 含新测试）
+> 验收人：海鸥（总控，子代理实施）
+> 验收基线：`main@afaa1fc`（V1 + V2 均已合入）
+> 测试状态：`go test -count=1 ./...` **全绿**（9 包）；`-race` 关键包全绿；`npm run build` 全绿
 
 ---
 
@@ -10,10 +10,8 @@
 
 | 阶段 | 交付 | 状态 |
 |---|---|---|
-| **V1** 停止扫描并发接逻辑 | ✅ 已合入 `11b1cfe`，实现通过 | ✅ 验收通过 |
-| **V2** 全局任务悬浮窗 | ❌ **未交付**——全仓无 `tasks`/`onTask`，`App.tsx` 仍是单 release 面板 | ⚠️ 未做 |
-
-**同事只交付了 V1，V2 没做**（可能理解为"先做 V1"或遗漏）。V1 质量好，V2 需补派。
+| **V1** 停止扫描并发接逻辑 | ✅ 已合入 `11b1cfe` | ✅ 验收通过 |
+| **V2** 全局任务悬浮窗 | ✅ 已合入 `b57cb7e`（本报告初次验收时未交付，随后已补派完成） | ✅ 验收通过 |
 
 ---
 
@@ -38,20 +36,30 @@
 
 ---
 
-## 三、V2 未交付（需补派）
+## 三、V2 验收明细（补派后通过 ✅）
 
-**需求**：`docs/REQ-GLOBAL-TASK-PANEL.md` 第二节——通用多任务悬浮栈
-（scan/stop-scan/restart/batch/release 跨页常驻）。
+**需求落点**：`docs/REQ-GLOBAL-TASK-PANEL.md` 第二节——通用多任务悬浮栈。
 
-**现状**：`src/App.tsx:130` 仍是单 release 面板（`release.active` 单任务）；
-无 `tasks` 数组、无 `onTask`、NodesPage/PoolPage 未接入 scan/stop-scan/restart/batch。
+### 实现核实（`b57cb7e`，4 文件 +175/−36）
+| 要求 | 实现 | 状态 |
+|---|---|---|
+| 多任务栈 | `App.tsx` `tasks: TaskItem[]` + `upsertTask`/`removeTask`/`clearTask`；异 id 并存纵向堆叠，✕ 单独关闭不影响其他任务与后台执行 | ✅ |
+| 类型→颜色/文案 | `TASK_COLORS`（release/stop-scan/restart=red/amber/amber、scan/batch=teal）+ `TASK_TEXT` 映射 | ✅ |
+| 跨页常驻 | tasks 在 App 顶层 + 面板在 App 渲染，切页常驻；返回页面后 poll 恢复更新 | ✅ |
+| 完成自动收起 | `useEffect` 对 `done>=total || total<=0` 1200ms 后移除；空 tasks 不渲染 | ✅ |
+| release 迁移 | `onRelease` 兼容包装映射到 id='release'，PoolPage 现有释放调用零改动；`doExitRelease` 改用 upsertTask | ✅ |
+| scan/stop-scan 上报 | `NodesPage.tsx`：扫描中上报 current/total；停止中上报 `stopping_count/stopped_count`（V1 契约），done 后 busy:false 收起；失败 error:true 红文案 | ✅ |
+| restart/batch 上报 | `PoolPage.tsx`：`doRestart` 0→1 两态（单次调用无中间回调）；批量测试逐条增量 done；fail>0 红文案 | ✅ |
+| 不打扰 | 容器 `pointer-events-none` + 卡片 `pointer-events-auto`；失败行红色 + 页面 toast | ✅ |
 
-**预计工作量**：App.tsx 多任务栈 + 三个页面接入 + 类型映射，约 1-2 天。
+**测试**：`npm run build`（tsc + vite）全绿；`go test` 全绿（后端未动）；逻辑走查多任务并存/✕ 单独关闭/0-0 不崩溃/跨页常驻。
+
+**验证（需真机）**：扫描 20 节点切统计页悬浮窗持续显示；停止扫描切页显示停止进度；一键重启池显示阶段进度；多任务并存堆叠互不干扰。
 
 ---
 
 ## 四、验收结论与建议
 
-1. **V1 验收通过**——可标记 ✅；`stop_scan_concurrency` 从死配置变为真配置，停止会变快。
-2. **V2 未交付**——补派给同事，或确认是否已排期。
-3. 建议话术：**"V1 验收通过，做得干净。V2 全局悬浮窗还没看到，是排期问题还是遗漏？"**
+1. **V1 验收通过**——`stop_scan_concurrency` 从死配置变为真配置（probeNode 取消支持 + 并发上限 kill），停止会变快。
+2. **V2 验收通过**——全局任务悬浮窗交付，五类长操作（scan/stop-scan/restart/batch/release）跨页常驻可关。
+3. 端到端（需部署机/用户）：挂起节点停止时探针快速被杀（不再干等 25s）；多任务并存悬浮栈真机目视。
