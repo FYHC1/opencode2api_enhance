@@ -157,13 +157,36 @@ func (m *Manager) startInstanceLockFree(runner Runner, inst *Instance) error {
 	return nil
 }
 
-// StopInstance 停止实例：先杀 opencode 再杀 sing-box（同步，锁内）。
+// StopInstance 停止实例（短锁三段式，对齐 StartInstance）：
+//   - 阶段1（锁内）：定位 + 校验状态 + 快照 pid + 置 Stopping 并落盘（前端可见正在停止）；
+//   - 阶段2（锁外）：kill opencode + kill sing-box（Kill 期间 m.mu 空闲，批量停止/巡检可并行）；
+//   - 阶段3（锁内）：重新定位写回 Stopped 并清 pid。
 func (m *Manager) StopInstance(runner Runner, name string) error {
 	if runner == nil {
 		runner = &realRunner{}
 	}
+	// 阶段1：锁内快照 + 置 Stopping
+	m.mu.Lock()
+	ocPID, sbPID, err := m.beginStopLocked(name)
+	m.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	// 阶段2：锁外 Kill（可长时间阻塞；此窗口不持 m.mu）
+	if ocPID > 0 {
+		_ = runner.Kill(ocPID)
+	}
+	if sbPID > 0 {
+		_ = runner.Kill(sbPID)
+	}
+	// 阶段3：锁内写回 Stopped
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.finishStopLocked(name)
+}
+
+// beginStopLocked 锁内：定位实例、拒绝 Starting/Stopping、快照 pid 并置 Stopping。
+func (m *Manager) beginStopLocked(name string) (int, int, error) {
 	list := m.load()
 	for i := range list {
 		if list[i].Name != name {
@@ -171,27 +194,52 @@ func (m *Manager) StopInstance(runner Runner, name string) error {
 		}
 		switch list[i].Status.State {
 		case "Starting", "Stopping":
-			return fmt.Errorf("实例 '%s' 正在忙", name)
+			return 0, 0, fmt.Errorf("实例 '%s' 正在忙", name)
 		}
-		ocPID, sbPID := pidVal(list[i].PID), pidVal(list[i].SingboxPID)
-		if ocPID > 0 {
-			_ = runner.Kill(ocPID)
-		}
-		if sbPID > 0 {
-			_ = runner.Kill(sbPID)
+		// 置 Stopping 并立即落盘：阶段2 锁外 Kill 期间前端/巡检可见中间态
+		list[i].Status = StatusStopping()
+		_ = m.save(list)
+		return pidVal(list[i].PID), pidVal(list[i].SingboxPID), nil
+	}
+	return 0, 0, errors.New("实例不存在")
+}
+
+// finishStopLocked 锁内写回 Stopped 并清 pid；阶段2 期间实例可能被删除，
+// 找不到即视为已完成（删除路径已接管记录）。
+func (m *Manager) finishStopLocked(name string) error {
+	list := m.load()
+	for i := range list {
+		if list[i].Name != name {
+			continue
 		}
 		list[i].PID, list[i].SingboxPID = nil, nil
 		list[i].Status = StatusStopped()
 		return m.save(list)
 	}
-	return errors.New("实例不存在")
+	return nil
 }
 
-// RemoveInstanceAlive 删除实例：best-effort 先停止再移除记录。
+// RemoveInstanceAlive 删除实例（短锁三段式）：锁内置 Stopping + 快照 pid → 锁外 Kill
+// → 锁内从列表删除并落盘。
 func (m *Manager) RemoveInstanceAlive(runner Runner, name string) error {
 	if runner == nil {
 		runner = &realRunner{}
 	}
+	// 阶段1：锁内快照 + 置 Stopping
+	m.mu.Lock()
+	ocPID, sbPID, err := m.beginStopLocked(name)
+	m.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	// 阶段2：锁外 Kill
+	if ocPID > 0 {
+		_ = runner.Kill(ocPID)
+	}
+	if sbPID > 0 {
+		_ = runner.Kill(sbPID)
+	}
+	// 阶段3：锁内从列表删除（阶段2 期间可能已被并发删除，找不到即目标已达成）
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	list := m.load()
@@ -199,17 +247,10 @@ func (m *Manager) RemoveInstanceAlive(runner Runner, name string) error {
 		if list[i].Name != name {
 			continue
 		}
-		ocPID, sbPID := pidVal(list[i].PID), pidVal(list[i].SingboxPID)
-		if ocPID > 0 {
-			_ = runner.Kill(ocPID)
-		}
-		if sbPID > 0 {
-			_ = runner.Kill(sbPID)
-		}
 		list = append(list[:i], list[i+1:]...)
 		return m.save(list)
 	}
-	return errors.New("实例不存在")
+	return nil
 }
 
 // ReconcileStates 校正状态：Running/Starting 但 pid 已不存在 → Stopped。

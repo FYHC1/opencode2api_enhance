@@ -89,6 +89,10 @@ type Manager struct {
 	// poolProbeMu 串行化链路探活轮（后台循环与手动触发互斥执行），防止并发
 	// load+save pool_quality.json；配合 savePoolQuality 临时文件+Rename 原子落盘。
 	poolProbeMu sync.Mutex
+
+	// subscriptionCacheMu 串行化订阅缓存读写（load→merge→save 全程持锁，防止后台
+	// 自动导入与手动导入并发基于旧快照互相覆盖）；落盘用临时文件+Rename 原子替换。
+	subscriptionCacheMu sync.Mutex
 }
 
 // New 创建管理器。

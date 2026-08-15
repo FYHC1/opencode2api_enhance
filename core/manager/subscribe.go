@@ -1012,17 +1012,61 @@ func (m *Manager) subscriptionCachePath() string {
 	return filepath.Join(m.paths.DataDir, "subscription.json")
 }
 
-// saveSubscriptionCache 持久化订阅节点缓存。
+// 订阅缓存读写全程持 subscriptionCacheMu：load→merge→save 必须成对在同一临界区内
+// 完成（load 旧快照 → 另一路径写入 → 我方基于旧快照覆盖会让一组节点从缓存消失）。
+// 落盘走临时文件+Rename 原子替换（G9 模式），读方任一时刻看到完整旧文件或完整新文件。
+
+// saveSubscriptionCache 持久化订阅节点缓存（覆盖写）。
 func (m *Manager) saveSubscriptionCache(nodes []SubscribeNode) error {
+	m.subscriptionCacheMu.Lock()
+	defer m.subscriptionCacheMu.Unlock()
+	return m.saveSubscriptionCacheLocked(nodes)
+}
+
+// saveSubscriptionCacheLocked 持久化订阅节点缓存（锁内调用）。
+func (m *Manager) saveSubscriptionCacheLocked(nodes []SubscribeNode) error {
 	data, err := json.MarshalIndent(nodes, "", "  ")
 	if err != nil {
 		return fmt.Errorf("序列化订阅缓存失败: %v", err)
 	}
-	return writeFileMkdir(m.subscriptionCachePath(), data)
+	return m.writeSubscriptionCache(data)
+}
+
+// writeSubscriptionCache 临时文件+Rename 原子落盘订阅缓存。
+func (m *Manager) writeSubscriptionCache(data []byte) error {
+	path := m.subscriptionCachePath()
+	if dir := filepath.Dir(path); dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("创建订阅缓存目录失败: %v", err)
+		}
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), "subscription-*.tmp")
+	if err != nil {
+		return fmt.Errorf("创建订阅缓存临时文件失败: %v", err)
+	}
+	defer os.Remove(tmp.Name()) // 失败路径清理；成功后目标已不存在，无副作用
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("写入订阅缓存临时文件失败: %v", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("关闭订阅缓存临时文件失败: %v", err)
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return fmt.Errorf("原子替换订阅缓存失败: %v", err)
+	}
+	return nil
 }
 
 // loadSubscriptionCache 读取订阅缓存（不存在/损坏返回空）。
 func (m *Manager) loadSubscriptionCache() []SubscribeNode {
+	m.subscriptionCacheMu.Lock()
+	defer m.subscriptionCacheMu.Unlock()
+	return m.loadSubscriptionCacheLocked()
+}
+
+// loadSubscriptionCacheLocked 读取订阅缓存（锁内调用）。
+func (m *Manager) loadSubscriptionCacheLocked() []SubscribeNode {
 	data, err := os.ReadFile(m.subscriptionCachePath())
 	if err != nil {
 		return nil
@@ -1037,21 +1081,9 @@ func (m *Manager) loadSubscriptionCache() []SubscribeNode {
 // RemoveSubscriptionNode 从订阅缓存删除节点（按名称），返回删除数量。
 // 供节点池「删除节点」——仅订阅缓存中的节点可删（外部 Clash 节点只读）。
 func (m *Manager) RemoveSubscriptionNode(name string) (int, error) {
-	nodes := m.loadSubscriptionCache()
-	before := len(nodes)
-	filtered := nodes[:0]
-	for _, n := range nodes {
-		if n.Name != name {
-			filtered = append(filtered, n)
-		}
-	}
-	if len(filtered) == before {
-		return 0, nil
-	}
-	if err := m.saveSubscriptionCache(filtered); err != nil {
-		return 0, err
-	}
-	return before - len(filtered), nil
+	m.subscriptionCacheMu.Lock()
+	defer m.subscriptionCacheMu.Unlock()
+	return m.removeSubscriptionNodesLocked([]string{name})
 }
 
 // RemoveSubscriptionNodes 批量删除订阅缓存节点（一次加载+持久化），返回删除数量。
@@ -1060,11 +1092,18 @@ func (m *Manager) RemoveSubscriptionNodes(names []string) (int, error) {
 	if len(names) == 0 {
 		return 0, nil
 	}
+	m.subscriptionCacheMu.Lock()
+	defer m.subscriptionCacheMu.Unlock()
+	return m.removeSubscriptionNodesLocked(names)
+}
+
+// removeSubscriptionNodesLocked 锁内 load→filter→save 成对（防并发覆盖丢数据）。
+func (m *Manager) removeSubscriptionNodesLocked(names []string) (int, error) {
 	wanted := map[string]bool{}
 	for _, n := range names {
 		wanted[n] = true
 	}
-	nodes := m.loadSubscriptionCache()
+	nodes := m.loadSubscriptionCacheLocked()
 	before := len(nodes)
 	filtered := nodes[:0]
 	for _, n := range nodes {
@@ -1075,7 +1114,7 @@ func (m *Manager) RemoveSubscriptionNodes(names []string) (int, error) {
 	if len(filtered) == before {
 		return 0, nil
 	}
-	if err := m.saveSubscriptionCache(filtered); err != nil {
+	if err := m.saveSubscriptionCacheLocked(filtered); err != nil {
 		return 0, err
 	}
 	return before - len(filtered), nil
@@ -1151,23 +1190,25 @@ func (m *Manager) applyGroup(nodes []SubscribeNode, url string, meta Subscriptio
 }
 
 // saveSubscriptionCacheGrouped 按分组合并订阅缓存：同分组节点替换、其他分组保留
-// （多次导入不同订阅合并不顶替）。
+// （多次导入不同订阅合并不顶替）。load→merge→save 全程持锁，与后台/手动导入并发安全。
 func (m *Manager) saveSubscriptionCacheGrouped(nodes []SubscribeNode) error {
+	m.subscriptionCacheMu.Lock()
+	defer m.subscriptionCacheMu.Unlock()
 	group := ""
 	if len(nodes) > 0 {
 		group = nodes[0].Group
 	}
 	if group == "" {
-		return m.saveSubscriptionCache(nodes)
+		return m.saveSubscriptionCacheLocked(nodes)
 	}
-	old := m.loadSubscriptionCache()
+	old := m.loadSubscriptionCacheLocked()
 	var keep []SubscribeNode
 	for _, n := range old {
 		if n.Group != group {
 			keep = append(keep, n)
 		}
 	}
-	return m.saveSubscriptionCache(append(keep, nodes...))
+	return m.saveSubscriptionCacheLocked(append(keep, nodes...))
 }
 
 // importSubscription 批量导入订阅节点为实例（含持久化订阅缓存）。
@@ -1248,7 +1289,14 @@ func (m *Manager) importSubscription(url string, joinGateway bool) (int, error) 
 		}
 		existingNames[name] = true
 		usedPorts[port] = true
-		usedPorts[port+10000] = true
+		// H6：sing-box 端口须按真实偏移记入 usedPorts——旧值 +10000 与本批后续节点
+		// 选端（port+singboxPortOffset）不一致，同批导入时「后节点 API 端口 == 先节点
+		// sing-box 端口」会静默通过，两实例同时启动必有一方 bind 失败。
+		// 记账口径与 1221 行选端检查（usedPorts[port+singboxPortOffset]）及
+		// BatchAdd 的 isPortUsedByInstance 对齐：本批内 API 端与 sing-box 端双向互查，
+		// 无其它漏查点（候选 port 查 usedPorts[port] 覆盖撞先节点 sing-box，候选
+		// port+offset 查 usedPorts[port+offset] 覆盖撞先节点 API）。
+		usedPorts[port+singboxPortOffset] = true
 		imported++
 	}
 	return imported, nil
