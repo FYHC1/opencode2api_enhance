@@ -229,16 +229,20 @@ export default function LogsPage({
   // 前端分页：最新在前，第 1 页 = 最新一页
   const [page, setPage] = useState(1)
 
-  // 拉取量跟随 call_log_max（设置页可调）：只减不增，上限保持 5000，读配置失败回退 5000
+  // 拉取量跟随 call_log_max（设置页可调）：上限保持 5000；call_log_max<=0 或读配置失败回退默认 5000
   const fetchLimitRef = useRef(5000)
   useEffect(() => {
     api
       .configGet()
       .then((c) => {
-        if (c.call_log_max > 0) fetchLimitRef.current = Math.min(c.call_log_max, 5000)
+        fetchLimitRef.current = c.call_log_max > 0 ? Math.min(c.call_log_max, 5000) : 5000
       })
       .catch(() => {})
   }, [])
+
+  // G31: toast 用 ref 封装（App 的 showToast 每次渲染重建）——load 依赖不含 toast，轮询定时器不因 toast 重启
+  const toastRef = useRef(toast)
+  toastRef.current = toast
 
   const load = useCallback(
     async (silent = true) => {
@@ -248,11 +252,11 @@ export default function LogsPage({
         setLogs([...(Array.isArray(recs) ? recs : [])].reverse())
         setError(null)
       } catch (e) {
-        if (!silent) toast(String(e), false)
+        if (!silent) toastRef.current(String(e), false)
         else setError(String(e))
       }
     },
-    [toast],
+    [],
   )
 
   // 自动轮询（静默，5s）
@@ -286,6 +290,11 @@ export default function LogsPage({
     }
     return [...s].sort().reverse()
   }, [logs])
+
+  // G27: 轮询替换日志后 dates 可能收窄——过期的按天筛选自动复位（防止列表被看不见的日期过滤为空）
+  useEffect(() => {
+    if (dateFilter && !dates.includes(dateFilter)) setDateFilter('')
+  }, [dates, dateFilter])
 
   const visible = useMemo(() => {
     return logs.filter((l) => {

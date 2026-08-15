@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
 import { Copy, Loader2, Power, RefreshCw, ShieldCheck, Network, Search, Play, Square, TestTube2, Trash2, KeyRound, Pencil, Check, X, Activity, Settings2, ChevronDown } from 'lucide-react'
 import { api, type GatewayStatus, type Instance, type TestResult, type PoolQualitySummary, type PoolQualityRecord, type PoolQualityLevel } from '../lib/api'
@@ -89,10 +89,14 @@ export default function PoolPage({
   const [uiForm, setUiForm] = useState({ ui_poll_interval_sec: 5 })
   // 一键释放全部池成员忙态
   const [releaseAllBusy, setReleaseAllBusy] = useState(false)
+  // G25: 释放收尾 timer 句柄 + 代次——快速连续释放时旧 timer 不误关新任务
+  const releaseFinishTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const releaseGen = useRef(0)
 
   // 池成员 = 已入池（join_gateway=true）的实例；支持前端搜索（名称/节点/IP/端口）+ 状态筛选
-  const members = instances
-    .filter((i) => i.join_gateway)
+  // G30: poolMembers = 未过滤的真成员全集，members = 筛选后可见集——空态区分「真为空」与「筛选无匹配」
+  const poolMembers = instances.filter((i) => i.join_gateway)
+  const members = poolMembers
     .filter((i) => {
       const q = search.trim().toLowerCase()
       return (
@@ -399,6 +403,9 @@ export default function PoolPage({
       return
     }
     const names = targets.map((i) => i.name)
+    // G25: 新一轮释放开始——作废旧收尾 timer，代次 +1（收尾回调比对代次，不误关新任务）
+    if (releaseFinishTimer.current) clearTimeout(releaseFinishTimer.current)
+    const releaseGenThis = ++releaseGen.current
     setReleaseAllBusy(true)
     onRelease({ active: true, done: 0, total: names.length })
     try {
@@ -427,8 +434,10 @@ export default function PoolPage({
       toast(String(e), false)
     } finally {
       setReleaseAllBusy(false)
-      // 面板短暂显示"已完成"后自动消失
-      setTimeout(() => onRelease({ active: false, done: 0, total: 0 }), 1200)
+      // G25: 面板短暂显示"已完成"后自动消失——仅当没有新一轮释放（同代次）时收尾
+      releaseFinishTimer.current = setTimeout(() => {
+        if (releaseGenThis === releaseGen.current) onRelease({ active: false, done: 0, total: 0 })
+      }, 1200)
     }
   }
 
@@ -921,6 +930,11 @@ export default function PoolPage({
               })}
             </tbody>
           </table>
+        ) : poolMembers.length > 0 ? (
+          <div className="flex flex-col items-center justify-center py-16 text-zinc-400">
+<p className="text-[13px] mb-1">没有匹配当前搜索或筛选的池成员</p>
+<p className="text-[12px]">试试调整搜索或筛选条件</p>
+          </div>
         ) : (
           <div className="flex flex-col items-center justify-center py-16 text-zinc-400">
 <p className="text-[13px] mb-1">暂无池成员</p>
