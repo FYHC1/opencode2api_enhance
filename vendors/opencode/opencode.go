@@ -99,7 +99,13 @@ func New(cfg Config) *Vendor {
 	if cfg.Name == "" {
 		cfg.Name = "OpenCode"
 	}
-	return &Vendor{cfg: cfg}
+	tr := cfg.Transport
+	if tr == nil {
+		tr = contract.DirectTransport{}
+	}
+	// 传输在 New 阶段固化，transport() 仅只读返回——去掉懒初始化对 v.tr 的无锁写
+	// （G4：并发首访时数据竞争）。
+	return &Vendor{cfg: cfg, tr: tr}
 }
 
 // ---------------------------------------------------------------------------
@@ -112,17 +118,8 @@ func (v *Vendor) ID() string { return v.cfg.ID }
 // Name 实现 contract.Vendor。
 func (v *Vendor) Name() string { return v.cfg.Name }
 
-// transport 返回注入的传输层，未注入时退化为直连。
-func (v *Vendor) transport() contract.Transport {
-	if v.tr == nil {
-		if v.cfg.Transport != nil {
-			v.tr = v.cfg.Transport
-		} else {
-			v.tr = contract.DirectTransport{}
-		}
-	}
-	return v.tr
-}
+// transport 返回注入的传输层，未注入时已由 New 固化直连（只读，无懒初始化）。
+func (v *Vendor) transport() contract.Transport { return v.tr }
 
 // sessionID 保证会话已初始化并返回当前 session id。
 func (v *Vendor) sessionID() string {
