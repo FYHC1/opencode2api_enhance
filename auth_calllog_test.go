@@ -77,10 +77,12 @@ func TestAPIKey401RecordsCallLog(t *testing.T) {
 func TestAPIKey401CallLogDisabled(t *testing.T) {
 	dir := t.TempDir()
 	oldPath, oldEnabled, oldLog := callLogPath, callLogEnabled, callLog
+	oldLog.Stop() // 停掉上一测试残留的后台写者
 	callLogPath = filepath.Join(dir, "call_log.jsonl")
 	callLogEnabled = false
 	initCallLog()
 	t.Cleanup(func() {
+		callLog.Stop()
 		callLogPath = oldPath
 		callLogEnabled = oldEnabled
 		callLog = oldLog

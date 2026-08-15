@@ -13,7 +13,9 @@ func TestRecordCallEndToEnd(t *testing.T) {
 	oldPath := callLogPath
 	oldEnabled := callLogEnabled
 	oldLog := callLog
+	oldLog.Stop() // 停掉上一测试残留的后台写者
 	defer func() {
+		callLog.Stop()
 		callLogPath = oldPath
 		callLogEnabled = oldEnabled
 		callLog = oldLog
@@ -53,6 +55,7 @@ func TestRecordCallEndToEnd(t *testing.T) {
 		},
 	})
 
+	callLog.Flush() // 异步写者：断言文件前同步排空待写缓冲
 	data, err := os.ReadFile(callLogPath)
 	if err != nil {
 		t.Fatal(err)

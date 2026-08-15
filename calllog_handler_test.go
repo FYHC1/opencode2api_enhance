@@ -17,10 +17,12 @@ func setupCallLogDir(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	oldPath, oldEnabled, oldLog := callLogPath, callLogEnabled, callLog
+	oldLog.Stop() // 停掉上一测试残留的后台写者，避免 ticker/goroutine 泄漏
 	callLogPath = filepath.Join(dir, "call_log.jsonl")
 	callLogEnabled = true
 	initCallLog()
 	t.Cleanup(func() {
+		callLog.Stop()
 		callLogPath = oldPath
 		callLogEnabled = oldEnabled
 		callLog = oldLog
@@ -31,6 +33,7 @@ func setupCallLogDir(t *testing.T) string {
 // readRecords 解析落盘的 call_log.jsonl（每行一条 CallRecord）。
 func readRecords(t *testing.T, path string) []CallRecord {
 	t.Helper()
+	callLog.Flush() // 异步单写者：读文件前先同步排空待写缓冲
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read call_log.jsonl: %v", err)
