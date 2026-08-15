@@ -15,10 +15,10 @@ import (
 
 // resetS3Health 复位坏池/熔断/质量全局状态（socks_test 内部用，避免测试间污染）。
 func resetS3Health() {
-	poolPerfMode = true
-	badPoolResetSec = 300
-	poolBreakerThreshold = 3
-	poolHalfOpenIntervalSec = 60
+	poolPerfMode.Store(true)
+	badPoolResetSec.Store(300)
+	poolBreakerThreshold.Store(3)
+	poolHalfOpenIntervalSec.Store(60)
 	poolQualityPath = ""
 	poolQualityCache = nil
 	poolQualityStamp = time.Time{}
@@ -217,11 +217,11 @@ func TestAccountClassNeverAutoProbed(t *testing.T) {
 		t.Fatal("account-class bad pool must never be auto-released (weighted)")
 	}
 	// 基线路径。
-	poolPerfMode = false
+	poolPerfMode.Store(false)
 	if p := pickHealthyProxy(proxies, 0); p.Addr == bad.Addr {
 		t.Fatal("account-class bad pool must never be auto-released (baseline)")
 	}
-	poolPerfMode = true
+	poolPerfMode.Store(true)
 	// 竞速路径：候选不足也不放行账号类。
 	socks5Mu.Lock()
 	socks5Proxies = []Socks5Proxy{bad, other}
@@ -272,7 +272,7 @@ func TestPickWeightedProxyHalfOpenBeatsBadPoolProbe(t *testing.T) {
 // 基线模式（poolPerfMode=false）：链路类坏池到期同样放行探测，成功清状态。
 func TestBaselineBadPoolProbeRelease(t *testing.T) {
 	resetS3Health()
-	poolPerfMode = false
+	poolPerfMode.Store(false)
 	bad := mkProxy(28407)
 	other := mkProxy(28408)
 	proxies := []Socks5Proxy{bad, other}

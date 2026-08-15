@@ -50,7 +50,7 @@ func claudeMessagesHandler(w http.ResponseWriter, r *http.Request) {
 		Path:      r.URL.Path,
 		Model:     claudeReq.Model,
 		Stream:    claudeReq.Stream,
-		RouteMode: routeMode,
+		RouteMode: routeMode.Load().(string),
 		Status:    "ok",
 	}
 	if callRec.ReqID == "" {

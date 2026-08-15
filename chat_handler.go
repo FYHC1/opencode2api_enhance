@@ -50,7 +50,7 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 		Path:      r.URL.Path,
 		Model:     req.Model,
 		Stream:    req.Stream,
-		RouteMode: routeMode,
+		RouteMode: routeMode.Load().(string),
 		Status:    "ok",
 	}
 	if callRec.ReqID == "" {
