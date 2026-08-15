@@ -423,6 +423,20 @@ func buildResponseToolCallItem(tc ToolCall, outputType string) map[string]any {
 	}
 }
 
+// L5（CONC-10）：storedResponses 有界化——常数上限 + TTL + 插入序淘汰。
+const (
+	maxStoredResponses = 2000              // 最大缓存条数（超限淘汰最旧）
+	storedResponseTTL  = time.Hour         // 条目有效期（超期惰性清理）
+	storedPurgeInterval = time.Minute      // 批量清理检查节流（避免每次写都全表扫）
+)
+
+// storedResponseEntry 缓存条目：状态 + 插入序（淘汰最旧用）+ 过期时间。
+type storedResponseEntry struct {
+	state     StoredResponseState
+	seq       uint64
+	expiresAt time.Time
+}
+
 func storeResponseState(response map[string]any, req ResponsesAPIRequest) {
 	if req.Store != nil && !*req.Store {
 		return
@@ -433,24 +447,72 @@ func storeResponseState(response map[string]any, req ResponsesAPIRequest) {
 	}
 	output, _ := response["output"].([]any)
 	storedResponsesMu.Lock()
-	storedResponses[responseID] = StoredResponseState{
-		Model:        req.Model,
-		Instructions: req.Instructions,
-		Tools:        protocol.CloneJSONValue(req.Tools),
-		ToolChoice:   protocol.CloneJSONValue(req.ToolChoice),
-		Output:       protocol.CloneJSONValue(output),
+	defer storedResponsesMu.Unlock()
+	now := time.Now()
+	// L5：写入前惰性清理过期条目（节流），控制内存有界。
+	storedPurgeIfDueLocked(now)
+	storedSeq++
+	storedResponses[responseID] = storedResponseEntry{
+		state: StoredResponseState{
+			Model:        req.Model,
+			Instructions: req.Instructions,
+			Tools:        protocol.CloneJSONValue(req.Tools),
+			ToolChoice:   protocol.CloneJSONValue(req.ToolChoice),
+			Output:       protocol.CloneJSONValue(output),
+		},
+		seq:       storedSeq,
+		expiresAt: now.Add(storedResponseTTL),
 	}
-	storedResponsesMu.Unlock()
+	// L5：超限淘汰插入序最旧的条目。
+	if len(storedResponses) > maxStoredResponses {
+		storedEvictOldestLocked()
+	}
+}
+
+// storedPurgeIfDueLocked 惰性清理过期条目（节流；调用方持写锁）。
+func storedPurgeIfDueLocked(now time.Time) {
+	if now.Sub(storedLastPurge) < storedPurgeInterval {
+		return
+	}
+	storedLastPurge = now
+	for id, e := range storedResponses {
+		if now.After(e.expiresAt) {
+			delete(storedResponses, id)
+		}
+	}
+}
+
+// storedEvictOldestLocked 淘汰插入序最旧的条目（调用方持写锁）。
+func storedEvictOldestLocked() {
+	var oldestID string
+	var oldestSeq uint64
+	for id, e := range storedResponses {
+		if oldestID == "" || e.seq < oldestSeq {
+			oldestID = id
+			oldestSeq = e.seq
+		}
+	}
+	if oldestID != "" {
+		delete(storedResponses, oldestID)
+	}
 }
 
 func loadResponseState(responseID string) (StoredResponseState, bool) {
-	storedResponsesMu.RLock()
-	defer storedResponsesMu.RUnlock()
-	state, ok := storedResponses[responseID]
+	storedResponsesMu.Lock()
+	defer storedResponsesMu.Unlock()
+	now := time.Now()
+	// L5：读取路径惰性清理过期条目（节流）。
+	storedPurgeIfDueLocked(now)
+	entry, ok := storedResponses[responseID]
 	if !ok {
 		return StoredResponseState{}, false
 	}
-	return protocol.CloneJSONValue(state), true
+	if now.After(entry.expiresAt) {
+		// 单条确定性过期：命中但超期 → 删除并返回 miss。
+		delete(storedResponses, responseID)
+		return StoredResponseState{}, false
+	}
+	return protocol.CloneJSONValue(entry.state), true
 }
 
 func extractTextFromContentParts(content any) string {
@@ -781,6 +843,19 @@ func responsesHandler(w http.ResponseWriter, r *http.Request) {
 	upstreamBody := buildUpstreamBody(&chatReq)
 
 	if respReq.Stream {
+		// L6：进程级流并发上限——超限直接 503（defer 覆盖所有返回路径释放名额）。
+		if !tryAcquireStream() {
+			callRec.Status = "fail"
+			callRec.ErrMsg = "并发流已达上限"
+			callRec.DurationMS = time.Since(startTime).Milliseconds()
+			callRec.Events = append(callRec.Events, CallEvent{Type: "capacity", Node: "", Detail: callRec.ErrMsg, At: time.Now()})
+			recordCall(callRec)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"message": "并发流已达上限，请稍后重试", "type": "stream_capacity_exceeded"}})
+			return
+		}
+		defer releaseStream()
 		upResp, status, _, proxyAddr, err := callOpenCodeAPIStream(r.Context(), upstreamBody, chatReq.Model, auth)
 		callRec.Nodes = append(callRec.Nodes, proxyAddr)
 		if err != nil || status < 200 || status >= 300 {

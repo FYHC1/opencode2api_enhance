@@ -15,10 +15,15 @@ func (c *ScanController) run(opts ScanOptions, nodes []ClashNode) {
 	defer func() {
 		c.mu.Lock()
 		c.progress.FinishedMS = time.Now().UnixMilli()
-		if c.progress.Status == ScanStopping {
+		// L8：收尾只对"进行中/停止中"的扫描置 Done—— allocatePorts 等失败路径
+		// 已置 ScanError 时原样保留，defer 不得把错误态覆盖成 done。
+		switch c.progress.Status {
+		case ScanError:
+			// 错误态保留（body 已写 Error 文案）
+		case ScanStopping:
 			c.progress.Status = ScanDone
 			c.progress.Error = "扫描已中止（已完成部分结果保留）"
-		} else {
+		default:
 			c.progress.Status = ScanDone
 		}
 		c.mu.Unlock()

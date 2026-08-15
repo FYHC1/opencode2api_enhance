@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,6 +20,8 @@ func resetPoolPerfState() {
 	poolQualityCache = nil
 	poolQualityStamp = time.Time{}
 	poolQualityLoaded = time.Time{}
+	poolQualityRefreshInterval.Store(int64(5 * time.Second)) // L2：默认 5s
+	poolQualityReads.Store(0)                                // L2：读盘计数清零
 	poolFeedback = map[string][]poolFbSample{}
 	poolBreakers = map[string]*poolBreaker{}
 	poolRacePressureLow.Store(0.5)
@@ -33,7 +36,8 @@ func resetPoolPerfState() {
 	socks5HealthMu.Unlock()
 }
 
-// writePoolQualityFile 写一份质量文件（P1 持久化格式）。
+// writePoolQualityFile 写一份质量文件（P1 持久化格式）并立即加载进缓存
+// （L2：请求路径零读盘——写完由 helper 显式加载，测试才观察到新内容）。
 func writePoolQualityFile(t *testing.T, entries map[string]struct {
 	Port  uint16
 	Score int
@@ -54,6 +58,8 @@ func writePoolQualityFile(t *testing.T, entries map[string]struct {
 	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	poolQualityPath = path
+	loadPoolQualityCache()
 	return path
 }
 
@@ -850,4 +856,132 @@ func TestApplyConfigPressureClamp(t *testing.T) {
 	if got := poolRacePressureLow.Load().(float64); got != 0.2 {
 		t.Fatalf("low-alone-inverted=%v, want 0.2（保持）", got)
 	}
+}
+
+// ---- CONC-10 L1：并发下候选快照一致（-race 覆盖锁收窄） ----
+
+// TestRaceCandidatesConcurrentSnapshots 并发 raceCandidates：候选集 ≤ n、无重复，
+// 并在候选窗口内并发增删 in-flight（模拟竞速配对）——排序前快照 + 锁收窄后无竞态。
+func TestRaceCandidatesConcurrentSnapshots(t *testing.T) {
+	resetPoolPerfState()
+	socks5Mu.Lock()
+	socks5Proxies = []Socks5Proxy{mkProxy(28101), mkProxy(28102), mkProxy(28103), mkProxy(28104)}
+	socks5Mu.Unlock()
+	poolQualityPath = writePoolQualityFile(t, map[string]struct {
+		Port  uint16
+		Score int
+		Level string
+	}{
+		"a": {28101, 95, "healthy"},
+		"b": {28102, 85, "healthy"},
+		"c": {28103, 75, "healthy"},
+		"d": {28104, 65, "healthy"},
+	})
+
+	var mu sync.Mutex
+	var violations int
+	var wg sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				got := raceCandidates(3)
+				if len(got) > 3 {
+					t.Errorf("raceCandidates returned %d candidates, want ≤ 3", len(got))
+				}
+				seen := map[string]bool{}
+				for _, p := range got {
+					if seen[p.Addr] {
+						mu.Lock()
+						violations++
+						mu.Unlock()
+					}
+					seen[p.Addr] = true
+					// 模拟竞速 in-flight 配对增减（raceDo 语义），覆盖快照读取路径竞态。
+					proxyInflightAdd(p.Addr, 1)
+					proxyInflightAdd(p.Addr, -1)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	if violations != 0 {
+		t.Fatalf("duplicate candidates observed %d times", violations)
+	}
+}
+
+// ---- CONC-10 L2：质量缓存刷新上移为后台 ticker（请求路径零读盘） ----
+
+func pollUntil(t *testing.T, timeout time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !cond() {
+		t.Fatalf("condition not met within %v", timeout)
+	}
+}
+
+// TestPoolQualityRequestPathReadsBounded 请求路径不再触发读盘：把节流时间戳拨旧后
+// 突发大量调用，读盘计数保持为显式加载的基线（零额外读盘）。
+func TestPoolQualityRequestPathReadsBounded(t *testing.T) {
+	resetPoolPerfState()
+	poolQualityReads.Store(0)
+	socks5Mu.Lock()
+	socks5Proxies = []Socks5Proxy{mkProxy(28101), mkProxy(28102), mkProxy(28103)}
+	socks5Mu.Unlock()
+	poolQualityPath = writePoolQualityFile(t, map[string]struct {
+		Port  uint16
+		Score int
+		Level string
+	}{
+		"a": {28101, 90, "healthy"},
+		"b": {28102, 80, "healthy"},
+		"c": {28103, 70, "healthy"},
+	})
+	base := poolQualityReads.Load() // 写文件时的显式加载次数
+	for i := 0; i < 100; i++ {
+		// 拨旧节流时间戳：L2 前旧实现每次调用都会重新读盘（回归判定）。
+		poolQualityMu.Lock()
+		poolQualityLoaded = time.Time{}
+		poolQualityMu.Unlock()
+		raceHealthyNodeCount()
+		pickWeightedProxy(socks5Proxies, 0)
+		raceCandidates(3)
+	}
+	if got := poolQualityReads.Load(); got != base {
+		t.Fatalf("request path did %d disk reads (base %d), want 0 extra", got-base, base)
+	}
+}
+
+// TestPoolQualityBackgroundRefresher 后台 ticker 周期性刷新：改写质量文件后，
+// 缓存在小 ticker 周期内更新——保持 mtime 变化及时生效。
+func TestPoolQualityBackgroundRefresher(t *testing.T) {
+	resetPoolPerfState()
+	poolQualityRefreshInterval.Store(int64(20 * time.Millisecond))
+	path := filepath.Join(t.TempDir(), "pool_quality.json")
+	writeQuality := func(score int) {
+		data := `[{"singbox_port":28101,"score":` + strconv.Itoa(score) + `,"level":"healthy"}]`
+		if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeQuality(90)
+	poolQualityPath = path
+	loadPoolQualityCache() // 初始加载
+	if e, ok := poolQualityOf("127.0.0.1:28101"); !ok || e.Score != 90 {
+		t.Fatalf("initial cache=%+v ok=%v, want score 90", e, ok)
+	}
+	startPoolQualityRefresher()
+	defer stopPoolQualityRefresher()
+	writeQuality(40) // 改写文件（同路径，mtime 变化）
+	pollUntil(t, 2*time.Second, func() bool {
+		e, ok := poolQualityOf("127.0.0.1:28101")
+		return ok && e.Score == 40
+	})
 }

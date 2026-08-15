@@ -54,6 +54,8 @@ func init() {
 	raceBudgetMS.Store(10000)
 	poolRacePressureLow.Store(0.5)
 	poolRacePressureHigh.Store(1.0)
+	// L2：质量文件后台刷新周期默认 5s（刷新已上移为后台 ticker，请求路径零读盘）。
+	poolQualityRefreshInterval.Store(int64(5 * time.Second))
 }
 
 // ---- 质量文件缓存（读 runtime/pool_quality.json，节流刷新） ----
@@ -68,24 +70,80 @@ var (
 	poolQualityCache  map[string]poolQualityEntry
 	poolQualityStamp  time.Time // 上次读取时的文件 mtime（仅记录，G19 起不参与节流判定）
 	poolQualityLoaded time.Time
+	// poolQualityRefreshInterval 后台刷新周期（atomic：测试可注入小周期验证刷新及时性）。
+	poolQualityRefreshInterval atomic.Int64
+	// poolQualityReads 实际读盘次数（L2 测试断言：请求路径不再触发读盘 / 读盘有界）。
+	poolQualityReads atomic.Int64
 )
 
-// loadPoolQualityCache 读取质量文件；距上次加载 <5s 时跳过（节流与 mtime 无关）。
+// 后台刷新器控制（惰性启动：生产在 flag.Parse 后 start；测试可 start/stop）。
+var (
+	poolQualityRefreshMu      sync.Mutex
+	poolQualityRefreshStarted bool
+	poolQualityRefreshStopCh  chan struct{}
+	poolQualityRefreshDoneCh  chan struct{}
+)
+
+// startPoolQualityRefresher 启动后台质量文件刷新器（幂等）。
+func startPoolQualityRefresher() {
+	poolQualityRefreshMu.Lock()
+	if poolQualityRefreshStarted {
+		poolQualityRefreshMu.Unlock()
+		return
+	}
+	poolQualityRefreshStarted = true
+	stopCh := make(chan struct{})
+	doneCh := make(chan struct{})
+	poolQualityRefreshStopCh = stopCh
+	poolQualityRefreshDoneCh = doneCh
+	poolQualityRefreshMu.Unlock()
+	go poolQualityRefresher(stopCh, doneCh)
+}
+
+// stopPoolQualityRefresher 停止后台刷新器并等待退出（测试收尾；未启动时为空操作）。
+func stopPoolQualityRefresher() {
+	poolQualityRefreshMu.Lock()
+	stopCh := poolQualityRefreshStopCh
+	doneCh := poolQualityRefreshDoneCh
+	poolQualityRefreshStarted = false
+	poolQualityRefreshStopCh = nil
+	poolQualityRefreshDoneCh = nil
+	poolQualityRefreshMu.Unlock()
+	if stopCh == nil {
+		return
+	}
+	close(stopCh)
+	<-doneCh
+}
+
+// poolQualityRefresher 后台循环：周期刷新质量文件（首轮立即加载一次），
+// 请求路径只读 poolQualityCache，不再触发 Stat/ReadFile。
+func poolQualityRefresher(stopCh, doneCh chan struct{}) {
+	defer close(doneCh)
+	for {
+		select {
+		case <-stopCh:
+			return
+		default:
+		}
+		if poolQualityPath != "" {
+			loadPoolQualityCache()
+		}
+		select {
+		case <-stopCh:
+			return
+		case <-time.After(time.Duration(poolQualityRefreshInterval.Load())):
+		}
+	}
+}
+
+// loadPoolQualityCache 读取质量文件写入缓存。调用方为后台 ticker 与测试显式加载；
+// L2：节流责任在 ticker 周期——请求路径不调用本函数，读盘频率由刷新周期决定。
 func loadPoolQualityCache() {
 	if poolQualityPath == "" {
 		return
 	}
-	// G7：节流字段在 poolQualityMu 下读判（写侧同锁保护），命中节流直接返回；
-	// 未命中才进入加载逻辑（ReadFile 不持锁，仅写回缓存时持写锁）。
-	// G19：节流仅按 5s 窗口——mtime 未变且距上次加载 >5s 时不再逐请求重复读盘
-	// （旧条件只在 5s 内挡「mtime 未变」，5s 后每个请求仍会重新 ReadFile）；
-	// mtime 倒退（时钟回拨）由 5s 过期兜底刷新，不再可能永不刷新。
-	poolQualityMu.RLock()
-	throttled := time.Since(poolQualityLoaded) < 5*time.Second
-	poolQualityMu.RUnlock()
-	if throttled {
-		return
-	}
+	poolQualityReads.Add(1) // 实际读盘观测（L2：计数器）
 	info, err := os.Stat(poolQualityPath)
 	if err != nil {
 		return
@@ -225,9 +283,9 @@ func proxyInflightOf(addr string) int {
 // known 且非 down/flaky/unknown 的节点数（与 raceCandidates 的候选口径一致）。
 // G20：分母为近似——冷却/坏池/熔断中的节点仍计入（raceCandidates 实际会排除），
 // 压力系数因此偏小（高压下竞速副本偏温和）；与候选口径完全对齐需逐一查健康表，
-// 此处延续 loadPoolQualityCache 快照的简单口径，属可接受近似，不进入候选计数核心。
+// 此处延续质量缓存的简单口径，属可接受近似，不进入候选计数核心。
+// L2：只读缓存（后台 ticker 负责刷新），不再触发读盘。
 func raceHealthyNodeCount() int {
-	loadPoolQualityCache()
 	poolQualityMu.RLock()
 	defer poolQualityMu.RUnlock()
 	n := 0
@@ -413,7 +471,6 @@ func pickWeightedProxy(proxies []Socks5Proxy, start int) Socks5Proxy {
 		return Socks5Proxy{}
 	}
 	now := time.Now()
-	loadPoolQualityCache()
 
 	type cand struct {
 		proxy Socks5Proxy
@@ -426,7 +483,10 @@ func pickWeightedProxy(proxies []Socks5Proxy, start int) Socks5Proxy {
 	var fallback Socks5Proxy
 	var fallbackUntil time.Time
 
+	// L1：socks5HealthMu 临界区只读健康表（坏池/冷却），快照到局部；
+	// 熔断态/质量分/反馈分各自持锁在临界区外读取，不再嵌套叠锁。
 	socks5HealthMu.Lock()
+	var raws []Socks5Proxy
 	for offset := 0; offset < len(proxies); offset++ {
 		proxy := proxies[(start+offset)%len(proxies)]
 		state := socks5Health[proxy.Addr]
@@ -445,6 +505,11 @@ func pickWeightedProxy(proxies []Socks5Proxy, start int) Socks5Proxy {
 			}
 			continue // 冷却中
 		}
+		raws = append(raws, proxy)
+	}
+	socks5HealthMu.Unlock()
+	// L1：锁外交互（各子锁自保护）——熔断非消费式读 + 质量分 + 反馈融合。
+	for _, proxy := range raws {
 		switch breakerPeek(proxy.Addr) {
 		case "open":
 			continue
@@ -483,7 +548,6 @@ func pickWeightedProxy(proxies []Socks5Proxy, start int) Socks5Proxy {
 			cands = append(cands, cand{proxy: proxy, score: score, tier: 2})
 		}
 	}
-	socks5HealthMu.Unlock()
 
 	// 半开探测优先（验证恢复）：熔断半开 → 链路类坏池到期探针（放行前消费配额，
 	// 被其它路径抢先消费则不放行）。
@@ -508,12 +572,13 @@ func pickWeightedProxy(proxies []Socks5Proxy, start int) Socks5Proxy {
 	return fallback
 }
 
-// raceCandidate 竞速候选（S5 扩展：scoreJitter 打破同分平局）。
+// raceCandidate 竞速候选（S5 扩展：scoreJitter 打破同分平局；L1 加 in-flight 快照）。
 type raceCandidate struct {
-	proxy      Socks5Proxy
-	score      int
-	tier       int
-	scoreJitter float64 // [0,3) 随机扰动，排序时与 score 相加
+	proxy       Socks5Proxy
+	score       int
+	tier        int
+	scoreJitter float64   // [0,3) 随机扰动，排序时与 score 相加
+	inflight    int       // L1：候选构建时的 in-flight 快照（比较器只读局部，零锁）
 }
 
 // raceCandidates 请求级竞速候选：返回至多 n 个可用代理
@@ -529,7 +594,7 @@ func raceCandidates(n int) []Socks5Proxy {
 		return nil
 	}
 	now := time.Now()
-	loadPoolQualityCache()
+	// L2：质量缓存由后台 ticker 刷新，请求路径只读缓存、不再触发读盘。
 
 	socks5Mu.RLock()
 	proxies := append([]Socks5Proxy(nil), socks5Proxies...)
@@ -545,7 +610,10 @@ func raceCandidates(n int) []Socks5Proxy {
 	var fallback Socks5Proxy
 	var fallbackUntil time.Time
 
+	// L1：第一遍持 socks5HealthMu 只读健康表（坏池/冷却）并快照到局部切片；
+	// 熔断态/质量分/反馈分/扰动/in-flight 在临界区外各自加锁求值，不再嵌套叠锁。
 	socks5HealthMu.Lock()
+	var raws []Socks5Proxy
 	for _, proxy := range proxies {
 		state := socks5Health[proxy.Addr]
 		if state.badReason != "" {
@@ -556,6 +624,20 @@ func raceCandidates(n int) []Socks5Proxy {
 			}
 			continue
 		}
+		if !state.until.IsZero() && now.Before(state.until) {
+			if fallback.Addr == "" || state.until.Before(fallbackUntil) {
+				fallback = proxy
+				fallbackUntil = state.until
+			}
+			continue // 冷却中
+		}
+		raws = append(raws, proxy)
+	}
+	socks5HealthMu.Unlock()
+
+	// L1：第二遍锁外求值——熔断非消费式读、质量分、反馈融合、
+	// 随机扰动与 in-flight 快照（各取一次全局锁，比较器只读局部）。
+	for _, proxy := range raws {
 		switch breakerPeek(proxy.Addr) {
 		case "open":
 			continue
@@ -563,13 +645,6 @@ func raceCandidates(n int) []Socks5Proxy {
 			// 不消费配额：先记录，候选不足时才放行（恢复探测不饿死、不偷探针）。
 			if halfOpenProbe.Addr == "" {
 				halfOpenProbe = proxy
-			}
-			continue
-		}
-		if !state.until.IsZero() && now.Before(state.until) {
-			if fallback.Addr == "" || state.until.Before(fallbackUntil) {
-				fallback = proxy
-				fallbackUntil = state.until
 			}
 			continue
 		}
@@ -589,16 +664,17 @@ func raceCandidates(n int) []Socks5Proxy {
 		if score > 100 {
 			score = 100
 		}
+		// L1：in-flight 快照在构建候选时各取一次（排序比较器只读局部，不再每次加锁）。
+		inflight := proxyInflightOf(proxy.Addr)
 		switch level {
 		case "down", "flaky":
 			continue
 		case "degraded":
-			cands = append(cands, raceCandidate{proxy: proxy, score: score, tier: 1, scoreJitter: raceScoreJitter()})
+			cands = append(cands, raceCandidate{proxy: proxy, score: score, tier: 1, scoreJitter: raceScoreJitter(), inflight: inflight})
 		default:
-			cands = append(cands, raceCandidate{proxy: proxy, score: score, tier: 2, scoreJitter: raceScoreJitter()})
+			cands = append(cands, raceCandidate{proxy: proxy, score: score, tier: 2, scoreJitter: raceScoreJitter(), inflight: inflight})
 		}
 	}
-	socks5HealthMu.Unlock()
 
 	if len(cands) == 0 {
 		// 候选不足：放行 1 个恢复探针（熔断半开 → 链路类坏池过期）兜底，避免恢复探测饿死。
@@ -615,11 +691,11 @@ func raceCandidates(n int) []Socks5Proxy {
 		raceShuffle(cands)
 	} else {
 		sort.SliceStable(cands, func(i, j int) bool {
-			// 1) in-flight 升序优先（治流量聚集）；
+			// 1) in-flight 升序优先（治流量聚集）；快照自候选构建时（比较器零锁）；
 			// 2) 同 in-flight 按质量分（含随机扰动）降序；
 			// 3) 同分按档位（healthy > degraded）降序。
-			if fi, fj := proxyInflightOf(cands[i].proxy.Addr), proxyInflightOf(cands[j].proxy.Addr); fi != fj {
-				return fi < fj
+			if cands[i].inflight != cands[j].inflight {
+				return cands[i].inflight < cands[j].inflight
 			}
 			if si, sj := float64(cands[i].score)+cands[i].scoreJitter, float64(cands[j].score)+cands[j].scoreJitter; si != sj {
 				return si > sj

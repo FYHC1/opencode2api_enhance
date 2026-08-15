@@ -44,8 +44,11 @@ func pickFreeModel(data []map[string]any) string {
 
 // freeCompletion 免费模型测试：GET /v1/models → 挑免费模型 → POST chat。
 // 返回 (status, body, modelCount, err)；modelCount 来自 /v1/models 条目数（未知 -1）。
+// L7：GET/POST 共享同一 deadline（进入时算 now+budget）——POST 只拿 GET 后的剩余
+// 预算，两请求总耗时 ≤ 总预算（原实现 GET budget/2 + POST 整 budget 可超支 50%）。
 func freeCompletion(port uint16, password string, budget time.Duration) (int, []byte, int, error) {
-	modelStatus, body, err := httpGetJSON(port, "/v1/models", budget/2, password)
+	deadline := time.Now().Add(budget)
+	modelStatus, body, err := httpGetJSON(port, "/v1/models", time.Until(deadline), password)
 	if err != nil || modelStatus < 200 || modelStatus >= 300 {
 		if modelStatus != 0 {
 			return modelStatus, body, -1, nil
@@ -74,7 +77,7 @@ func freeCompletion(port uint16, password string, budget time.Duration) (int, []
 		"max_tokens": 1,
 		"stream":     false,
 	})
-	status, chatResp, err := httpPostJSON(port, "/v1/chat/completions", budget, password, chatBody)
+	status, chatResp, err := httpPostJSON(port, "/v1/chat/completions", time.Until(deadline), password, chatBody)
 	return status, chatResp, modelCount, err
 }
 
