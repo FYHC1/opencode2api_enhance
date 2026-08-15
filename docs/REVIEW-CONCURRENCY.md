@@ -24,9 +24,9 @@
 | M6 | 自动订阅整轮串行 + 等待间隔取最短源 | 中 | CONC-7 | ✅ `8be36ef` |
 | M7 | 订阅缓存 load-modify-write 无锁并发覆盖 | 中 | CONC-4 | ✅ `cd29df7` |
 | M8 | 每请求重建模型目录（O(catalog) 热路径） | 中 | CONC-2 | ✅ `20e70ae` |
-| M9 | 前端轮询无 in-flight 守卫（4 页） | 中 | CONC-9 | ⬜ |
-| M10 | 任务悬浮面板驱动 App 整树重渲染 | 中 | CONC-9 | ⬜ |
-| M11 | NodesPage 扫描状态机异常分支不收敛 | 中 | CONC-9 | ⬜ |
+| M9 | 前端轮询无 in-flight 守卫（4 页） | 中 | CONC-9 | ✅ `9aff256` |
+| M10 | 任务悬浮面板驱动 App 整树重渲染 | 中 | CONC-9 | ✅ `9aff256` |
+| M11 | NodesPage 扫描状态机异常分支不收敛 | 中 | CONC-9 | ✅ `9aff256` |
 | L1 | 熔断/质量路由锁粒度（排序比较器内反复加锁） | 低 | CONC-10 | ⬜ |
 | L2 | 每次竞速请求多次 loadPoolQualityCache 读盘 | 低 | CONC-10 | ⬜ |
 | L3 | 429 退避 time.Sleep 不感知 ctx 取消 | 低 | CONC-1 | ✅ `d120ad6` |
@@ -36,8 +36,8 @@
 | L7 | probe 单节点预算超支（GET/POST 各自拿预算） | 低 | CONC-10 | ⬜ |
 | L8 | probe run() defer 吞掉 ScanError | 低 | CONC-10 | ⬜ |
 | L9 | 管理端统计串行 IO（AggregateStats/ResetStats） | 低 | CONC-8 | ✅ `4b95e17`（另修 ResetStats 6ns→6s 超时笔误） |
-| L10 | SettingsPage effect 依赖 [toast] 重发请求/覆盖表单 | 低 | CONC-9 | ⬜ |
-| 前端杂项 | toast timer 互相覆盖 / 收起 timer 无限重置 / dismissedRef 压制新一轮 / 退出无防重入 | 低 | CONC-9 | ⬜ |
+| L10 | SettingsPage effect 依赖 [toast] 重发请求/覆盖表单 | 低 | CONC-9 | ✅ `9aff256` |
+| 前端杂项 | toast timer 互相覆盖 / 收起 timer 无限重置 / dismissedRef 压制新一轮 / 退出无防重入 | 低 | CONC-9 | ✅ `9aff256` |
 
 ## 问题明细（含场景与修复建议）
 
