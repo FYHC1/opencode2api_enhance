@@ -90,3 +90,9 @@ input:focus, textarea:focus {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* P3: 订阅导入不确定进度条——细条往复滑过（无确定百分比，仅表示仍在处理） */
+@keyframes indeterminate-slide {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(320%); }
+}

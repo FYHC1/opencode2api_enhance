@@ -137,7 +137,7 @@ func TestSubscriptionsImportNowHTTP(t *testing.T) {
 	}
 }
 
-// T3: HTTP 契约——list 返回订阅源数组。
+// T3/P3: HTTP 契约——list 返回订阅源数组；add 保存并立即导入（假订阅源，响应带 imported/target）。
 func TestSubscriptionsListHandlerHTTP(t *testing.T) {
 	m := New(t.TempDir())
 	_ = m.AddSubscription("http://h.example.com/sub", 10, TargetSolo)
@@ -150,15 +150,112 @@ func TestSubscriptionsListHandlerHTTP(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), `"url":"http://h.example.com/sub"`) {
 		t.Fatalf("list body = %s", rec.Body.String())
 	}
-	// add 契约
+	// add 契约（P3：保存+立即导入节点池）
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(testSubNodeBody))
+	}))
+	defer srv.Close()
 	ah := m.SubscriptionsAddHandler()
 	rec2 := httptest.NewRecorder()
-	ah(rec2, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"url":"http://h2.example.com/s","interval_min":5,"target":"pool"}`)))
+	ah(rec2, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"url":"`+srv.URL+`","interval_min":5,"target":"pool"}`)))
 	if rec2.Code != 200 {
 		t.Fatalf("add code = %d, body=%s", rec2.Code, rec2.Body.String())
 	}
+	var resp struct {
+		Status   string `json:"status"`
+		Imported int    `json:"imported"`
+		Target   string `json:"target"`
+	}
+	if err := json.Unmarshal(rec2.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode add resp: %v", err)
+	}
+	if resp.Status != "ok" || resp.Imported != 1 || resp.Target != "节点池" {
+		t.Fatalf("add resp = %+v, want ok/1/节点池", resp)
+	}
 	if len(m.loadSubscriptions()) != 2 {
 		t.Fatalf("after add = %+v", m.loadSubscriptions())
+	}
+	// 立即导入后缓存出现该分组节点（无旧 target=pool 建实例）
+	if len(m.loadSubscriptionCache()) != 1 || len(m.ListInstances()) != 0 {
+		t.Fatalf("cache=%+v instances=%d", m.loadSubscriptionCache(), len(m.ListInstances()))
+	}
+}
+
+// P3: add 后立即导入成功——响应 imported>0、缓存有该分组节点、且不建实例。
+func TestSubscriptionsAddImportsNow(t *testing.T) {
+	m := New(t.TempDir())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("vless://uuid@x.example.com:443?security=tls#X\nvless://uuid@y.example.com:8443?security=tls#Y"))
+	}))
+	defer srv.Close()
+
+	ah := m.SubscriptionsAddHandler()
+	rec := httptest.NewRecorder()
+	// 不传 target：默认空值 → AddSubscription 兼容回落，导入仍只进节点池
+	ah(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"url":"`+srv.URL+`","interval_min":0}`)))
+	if rec.Code != 200 {
+		t.Fatalf("add code = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Status   string `json:"status"`
+		Imported int    `json:"imported"`
+		Target   string `json:"target"`
+		Error    string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode add resp: %v", err)
+	}
+	if resp.Status != "ok" || resp.Imported != 2 || resp.Target != "节点池" || resp.Error != "" {
+		t.Fatalf("add resp = %+v, want ok/2/节点池/无error", resp)
+	}
+	// 源已保存 + 分组名已持久化
+	srcs := m.loadSubscriptions()
+	if len(srcs) != 1 || srcs[0].Group == "" {
+		t.Fatalf("source not saved with group: %+v", srcs)
+	}
+	// 缓存有该分组节点、不建实例
+	cache := m.loadSubscriptionCache()
+	if len(cache) != 2 || cache[0].Group == "" {
+		t.Fatalf("cache after add = %+v", cache)
+	}
+	if len(m.ListInstances()) != 0 {
+		t.Fatalf("add import must not create instances, got %d", len(m.ListInstances()))
+	}
+}
+
+// P3: add 但拉取失败（假 URL）——源仍已保存，HTTP 200 + error + imported=0（前端提示稍后重试）。
+func TestSubscriptionsAddFetchFailKeepsSource(t *testing.T) {
+	m := New(t.TempDir())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	ah := m.SubscriptionsAddHandler()
+	rec := httptest.NewRecorder()
+	ah(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"url":"`+srv.URL+`","interval_min":0}`)))
+	// 拉取失败不得 400：源已保存
+	if rec.Code != 200 {
+		t.Fatalf("add code = %d, body=%s (拉取失败仍应 200)", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Status   string `json:"status"`
+		Imported int    `json:"imported"`
+		Error    string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode add resp: %v", err)
+	}
+	if resp.Status != "ok" || resp.Imported != 0 || resp.Error == "" {
+		t.Fatalf("add resp = %+v, want ok/0/非空error", resp)
+	}
+	// 源仍已保存、缓存无节点
+	srcs := m.loadSubscriptions()
+	if len(srcs) != 1 || srcs[0].URL != srv.URL {
+		t.Fatalf("source not saved on fetch fail: %+v", srcs)
+	}
+	if len(m.loadSubscriptionCache()) != 0 {
+		t.Fatalf("cache should stay empty: %+v", m.loadSubscriptionCache())
 	}
 }
 

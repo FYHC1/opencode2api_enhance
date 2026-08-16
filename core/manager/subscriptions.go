@@ -336,7 +336,10 @@ func (m *Manager) SubscriptionsListHandler() http.HandlerFunc {
 	}
 }
 
-// SubscriptionsAddHandler POST {url, interval_min, target} → 新增订阅源。
+// SubscriptionsAddHandler POST {url, interval_min, target} → 新增订阅源并立即导入一次。
+// P3：保存源成功后同步执行 ImportSubscriptionNow（2026-08-16 决策：一律只进节点池）；
+// 导入成功返回 imported/target=节点池；拉取失败（fetch/解析错误）仍返回 HTTP 200 +
+// status=ok + imported=0 + error——源已保存，前端据此提示稍后「拉取」重试，不 400 误报保存失败。
 func (m *Manager) SubscriptionsAddHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !requireMethodOK(w, r, http.MethodPost) {
@@ -355,7 +358,13 @@ func (m *Manager) SubscriptionsAddHandler() http.HandlerFunc {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		writeJSON(w, map[string]any{"status": "ok"})
+		imported, targetLabel, importErr := m.ImportSubscriptionNow(req.URL)
+		resp := map[string]any{"status": "ok", "imported": imported, "target": targetLabel}
+		if importErr != nil {
+			resp["imported"] = 0
+			resp["error"] = importErr.Error()
+		}
+		writeJSON(w, resp)
 	}
 }
 
