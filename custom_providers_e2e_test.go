@@ -396,3 +396,53 @@ func TestCustomProbeEndpointE2E(t *testing.T) {
 		t.Fatalf("probe unknown = %d, want 404", code)
 	}
 }
+
+func TestCustomProvidersClearE2E(t *testing.T) {
+	s := setupCustomE2E(t)
+	saveBody := `{"providers":[{"id":"src1","protocol":"openai","base_url":"` + s.upstream.URL + `","api_key":"k"}]}`
+	if code, _ := callHandlerJSON(t, customProvidersSaveHandler(s.mgr), http.MethodPost, saveBody); code != http.StatusOK {
+		t.Fatal("save failed")
+	}
+	// 目录缓存文件已生成。
+	cacheDir := filepath.Join(os.Getenv("OPCODE2API_DATA_DIR"), "custom_models")
+	if _, err := os.Stat(cacheDir); err != nil {
+		t.Fatalf("cache dir missing: %v", err)
+	}
+	// 清空全部：自定义源消失、内建保留、缓存目录删除。
+	code, resp := callHandlerJSON(t, customProvidersClearHandler(s.mgr), http.MethodPost, "")
+	if code != http.StatusOK || resp["cleared"] != true {
+		t.Fatalf("clear: code=%d resp=%v", code, resp)
+	}
+	plist, _ := resp["providers"].([]any)
+	if len(plist) != 0 {
+		t.Fatalf("custom providers must be gone: %v", plist)
+	}
+	cfg := loadConfig(configPath)
+	for _, pc := range cfg.Providers {
+		if pc.Type == "custom" {
+			t.Fatalf("custom entry survived: %+v", pc)
+		}
+	}
+	if !hasProviderCfg(cfg.Providers, "opencode") {
+		t.Fatal("builtin opencode must survive")
+	}
+	if _, err := os.Stat(cacheDir); !os.IsNotExist(err) {
+		t.Fatalf("cache dir must be purged, err=%v", err)
+	}
+	// /v1/models 不再含该源模型。
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	rec := httptest.NewRecorder()
+	listModelsHandler(rec, req)
+	if strings.Contains(rec.Body.String(), "src1/") {
+		t.Fatalf("custom models must be gone from /v1/models: %s", rec.Body)
+	}
+}
+
+func hasProviderCfg(cfgs []ProviderCfg, id string) bool {
+	for _, pc := range cfgs {
+		if pc.ID == id {
+			return true
+		}
+	}
+	return false
+}

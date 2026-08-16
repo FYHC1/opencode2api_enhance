@@ -91,3 +91,9 @@ func (v *Vendor) loadModelsCache() []contract.Model {
 	}
 	return out
 }
+
+// PurgeAllModelCaches 删除全部自定义源的目录磁盘缓存（「清空全部自定义源」时一并清理，
+// 防止同 id 重建源时读到旧清单）。
+func PurgeAllModelCaches() error {
+	return os.RemoveAll(cacheDir())
+}

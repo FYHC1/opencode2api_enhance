@@ -574,6 +574,9 @@ export const api = {
   /** 活性探测：真实拉一次上游目录，刷新健康并返回结果 */
   customProvidersProbe: (id: string) =>
     req<CustomProbeResult>('POST', '/custom-providers/probe', { id }),
+  /** 清空全部自定义源（含目录磁盘缓存）；内建源与其它数据不受影响 */
+  customProvidersClear: () =>
+    req<{ status: string; cleared: boolean; providers: CustomProviderView[] }>('POST', '/custom-providers/clear'),
 
   // 订阅（main 功能 M1）：preview 拉取解析、import 建实例、import-pool 仅入缓存
   subscribePreview: (url: string) => req<SubscribeResult>('POST', '/subscribe/preview', { url }),

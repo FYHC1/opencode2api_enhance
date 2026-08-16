@@ -261,6 +261,7 @@ func registerHTTPRoutes(mux *http.ServeMux, managerInst *manager.Manager) {
 	mux.HandleFunc("/api/admin/custom-providers/save", loggingMiddleware(requireAuth(customProvidersSaveHandler(managerInst))))
 	mux.HandleFunc("/api/admin/custom-providers/test", loggingMiddleware(requireAuth(customProvidersTestHandler())))
 	mux.HandleFunc("/api/admin/custom-providers/probe", loggingMiddleware(requireAuth(customProvidersProbeHandler())))
+	mux.HandleFunc("/api/admin/custom-providers/clear", loggingMiddleware(requireAuth(customProvidersClearHandler(managerInst))))
 	// T3: 订阅源列表管理（新增/删除/立即拉取）+ 列表查看。
 	mux.HandleFunc("/api/admin/subscriptions", loggingMiddleware(requireAuth(managerInst.SubscriptionsListHandler())))
 	mux.HandleFunc("/api/admin/subscriptions/count", loggingMiddleware(requireAuth(managerInst.SubscriptionsCountHandler())))
