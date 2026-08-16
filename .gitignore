@@ -51,7 +51,6 @@ portable-out/
 
 # R&D process docs (not part of the released product)
 docs/ARCHITECTURE-V2-PLAN.md
-docs/PERFORMANCE-PLATFORM-PLAN.md
 docs/REVIEW-PD-DIFF.md
 docs/ROADMAP.md
 docs/SUBSCRIPTION-RESEARCH.md
