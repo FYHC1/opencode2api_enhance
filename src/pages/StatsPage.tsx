@@ -262,7 +262,8 @@ export default function StatsPage({
           <button
             type="button"
             onClick={doRefresh}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-900 text-white text-[12px] font-medium hover:bg-zinc-700 transition-colors"
+            disabled={refreshing}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-900 text-white text-[12px] font-medium hover:bg-zinc-700 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
           >
             <RefreshCw size={13} className={refreshing ? 'animate-spin' : ''} />
             {refreshing ? '刷新中…' : '刷新'}

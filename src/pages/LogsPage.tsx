@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Filter,
   Inbox,
+  Loader2,
   RefreshCw,
   Trash2,
 } from 'lucide-react'
@@ -218,6 +219,8 @@ export default function LogsPage({
   const [logs, setLogs] = useState<CallLogRecord[]>([])
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+  // P2 audit: 清空日志忙态（spinner + 禁用）
+  const [clearing, setClearing] = useState(false)
   const [onlyIssues, setOnlyIssues] = useState(false)
   // 按天筛选：'' = 全部日期
   const [dateFilter, setDateFilter] = useState('')
@@ -277,6 +280,25 @@ export default function LogsPage({
     setRefreshing(false)
   }
 
+  // P2 audit: 清空全部调用日志（异步 → 忙态 spinner + 禁用）
+  const doClearLogs = async () => {
+    if (clearing) return
+    if (!confirm('确定清空全部调用日志？该操作不可恢复。')) return
+    setClearing(true)
+    try {
+      await api.clearCallLog()
+      // M9: 作废在途轮询响应——清空后旧日志不再被慢响应回填
+      loadGen.current++
+      setLogs([])
+      setPage(1)
+      toast('日志已清空')
+    } catch (e) {
+      toast(String(e), false)
+    } finally {
+      setClearing(false)
+    }
+  }
+
   const toggleExpand = useCallback((id: string) => {
     setExpanded((prev) => {
       const next = new Set(prev)
@@ -332,24 +354,12 @@ export default function LogsPage({
         <h1 className="text-2xl font-semibold text-zinc-900">调用日志</h1>
         <div className="flex items-center gap-2">
           <button
-            onClick={async () => {
-              if (!confirm('确定清空全部调用日志？该操作不可恢复。')) return
-              try {
-                await api.clearCallLog()
-                // M9: 作废在途轮询响应——清空后旧日志不再被慢响应回填
-                loadGen.current++
-                setLogs([])
-                setPage(1)
-                toast('日志已清空')
-              } catch (e) {
-                toast(String(e), false)
-              }
-            }}
-            disabled={logs.length === 0}
+            onClick={() => void doClearLogs()}
+            disabled={logs.length === 0 || clearing}
             className="flex items-center gap-2 bg-white border border-zinc-200 text-zinc-600 rounded-lg px-4 py-2 text-sm hover:bg-zinc-50 disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            <Trash2 size={14} />
-            清空
+            {clearing ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+            {clearing ? '清空中…' : '清空'}
           </button>
           <button
             onClick={doRefresh}

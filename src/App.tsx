@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
 import { invoke } from '@tauri-apps/api/core'
-import { Server, Layers, Radar, Settings, BarChart3, ScrollText, LogOut } from 'lucide-react'
+import { Server, Layers, Radar, Settings, BarChart3, ScrollText, LogOut, Loader2 } from 'lucide-react'
 import { api } from './lib/api'
 import { TitleBar } from './components/TitleBar'
 import TaskPanel from './components/TaskPanel'
@@ -154,6 +154,44 @@ export default function App() {
     return () => window.clearInterval(timer)
   }, [upsertTask])
 
+  // P3a: 全局扫描进度续报——仅当存在 busy 的 scan/stop-scan 任务时每 ~2s 调 /scan/status，
+  // 按状态续报对应任务（切页后 NodesPage 的 800ms poll 已停，悬浮窗进度仍走）；
+  // running→scan 进度；stopping→stop-scan 进度；done/error/idle→对应任务非忙收尾
+  //（各自 1.2s 自动收起）。无相关任务不发请求；与节点页 poll 同 id upsert 幂等共存；
+  // 5s stale 兜底保留为最后防线。
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const types = [
+        ...new Set(
+          tasksRef.current
+            .filter((t) => (t.type === 'scan' || t.type === 'stop-scan') && t.busy)
+            .map((t) => t.type),
+        ),
+      ]
+      if (types.length === 0) return
+      api
+        .scanStatus()
+        .then((p) => {
+          for (const type of types) {
+            if (type === 'scan') {
+              if (p.status === 'running') {
+                upsertTask({ id: 'scan', type: 'scan', title: '扫描节点', done: p.current, total: p.total, busy: true })
+              } else if (p.status !== 'stopping') {
+                // done/error/idle：扫描收尾（含停止后后端保留的部分结果计数）
+                upsertTask({ id: 'scan', type: 'scan', title: '扫描节点', done: p.total, total: p.total, busy: false })
+              }
+            } else if (p.status === 'stopping') {
+              upsertTask({ id: 'stop-scan', type: 'stop-scan', title: '停止扫描', done: p.stopped_count ?? 0, total: p.stopping_count ?? 0, busy: true })
+            } else {
+              upsertTask({ id: 'stop-scan', type: 'stop-scan', title: '停止扫描', done: p.stopped_count ?? 0, total: p.stopping_count ?? 0, busy: false })
+            }
+          }
+        })
+        .catch(() => {})
+    }, 2000)
+    return () => window.clearInterval(timer)
+  }, [upsertTask])
+
   // M10: onRelease 稳定化（只依赖稳定回调）——PoolPage 因 props 引用不变而保持 memo，隔离重渲染
   const onRelease = useCallback(
     (r: { active: boolean; done: number; total: number }) => {
@@ -282,7 +320,7 @@ export default function App() {
                 disabled={exiting}
                 className="w-full flex items-center gap-2 px-4 py-2.5 rounded-lg text-[13px] font-medium text-red-700 bg-red-50 hover:bg-red-100 disabled:opacity-50 transition-colors"
               >
-                <LogOut size={15} />
+                {exiting ? <Loader2 size={15} className="animate-spin" /> : <LogOut size={15} />}
                 {exiting ? '正在释放实例并退出…' : '退出并释放全部实例'}
               </button>
               <button
