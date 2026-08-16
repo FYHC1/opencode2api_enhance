@@ -867,6 +867,8 @@ func responsesHandler(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(httpStatusOr(status))
 			if upResp != nil {
+				// 错误路径同样要释放上游连接（callOpenCodeAPIStream 非 2xx 时返回非 nil body）。
+				defer upResp.Close()
 				errBody, _ := io.ReadAll(upResp)
 				if len(errBody) > 0 {
 					w.Write(errBody)

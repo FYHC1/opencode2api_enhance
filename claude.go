@@ -105,6 +105,10 @@ func claudeMessagesHandler(w http.ResponseWriter, r *http.Request) {
 				"type":  "error",
 				"error": map[string]string{"type": "api_error", "message": "upstream error"},
 			}
+			// 错误路径同样要释放上游连接（callOpenCodeAPIStream 非 2xx 时返回非 nil body）。
+			if upResp != nil {
+				upResp.Close()
+			}
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(httpStatusOr(status))
 			json.NewEncoder(w).Encode(errResp)
