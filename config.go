@@ -187,7 +187,8 @@ func maxRouteRetries() int {
 // process, because restarting a live HTTP server drops active SSE streams.
 func startConfigWatcher(path string) {
 	go func() {
-		ticker := time.NewTicker(1 * time.Second)
+		// 1s→3s：配置热加载属低频运维动作，3s 内生效足够；降低每进程每秒一次的文件读。
+		ticker := time.NewTicker(3 * time.Second)
 		defer ticker.Stop()
 		lastData, _ := os.ReadFile(path)
 		for range ticker.C {
