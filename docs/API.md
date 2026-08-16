@@ -25,9 +25,11 @@
 | `/v1/responses` | `POST` | OpenAI Responses 兼容入口 |
 | `/v1/messages` | `POST` | Anthropic Messages 兼容入口 |
 | `/health` | `GET` | 健康检查 |
-| `/api/config` | `GET`/`POST` | 管理面板配置接口 |
-| `/api/stats` | `GET`/`DELETE` | token 统计接口 |
-| `/api/reload` | `POST` | 刷新 OpenCode 会话和模型列表 |
+| `/api/admin/*` | `GET`/`POST` | 管理面板后台接口（会话鉴权：配置/统计/实例/节点/网关/调用日志/自定义模型源等，路由注册见 `main.go`，handler 见 `core/manager/admin_http.go`） |
+| `/api/reset-stats` | `DELETE` | 实例统计复位（管理器 ↔ 实例/网关子进程的内部契约，非前端使用） |
+
+> 旧版 `/api/config`、`/api/stats`、`/api/reload` 等内嵌管理路由已于 2026-08-12 移除，
+> 现行管理面统一为 `/api/admin/*`（前端由 dist/ 七页 UI 提供）。
 
 `GET /v1/models` 的返回会随鉴权模式变化：
 
@@ -43,10 +45,11 @@
 
 | 路由 | 方法 | 说明 |
 | --- | --- | --- |
-| `/api/admin/custom-providers` | `GET` | 自定义源列表（key 不回显，含模型数与最近错误） |
+| `/api/admin/custom-providers` | `GET` | 自定义源列表（**api_keys 明文回显**——编辑表单回填用，单用户/内网定位所致；含模型数与最近错误） |
 | `/api/admin/custom-providers/save` | `POST` | 整表保存（增/改/删一次到位），保存即热生效 |
 | `/api/admin/custom-providers/test` | `POST` | 连通测试（不落盘）：逐 key 拉取上游模型目录返回结果与延迟 |
 | `/api/admin/custom-providers/probe` | `POST` | 活性探测：真实拉一次目录刷新健康，返回 ok/延迟/上次成功 |
+| `/api/admin/custom-providers/clear` | `POST` | 清空全部自定义源（热生效，不触碰其它配置） |
 
 ## Chat Completions
 

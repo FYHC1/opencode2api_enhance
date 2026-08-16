@@ -33,7 +33,7 @@ cat > "$OUT/web/README.txt" <<EOF
 opencode2api Web 端（headless）v${VERSION}
 启动：./opencode2api -port 40000 -password "" -listen 0.0.0.0
 浏览器访问：http://<本机IP>:40000
-说明：前端为无登录页的六页 UI，默认无鉴权启动（-password ""，与桌面版一致）；
+说明：前端为无登录页的七页 UI，默认无鉴权启动（-password ""，与桌面版一致）；
 公网部署请前置反向代理（nginx + TLS / Basic Auth）或设置密码（需配套前端登录页，后续支持）。
 数据目录：默认 <用户配置目录>/opencode2api-manager；可用环境变量 OPCODE2API_DATA_DIR 指定
 依赖：无（Go 静态编译 + 内嵌前端）；sing-box 出口子程序自动释放到 bin/（需已提供或联网下载）

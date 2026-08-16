@@ -9,7 +9,7 @@
 |---|---|---|---|---|---|
 | **Web（headless）** | `dist/web/` | 复制整个目录到任意机器（Win/Linux/mac 通用） | **无**（Go 静态编译，纯浏览器管理） | `./opencode2api -port 40000 -password "" -listen 0.0.0.0`，浏览器访问 `http://<IP>:40000` | `OPCODE2API_DATA_DIR` 指定数据目录；端口三件套可环境变量覆盖；公网配反向代理 |
 | **Docker** | `dist/docker/` | 复制到服务器 → `docker compose up -d --build` | Docker | 同 Web，容器映射 44000(管理)/44080(网关→容器 40080) | 数据卷 `manager-data` 持久化；升级不丢 |
-| **Windows** | `dist/win/*.exe`（NSIS 安装包） | 安装包安装（perMachine）或直接运行 | Windows + WebView2（安装包已内置） | 桌面七页 UI + 托盘 | `%APPDATA%\opencode2api-manager\`（正式版） |
+| **Windows** | `dist/win/*.exe`（NSIS 安装包） | 安装包安装（currentUser）或直接运行 | Windows + WebView2（安装包已内置） | 桌面七页 UI + 托盘 | `%APPDATA%\opencode2api-manager\`（正式版） |
 | **Linux 桌面** | `dist/linux/*.deb` / `*.AppImage`（CI 产物） | 安装 deb 或运行 AppImage | Linux 桌面（webkit2gtk） | 桌面七页 UI | 数据目录同 Web 约定 |
 | **macOS 桌面** | `dist/mac/*.dmg`（CI 产物） | 打开 dmg 拖入 App；首次右键打开（未公证） | macOS | 桌面七页 UI | 数据目录同 Web 约定 |
 

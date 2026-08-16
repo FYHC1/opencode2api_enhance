@@ -1,16 +1,18 @@
 # AGENTS.md — 本仓库 AI 代理工作守则
 
-> 所有在本仓库工作的 AI 代理 / 助手，开工前请先阅读以下文件（按优先级）：
+> 所有在本仓库工作的 AI 代理 / 助手，开工前请先阅读以下文件（按优先级）。
+> 注：1、2 两篇是**本地研发过程文档，未随仓库分发**（见 `.gitignore`）——
+> 克隆仓库的协作者读不到属正常现象，可跳过，从第 3 条与 `README.md` 入手。
 
-1. **`docs/AI-TESTING-GUIDE.md`**（⭐ 必读）—— 端口与环境隔离避让指南。
+1. **`docs/AI-TESTING-GUIDE.md`**（⭐ 必读；本地文档，未入库）—— 端口与环境隔离避让指南。
    本机可能同时运行正式版（`D:\Program Files\opencode2api\`，生产服务）、dev、便携测试包等
    多个环境。**任何真实服务启动/测试前必须执行 §3 的端口与进程检查，并按 §5 模板做三件套
    环境隔离（`OPCODE2API_DATA_DIR` / `OPCODE2API_GATEWAY_PORT` / `OPCODE2API_INSTANCE_BASE_PORT`），
    禁止占用其它环境端口、禁止 kill 非自己启动的 opencode2api/sing-box 进程。**
    单元测试与自动化 E2E（`go test`）用 httptest 随机端口，安全，随时可跑。
 
-2. **`docs/ARCHITECTURE-V2-PLAN.md`** —— 架构 V2 改造计划（唯一事实来源），含阶段/验收表/
-   决策记录。改架构前必读。
+2. **`docs/ARCHITECTURE-V2-PLAN.md`**（本地文档，未入库）—— 架构 V2 改造计划（唯一事实来源），
+   含阶段/验收表/决策记录。改架构前必读。
 
 3. **`docs/CONFIGURATION.md`** / **`docs/ROUTING.md`** / **`docs/API.md`** —— 配置、路由、API 契约。
 

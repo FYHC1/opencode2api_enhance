@@ -109,7 +109,7 @@ docker compose up -d          # 启动容器
 
 | 产物文件 | 适用平台 | 说明 |
 |---|---|---|
-| `opencode2api_xxx_x64-setup.exe` | **Windows** x64 | NSIS perMachine 安装包，日常桌面使用 |
+| `opencode2api_xxx_x64-setup.exe` | **Windows** x64 | NSIS 安装包（currentUser 安装），日常桌面使用 |
 | `opencode2api_xxx_amd64.deb` | **Linux** Debian/Ubuntu 系（x64） | `sudo dpkg -i` 或 `sudo apt install ./xxx.deb` 安装；桌面版有窗口+托盘，需图形环境 |
 | `opencode2api_xxx_amd64.AppImage` | **Linux** 各发行版（x64） | 免安装：`chmod +x` 后 `./xxx.AppImage` 直接运行，无需 root |
 | `opencode2api_xxx_amd64.dmg` | **macOS** Intel（x64） | 双击挂载后拖入 Applications；Gatekeeper 拦截时右键→打开 |
@@ -138,7 +138,6 @@ npm run build                 # 前端构建必须通过
 
 ## 七、相关文档
 
-- `docs/ROADMAP.md`：项目路线图（M 多端 / Q 模型矩阵 / R 供应商配置）
 - `docs/PERFORMANCE-MODE.md`：性能模式说明（面向用户）
 - `docs/DEPLOYMENT-MATRIX.md`：各端部署形态与产物一览
 - `docs/HANDOFF.md`：历史交接（框架纪律）
