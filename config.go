@@ -92,6 +92,8 @@ func applyConfig(cfg AppConfig) {
 		providersCfg = append([]ProviderCfg(nil), cfg.Providers...)
 	}
 	routingCfg = cfg.Routing
+	// auto 虚拟模型配置（nil 回默认：关闭 + balanced；键被清除时热重载即时生效）。
+	setAutoConfig(cfg.AutoModel)
 
 	if cfg.RouteMode == "round_robin" || cfg.RouteMode == "failover" || cfg.RouteMode == "smart" {
 		routeMode.Store(cfg.RouteMode)

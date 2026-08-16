@@ -842,6 +842,17 @@ func responsesHandler(w http.ResponseWriter, r *http.Request) {
 
 	upstreamBody := buildUpstreamBody(&chatReq)
 
+	// auto 虚拟模型：选主选 + 降级链挂 ctx（respReq.Model 保持 "auto" 用于状态存储，
+	// previous_response_id 续聊时无 model 也会再次走 auto）。
+	callCtx := r.Context()
+	var autoDec *autoDecision
+	if isAutoModelName(chatReq.Model) {
+		callCtx, chatReq.Model, autoDec = prepareAuto(r.Context(), chatReq.Model, upstreamBody)
+		if autoDec != nil {
+			callRec.Events = append(callRec.Events, autoDec.pickEvent())
+		}
+	}
+
 	if respReq.Stream {
 		// L6：进程级流并发上限——超限直接 503（defer 覆盖所有返回路径释放名额）。
 		if !tryAcquireStream() {
@@ -856,13 +867,16 @@ func responsesHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer releaseStream()
-		upResp, status, _, proxyAddr, err := callOpenCodeAPIStream(r.Context(), upstreamBody, chatReq.Model, auth)
+		upResp, status, _, proxyAddr, err := callOpenCodeAPIStream(callCtx, upstreamBody, chatReq.Model, auth)
 		callRec.Nodes = append(callRec.Nodes, proxyAddr)
 		if err != nil || status < 200 || status >= 300 {
 			callRec.Status = "fail"
 			callRec.ErrMsg = fmt.Sprintf("upstream status %d: %v", status, err)
 			callRec.DurationMS = time.Since(startTime).Milliseconds()
 			callRec.Events = append(callRec.Events, CallEvent{Type: "upstream_error", Node: proxyAddr, Detail: callRec.ErrMsg, At: time.Now()})
+			if autoDec == nil {
+				recordModelFeedback(chatReq.Model, proxyAddr, false, callRec.DurationMS)
+			}
 			recordCall(callRec)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(httpStatusOr(status))
@@ -871,6 +885,9 @@ func responsesHandler(w http.ResponseWriter, r *http.Request) {
 				defer upResp.Close()
 				errBody, _ := io.ReadAll(upResp)
 				if len(errBody) > 0 {
+					if autoDec != nil && isContextLimitError(errBody) {
+						learnContextFailure(displayModelName(autoDec.FinalModel), autoDec.EstTokens)
+					}
 					w.Write(errBody)
 					return
 				}
@@ -889,17 +906,26 @@ func responsesHandler(w http.ResponseWriter, r *http.Request) {
 		responsesStreamHandler(w, r, resp, chatReq.Model, chatReq.Model, wantReasoning, respReq.Tools, respReq.ToolChoice, respReq, proxyAddr)
 		callRec.DurationMS = time.Since(startTime).Milliseconds()
 		callRec.Events = append(callRec.Events, CallEvent{Type: "complete", Node: proxyAddr, Detail: "done", At: time.Now()})
+		if autoDec == nil {
+			recordModelFeedback(chatReq.Model, proxyAddr, true, callRec.DurationMS)
+		}
 		recordCall(callRec)
 		return
 	}
 
-	respBody, status, _, proxyAddr, err := callOpenCodeAPI(r.Context(), upstreamBody, chatReq.Model, auth)
+	respBody, status, _, proxyAddr, err := callOpenCodeAPI(callCtx, upstreamBody, chatReq.Model, auth)
 	callRec.Nodes = append(callRec.Nodes, proxyAddr)
 	if err != nil || status < 200 || status >= 300 {
 		callRec.Status = "fail"
 		callRec.ErrMsg = fmt.Sprintf("upstream status %d: %v", status, err)
 		callRec.DurationMS = time.Since(startTime).Milliseconds()
 		callRec.Events = append(callRec.Events, CallEvent{Type: "upstream_error", Node: proxyAddr, Detail: callRec.ErrMsg, At: time.Now()})
+		if autoDec != nil && len(respBody) > 0 && isContextLimitError(respBody) {
+			learnContextFailure(displayModelName(autoDec.FinalModel), autoDec.EstTokens)
+		}
+		if autoDec == nil {
+			recordModelFeedback(chatReq.Model, proxyAddr, false, callRec.DurationMS)
+		}
 		recordCall(callRec)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(httpStatusOr(status))
@@ -936,6 +962,9 @@ func responsesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	callRec.DurationMS = time.Since(startTime).Milliseconds()
 	callRec.Events = append(callRec.Events, CallEvent{Type: "complete", Node: proxyAddr, Detail: "done", At: time.Now()})
+	if autoDec == nil {
+		recordModelFeedback(chatReq.Model, proxyAddr, true, callRec.DurationMS)
+	}
 	recordCall(callRec)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

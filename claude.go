@@ -79,6 +79,16 @@ func claudeMessagesHandler(w http.ResponseWriter, r *http.Request) {
 
 	upstreamBody := buildUpstreamBody(&chatReq)
 
+	// auto 虚拟模型：选主选 + 降级链挂 ctx（claudeReq.Model 保持 "auto" 用于展示）。
+	callCtx := r.Context()
+	var autoDec *autoDecision
+	if isAutoModelName(chatReq.Model) {
+		callCtx, chatReq.Model, autoDec = prepareAuto(r.Context(), chatReq.Model, upstreamBody)
+		if autoDec != nil {
+			callRec.Events = append(callRec.Events, autoDec.pickEvent())
+		}
+	}
+
 	if claudeReq.Stream {
 		// L6：进程级流并发上限——超限直接 503（defer 覆盖所有返回路径释放名额）。
 		if !tryAcquireStream() {
@@ -93,13 +103,16 @@ func claudeMessagesHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer releaseStream()
-		upResp, status, _, proxyAddr, err := callOpenCodeAPIStream(r.Context(), upstreamBody, chatReq.Model, auth)
+		upResp, status, _, proxyAddr, err := callOpenCodeAPIStream(callCtx, upstreamBody, chatReq.Model, auth)
 		callRec.Nodes = append(callRec.Nodes, proxyAddr)
 		if err != nil || status < 200 || status >= 300 {
 			callRec.Status = "fail"
 			callRec.ErrMsg = fmt.Sprintf("upstream status %d: %v", status, err)
 			callRec.DurationMS = time.Since(startTime).Milliseconds()
 			callRec.Events = append(callRec.Events, CallEvent{Type: "upstream_error", Node: proxyAddr, Detail: callRec.ErrMsg, At: time.Now()})
+			if autoDec == nil {
+				recordModelFeedback(chatReq.Model, proxyAddr, false, callRec.DurationMS)
+			}
 			recordCall(callRec)
 			errResp := map[string]any{
 				"type":  "error",
@@ -116,20 +129,29 @@ func claudeMessagesHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		callRec.Events = append(callRec.Events, CallEvent{Type: "connect_ok", Node: proxyAddr, Detail: "connected", At: time.Now()})
 		defer upResp.Close()
-		claudeStreamHandler(w, upResp, claudeReq.Model, keepReasoning, proxyAddr)
+		claudeStreamHandler(w, upResp, chatReq.Model, keepReasoning, proxyAddr)
 		callRec.DurationMS = time.Since(startTime).Milliseconds()
 		callRec.Events = append(callRec.Events, CallEvent{Type: "complete", Node: proxyAddr, Detail: "done", At: time.Now()})
+		if autoDec == nil {
+			recordModelFeedback(chatReq.Model, proxyAddr, true, callRec.DurationMS)
+		}
 		recordCall(callRec)
 		return
 	}
 
-	respBody, status, _, proxyAddr, err := callOpenCodeAPI(r.Context(), upstreamBody, chatReq.Model, auth)
+	respBody, status, _, proxyAddr, err := callOpenCodeAPI(callCtx, upstreamBody, chatReq.Model, auth)
 	callRec.Nodes = append(callRec.Nodes, proxyAddr)
 	if err != nil || status < 200 || status >= 300 {
 		callRec.Status = "fail"
 		callRec.ErrMsg = fmt.Sprintf("upstream status %d: %v", status, err)
 		callRec.DurationMS = time.Since(startTime).Milliseconds()
 		callRec.Events = append(callRec.Events, CallEvent{Type: "upstream_error", Node: proxyAddr, Detail: callRec.ErrMsg, At: time.Now()})
+		if autoDec != nil && len(respBody) > 0 && isContextLimitError(respBody) {
+			learnContextFailure(displayModelName(autoDec.FinalModel), autoDec.EstTokens)
+		}
+		if autoDec == nil {
+			recordModelFeedback(chatReq.Model, proxyAddr, false, callRec.DurationMS)
+		}
 		recordCall(callRec)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(httpStatusOr(status))
@@ -151,7 +173,8 @@ func claudeMessagesHandler(w http.ResponseWriter, r *http.Request) {
 			ct, _ := u["completion_tokens"].(float64)
 			tt, _ := u["total_tokens"].(float64)
 			if tt > 0 {
-				recordTokenUsage(claudeReq.Model, int64(pt), int64(ct), int64(tt), proxyAddr)
+				// 用上游真实模型记账（auto 请求也计入具体模型，统计页不出现虚拟行）。
+				recordTokenUsage(chatReq.Model, int64(pt), int64(ct), int64(tt), proxyAddr)
 			}
 			callRec.PromptTok = int64(pt)
 			callRec.CompletionTok = int64(ct)
@@ -159,6 +182,9 @@ func claudeMessagesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	callRec.DurationMS = time.Since(startTime).Milliseconds()
 	callRec.Events = append(callRec.Events, CallEvent{Type: "complete", Node: proxyAddr, Detail: "done", At: time.Now()})
+	if autoDec == nil {
+		recordModelFeedback(chatReq.Model, proxyAddr, true, callRec.DurationMS)
+	}
 	recordCall(callRec)
 
 	w.Header().Set("Content-Type", "application/json")
