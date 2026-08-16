@@ -48,7 +48,7 @@
     "longDescription": "基于 Tauri 2 的本地多实例代理管理器：管理 opencode2api 代理与 sing-box 出口，支持节点扫描、统一网关、健康巡检、订阅批量导入与调用日志分析。桌面（Windows/Linux）与 headless WebUI 双模式。",
     "windows": {
       "nsis": {
-        "installMode": "perMachine"
+        "installMode": "currentUser"
       }
     },
     "linux": {
