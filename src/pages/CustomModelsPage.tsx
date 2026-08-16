@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
 import { Loader2, Pencil, Plus, PlugZap, Trash2, X } from 'lucide-react'
-import { api, type CustomProviderInput, type CustomProviderTestResult, type CustomProviderView, type CustomProtocol } from '../lib/api'
+import { api, type CustomKeyStrategy, type CustomProviderInput, type CustomProviderTestResult, type CustomProviderView, type CustomProtocol } from '../lib/api'
 
 // 自定义模型源表单（新增/编辑共用）。编辑时 key 留空 = 保留原 key。
 type FormState = {
@@ -9,7 +9,9 @@ type FormState = {
   name: string
   protocol: CustomProtocol
   base_url: string
-  api_key: string
+  /** 多 key，一行一个（textarea 原文） */
+  api_keys: string
+  key_strategy: CustomKeyStrategy
   via_proxy: boolean
   enabled: boolean
   /** 编辑中的原条目 id（空 = 新增） */
@@ -21,7 +23,8 @@ const emptyForm = (): FormState => ({
   name: '',
   protocol: 'openai',
   base_url: '',
-  api_key: '',
+  api_keys: '',
+  key_strategy: 'round_robin',
   via_proxy: false,
   enabled: true,
   editing: null,
@@ -75,7 +78,8 @@ export default function CustomModelsPage({ toast }: { toast: (msg: string, ok?: 
       name: p.name,
       protocol: p.protocol,
       base_url: p.base_url,
-      api_key: p.api_key ?? '', // 回填已存 key：测试连通免重新粘贴
+      api_keys: (p.api_keys && p.api_keys.length > 0 ? p.api_keys : p.api_key ? [p.api_key] : []).join('\n'), // 回填已存 keys
+      key_strategy: p.key_strategy ?? 'round_robin',
       via_proxy: p.via_proxy,
       enabled: p.enabled,
       editing: p.id,
@@ -92,12 +96,14 @@ export default function CustomModelsPage({ toast }: { toast: (msg: string, ok?: 
       toast('API 地址需为 http(s) URL', false)
       return null
     }
+    const keys = f.api_keys.split('\n').map((k) => k.trim()).filter(Boolean)
     return {
       id: f.id.trim(),
       name: f.name.trim() || f.id.trim(),
       protocol: f.protocol,
       base_url: f.base_url.trim(),
-      api_key: f.api_key.trim() || undefined,
+      api_keys: keys.length > 0 ? keys : undefined, // 整体留空 = 保留原 keys
+      key_strategy: f.key_strategy,
       via_proxy: f.via_proxy,
       enabled: f.enabled,
     }
@@ -134,6 +140,8 @@ export default function CustomModelsPage({ toast }: { toast: (msg: string, ok?: 
           name: p.name,
           protocol: p.protocol,
           base_url: p.base_url,
+          api_keys: p.api_keys && p.api_keys.length > 0 ? p.api_keys : undefined,
+          key_strategy: p.key_strategy,
           via_proxy: p.via_proxy,
           enabled: p.enabled,
         }))
@@ -171,6 +179,8 @@ export default function CustomModelsPage({ toast }: { toast: (msg: string, ok?: 
       name: p.name,
       protocol: p.protocol,
       base_url: p.base_url,
+      api_keys: p.api_keys && p.api_keys.length > 0 ? p.api_keys : undefined,
+      key_strategy: p.key_strategy,
       via_proxy: p.via_proxy,
       enabled: p.enabled,
     }))
@@ -224,11 +234,23 @@ export default function CustomModelsPage({ toast }: { toast: (msg: string, ok?: 
                     <span className="text-[11px] px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-600 font-mono">{p.protocol}</span>
                     {!p.enabled && <span className="text-[11px] px-1.5 py-0.5 rounded bg-zinc-200 text-zinc-500">已停用</span>}
                     {p.via_proxy && <span className="text-[11px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-700">走节点池</span>}
+                    {p.keys_total > 1 && (
+                      <span className="text-[11px] px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-600">
+                        {p.keys_total} key{p.key_strategy === 'failover' ? ' · 错误转移' : ' · 轮询'}
+                      </span>
+                    )}
                   </div>
                   <div className="text-xs text-zinc-500 font-mono truncate">{p.base_url}</div>
                   <div className="text-xs text-zinc-500">
                     前缀 <code className="bg-zinc-100 px-1 rounded">{p.id}/</code> · {p.models} 个模型
-                    {p.api_key_set ? ' · Key 已配置' : ' · 无 Key'}
+                    {p.api_key_set ? ` · ${p.api_keys?.length ?? p.keys_total} 个 Key` : ' · 无 Key'}
+                    {p.keys_total > 1 && (
+                      <>
+                        {' '}（可用 {p.keys_available}
+                        {p.keys_cooling > 0 && <span className="text-amber-600"> · 冷却 {p.keys_cooling}</span>}
+                        {p.keys_disabled > 0 && <span className="text-red-500"> · 禁用 {p.keys_disabled}</span>}）
+                      </>
+                    )}
                     {p.last_error ? <span className="text-red-500"> · {p.last_error}</span> : null}
                   </div>
                 </div>
@@ -355,15 +377,51 @@ export default function CustomModelsPage({ toast }: { toast: (msg: string, ok?: 
             </div>
 
             <div className="space-y-2">
-              <label className="block text-sm font-medium text-zinc-700">API Key</label>
-              <input
-                type="password"
-                placeholder="sk-...（本地无鉴权网关可留空）"
-                value={form.api_key}
-                onChange={(e) => setForm({ ...form, api_key: e.target.value })}
-                className="w-full px-3 py-2 border rounded-lg font-mono text-[13px]"
+              <label className="block text-sm font-medium text-zinc-700">API Key（一行一个，可多个）</label>
+              <textarea
+                rows={3}
+                placeholder={'sk-xxx1\nsk-xxx2（本地无鉴权网关可留空）'}
+                value={form.api_keys}
+                onChange={(e) => setForm({ ...form, api_keys: e.target.value })}
+                spellCheck={false}
+                className="w-full px-3 py-2 border rounded-lg font-mono text-[13px] resize-y"
               />
-              <p className="text-zinc-500 text-xs">Key 保存在本机配置中，由网关持有；调用方无需携带</p>
+              <p className="text-zinc-500 text-xs">
+                多 key 自动负载均衡与故障切换；Key 保存在本机配置中由网关持有，调用方无需携带；编辑时留空 = 保留原有 keys
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-zinc-700">Key 调度策略</label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setForm({ ...form, key_strategy: 'round_robin' })}
+                  className={clsx(
+                    'px-3 py-2 rounded-lg border text-[13px] transition-colors text-left',
+                    form.key_strategy === 'round_robin' ? 'border-zinc-900 bg-zinc-900 text-white' : 'border-zinc-200 text-zinc-600 hover:bg-zinc-50',
+                  )}
+                >
+                  轮询
+                  <span className={clsx('block text-[11px] mt-0.5', form.key_strategy === 'round_robin' ? 'text-zinc-300' : 'text-zinc-400')}>
+                    均匀分摊到各 key
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setForm({ ...form, key_strategy: 'failover' })}
+                  className={clsx(
+                    'px-3 py-2 rounded-lg border text-[13px] transition-colors text-left',
+                    form.key_strategy === 'failover' ? 'border-zinc-900 bg-zinc-900 text-white' : 'border-zinc-200 text-zinc-600 hover:bg-zinc-50',
+                  )}
+                >
+                  错误转移
+                  <span className={clsx('block text-[11px] mt-0.5', form.key_strategy === 'failover' ? 'text-zinc-300' : 'text-zinc-400')}>
+                    主 key 优先，冷却/失效才降级
+                  </span>
+                </button>
+              </div>
+              <p className="text-zinc-500 text-xs">仅作用于本自定义源，与实例池的路由模式互不影响；429 冷却（Retry-After）、401/403 禁用后自动换 key</p>
             </div>
 
             <div className="flex items-center space-x-3">
@@ -382,20 +440,17 @@ export default function CustomModelsPage({ toast }: { toast: (msg: string, ok?: 
 
             {/* 测试结果 */}
             {testResult && (
-              <div className={clsx('rounded-lg p-3 text-xs space-y-1', testResult.ok ? 'bg-emerald-50 text-emerald-800' : 'bg-red-50 text-red-700')}>
-                {testResult.ok ? (
-                  <>
-                    <div className="font-medium">
-                      连通成功 · {testResult.count} 个模型 · {testResult.latency_ms}ms
+              <div className={clsx('rounded-lg p-3 text-xs space-y-1.5', testResult.ok ? 'bg-emerald-50 text-emerald-800' : 'bg-red-50 text-red-700')}>
+                <div className="font-medium">{testResult.ok ? '全部 key 连通成功' : '部分/全部 key 连通失败'}</div>
+                <div className="space-y-1">
+                  {(testResult.results ?? []).map((kr, i) => (
+                    <div key={i} className={clsx('flex items-center gap-2 font-mono', kr.ok ? 'text-emerald-700' : 'text-red-600')}>
+                      <span className="w-20 shrink-0">{kr.key_tail || '(无key)'}</span>
+                      <span>{kr.ok ? `✓ ${kr.count} 模型 · ${kr.latency_ms}ms` : `✗ ${kr.error}`}</span>
                     </div>
-                    <div className="font-mono break-all leading-relaxed">
-                      {(testResult.models ?? []).slice(0, 12).join(' · ')}
-                      {(testResult.count ?? 0) > 12 ? ' …' : ''}
-                    </div>
-                  </>
-                ) : (
-                  <div className="font-medium">连通失败：{testResult.error}</div>
-                )}
+                  ))}
+                  {!testResult.results?.length && !testResult.ok && <div>{testResult.error}</div>}
+                </div>
               </div>
             )}
 

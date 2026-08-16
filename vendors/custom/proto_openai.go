@@ -14,10 +14,10 @@ import (
 
 type openaiProto struct{}
 
-func (openaiProto) headers(v *Vendor, stream bool) map[string]string {
+func (openaiProto) headers(key string, stream bool) map[string]string {
 	h := map[string]string{
 		"Content-Type":  "application/json",
-		"Authorization": "Bearer " + v.cfg.APIKey,
+		"Authorization": "Bearer " + key,
 	}
 	if stream {
 		h["Accept"] = "text/event-stream"
@@ -25,16 +25,16 @@ func (openaiProto) headers(v *Vendor, stream bool) map[string]string {
 	return h
 }
 
-func (openaiProto) listModels(ctx context.Context, v *Vendor) ([]string, error) {
+func (openaiProto) listModels(ctx context.Context, v *Vendor, key string) ([]string, error) {
 	resp, _, err := v.do(ctx, http.MethodGet, v.cfg.BaseURL+"/models",
-		map[string]string{"Authorization": "Bearer " + v.cfg.APIKey}, nil, false)
+		map[string]string{"Authorization": "Bearer " + key}, nil, false)
 	if err != nil {
 		return nil, err
 	}
 	body := readBody(resp)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		v.markErr(fmt.Sprintf("list models: HTTP %d: %s", resp.StatusCode, truncateErr(body)))
-		return nil, fmt.Errorf("custom %s: list models HTTP %d", v.cfg.ID, resp.StatusCode)
+		return nil, &keyStatusError{status: resp.StatusCode, retryAfter: parseRetryAfter(resp.Header.Get("Retry-After"))}
 	}
 	var out struct {
 		Data []struct {
@@ -51,9 +51,9 @@ func (openaiProto) listModels(ctx context.Context, v *Vendor) ([]string, error) 
 	return ids, nil
 }
 
-func (p openaiProto) chat(ctx context.Context, v *Vendor, model string, rawBody []byte) (*contract.Reply, error) {
+func (p openaiProto) chat(ctx context.Context, v *Vendor, model, key string, rawBody []byte) (*contract.Reply, error) {
 	resp, addr, err := v.do(ctx, http.MethodPost, v.cfg.BaseURL+"/chat/completions",
-		p.headers(v, false), rawBody, false)
+		p.headers(key, false), rawBody, false)
 	if err != nil {
 		return nil, err
 	}
@@ -63,12 +63,12 @@ func (p openaiProto) chat(ctx context.Context, v *Vendor, model string, rawBody 
 	} else {
 		v.markOK()
 	}
-	return &contract.Reply{Body: body, Status: resp.StatusCode, NodeAddr: addr}, nil
+	return &contract.Reply{Body: body, Status: resp.StatusCode, NodeAddr: addr, Headers: resp.Header}, nil
 }
 
-func (p openaiProto) chatStream(ctx context.Context, v *Vendor, model string, rawBody []byte) (*contract.Stream, error) {
+func (p openaiProto) chatStream(ctx context.Context, v *Vendor, model, key string, rawBody []byte) (*contract.Stream, error) {
 	resp, addr, err := v.do(ctx, http.MethodPost, v.cfg.BaseURL+"/chat/completions",
-		p.headers(v, true), rawBody, true)
+		p.headers(key, true), rawBody, true)
 	if err != nil {
 		return nil, err
 	}

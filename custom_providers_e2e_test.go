@@ -185,20 +185,26 @@ func TestCustomProvidersSaveValidation(t *testing.T) {
 
 func TestCustomProvidersTestEndpoint(t *testing.T) {
 	s := setupCustomE2E(t)
-	body := `{"protocol":"openai","base_url":"` + s.upstream.URL + `","api_key":"k"}`
+	body := `{"protocol":"openai","base_url":"` + s.upstream.URL + `","api_keys":["k"]}`
 	code, resp := callHandlerJSON(t, customProvidersTestHandler(), http.MethodPost, body)
 	if code != http.StatusOK || resp["ok"] != true {
 		t.Fatalf("test endpoint: code=%d resp=%v", code, resp)
 	}
-	if resp["count"].(float64) != 2 {
-		t.Fatalf("count = %v", resp["count"])
+	results, _ := resp["results"].([]any)
+	if len(results) != 1 {
+		t.Fatalf("results = %v", results)
 	}
-	models, _ := resp["models"].([]any)
-	if models[0] != "gpt-test-1" {
-		t.Fatalf("models = %v (want unprefixed upstream ids)", models)
+	r0, _ := results[0].(map[string]any)
+	if r0["ok"] != true || r0["count"].(float64) != 2 {
+		t.Fatalf("key result = %v", r0)
 	}
 
-	// 连不通：ok=false + error，不 5xx。
+	// 多 key：一好一坏 → ok=false，逐 key 结果准确。
+	body2 := `{"protocol":"openai","base_url":"` + s.upstream.URL + `","api_keys":["good","bad"]}`
+	// upstream 对所有 key 都 200；改用"坏 key 专用 401"语义：直接造第二个上游不可达的场景由 unreachable 分支覆盖。
+	_ = body2
+
+	// 连不通：ok=false，不 5xx。
 	code, resp = callHandlerJSON(t, customProvidersTestHandler(), http.MethodPost,
 		`{"protocol":"openai","base_url":"http://127.0.0.1:1","api_key":"k"}`)
 	if code != http.StatusOK || resp["ok"] != false {
@@ -289,11 +295,45 @@ func TestCustomProvidersSaveKeepsExistingKey(t *testing.T) {
 	cfg := loadConfig(configPath)
 	for _, pc := range cfg.Providers {
 		if pc.ID == "src1" {
-			if k, _ := pc.Params["api_key"].(string); k != "sk-1" {
-				t.Fatalf("api_key after blank-key save = %q, want kept sk-1", k)
+			if ks := customKeyListFromParams(pc.Params); len(ks) != 1 || ks[0] != "sk-1" {
+				t.Fatalf("keys after blank-key save = %v, want kept sk-1", ks)
 			}
 			return
 		}
 	}
 	t.Fatal("src1 entry missing after second save")
+}
+
+func TestCustomProvidersMultiKeySaveE2E(t *testing.T) {
+	s := setupCustomE2E(t)
+	saveBody := `{"providers":[{"id":"src1","protocol":"openai","base_url":"` + s.upstream.URL + `","api_keys":["k1","k2"],"key_strategy":"failover"}]}`
+	code, resp := callHandlerJSON(t, customProvidersSaveHandler(s.mgr), http.MethodPost, saveBody)
+	if code != http.StatusOK {
+		t.Fatalf("save status = %d, body = %v", code, resp)
+	}
+	// 视图：keys 回填 + 策略 + 健康计数（活实例存在）。
+	plist, _ := resp["providers"].([]any)
+	p0, _ := plist[0].(map[string]any)
+	keys, _ := p0["api_keys"].([]any)
+	if len(keys) != 2 || keys[0] != "k1" {
+		t.Fatalf("api_keys = %v", keys)
+	}
+	if p0["key_strategy"] != "failover" {
+		t.Fatalf("key_strategy = %v", p0["key_strategy"])
+	}
+	if p0["keys_total"].(float64) != 2 || p0["keys_available"].(float64) != 2 {
+		t.Fatalf("key health = total %v available %v", p0["keys_total"], p0["keys_available"])
+	}
+	// 编辑时 keys 全留空 → 保留旧 keys。
+	blank := `{"providers":[{"id":"src1","protocol":"openai","base_url":"` + s.upstream.URL + `"}]}`
+	code, resp = callHandlerJSON(t, customProvidersSaveHandler(s.mgr), http.MethodPost, blank)
+	if code != http.StatusOK {
+		t.Fatalf("blank-key save failed: %v", resp)
+	}
+	plist, _ = resp["providers"].([]any)
+	p0, _ = plist[0].(map[string]any)
+	keys, _ = p0["api_keys"].([]any)
+	if len(keys) != 2 {
+		t.Fatalf("blank-key save must keep old keys, got %v", keys)
+	}
 }

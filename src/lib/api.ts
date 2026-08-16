@@ -75,19 +75,30 @@ export type PortCheckResult = {
 // 自定义模型源（第七页「自定义模型」）
 export type CustomProtocol = 'openai' | 'anthropic' | 'gemini' | 'responses'
 
+export type CustomKeyStrategy = 'round_robin' | 'failover'
+
 export type CustomProviderView = {
   id: string
   name: string
   protocol: CustomProtocol
   base_url: string
-  /** key 明文回传（面板已鉴权；key 本就明文存于本机配置）：编辑表单回填用 */
+  /** 全部 key 明文（面板已鉴权；key 本就明文存于本机配置）：编辑表单回填用 */
+  api_keys: string[]
+  /** 首 key（旧版兼容） */
   api_key: string
   /** 是否已配置 key */
   api_key_set: boolean
+  /** key 调度策略：round_robin 轮询 | failover 错误转移（仅作用于本源） */
+  key_strategy: CustomKeyStrategy
   via_proxy: boolean
   enabled: boolean
   /** 聚合目录中该源模型数（实时） */
   models: number
+  /** key 健康计数（运行时快照；无活实例时全 0） */
+  keys_total: number
+  keys_available: number
+  keys_cooling: number
+  keys_disabled: number
   last_error?: string
 }
 
@@ -96,15 +107,27 @@ export type CustomProviderInput = {
   name?: string
   protocol: CustomProtocol
   base_url: string
-  /** 编辑时留空 = 保留原 key */
+  /** 多 key（一行一个）；编辑时整体留空 = 保留原 keys */
+  api_keys?: string[]
+  /** 单 key 兼容输入 */
   api_key?: string
+  key_strategy?: CustomKeyStrategy
   via_proxy?: boolean
   enabled?: boolean
 }
 
+export type CustomKeyTestResult = {
+  key_tail: string
+  ok: boolean
+  count?: number
+  latency_ms: number
+  error?: string
+}
+
 export type CustomProviderTestResult = {
   ok: boolean
-  models?: string[]
+  /** 逐 key 结果（多 key 一键全验） */
+  results?: CustomKeyTestResult[]
   count?: number
   latency_ms?: number
   error?: string

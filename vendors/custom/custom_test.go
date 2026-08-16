@@ -525,7 +525,7 @@ func TestGeminiListModels(t *testing.T) {
 	}))
 	defer srv.Close()
 	v := newTestVendor(t, ProtoGemini, srv.URL)
-	ids, err := v.proto.listModels(context.Background(), v)
+	ids, err := v.proto.listModels(context.Background(), v, "sk-test")
 	if err != nil {
 		t.Fatalf("listModels: %v", err)
 	}

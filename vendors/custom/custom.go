@@ -28,14 +28,6 @@ import (
 	"github.com/6Kmfi6HP/opencode2api/core/contract"
 )
 
-// Params 键（ProviderSpec.Params；配置 providers[].params 同名透传）。
-const (
-	ParamBaseURL  = "base_url"
-	ParamAPIKey   = "api_key"
-	ParamProtocol = "protocol"
-	ParamViaProxy = "via_proxy"
-)
-
 // 协议取值。
 const (
 	ProtoOpenAI    = "openai"
@@ -53,10 +45,13 @@ type Config struct {
 	ID        string // 实例标识（用户自定义，模型前缀即它）
 	Name      string // 展示名
 	BaseURL   string // 上游根地址（尾斜杠容忍）
-	APIKey    string
 	Protocol  string // openai | anthropic | gemini | responses
 	ViaProxy  bool   // 出站走代理池（TierFree）；默认直连（TierPaid）
 	Transport contract.Transport
+	// APIKeys 多 key（轮询/错误转移调度）；APIKey 为单 key 兼容字段，两者合并去重。
+	APIKeys     []string
+	APIKey      string
+	KeyStrategy string // round_robin（默认）| failover
 	// NoModelCache 禁用目录磁盘缓存（读与写）：连通测试等"必须真连"的场景使用。
 	NoModelCache bool
 }
@@ -65,6 +60,7 @@ type Config struct {
 type Vendor struct {
 	cfg         Config
 	proto       chatProto
+	pool        *keyPool
 	mu          sync.Mutex
 	models      []contract.Model // 最近一次成功目录（失败时兜底返回）
 	lastErr     string
@@ -102,7 +98,11 @@ func New(cfg Config) (*Vendor, error) {
 	if cfg.Transport == nil {
 		cfg.Transport = contract.DirectTransport{}
 	}
-	v := &Vendor{cfg: cfg, proto: p}
+	keys := append([]string(nil), cfg.APIKeys...)
+	if k := strings.TrimSpace(cfg.APIKey); k != "" {
+		keys = append(keys, k)
+	}
+	v := &Vendor{cfg: cfg, proto: p, pool: newKeyPool(keys, cfg.KeyStrategy)}
 	// 预热磁盘缓存：启动首拉失败时 ListModels 也能立即给出上次目录（stale-while-revalidate）。
 	if !cfg.NoModelCache {
 		v.models = v.loadModelsCache()
@@ -136,11 +136,43 @@ func (v *Vendor) upstreamModel(model string) string {
 // prefixedModel 给上游模型名加本源前缀。
 func (v *Vendor) prefixedModel(upstream string) string { return v.prefix() + upstream }
 
+// PoolStatus key 健康计数（可用/冷却/禁用；状态快照，非用量统计）。
+func (v *Vendor) PoolStatus() KeyPoolStatus { return v.pool.status() }
+
+// ConfiguredKeys 配置内的全部 key 明文（测试端点逐 key 连通验证用）。
+func (v *Vendor) ConfiguredKeys() []string { return v.pool.keysSnapshot() }
+
 // ListModels 拉取上游目录并加前缀。失败（含空列表，防上游抖动清空）时回退
 // 内存缓存 → 磁盘缓存；成功则更新两级缓存并写盘（stale-while-revalidate：
 // 进程重启后无需等上游，首个 /v1/models 即含自定义模型）。
 func (v *Vendor) ListModels(ctx context.Context) ([]contract.Model, error) {
-	ids, err := v.proto.listModels(ctx, v)
+	var ids []string
+	var err error
+	// 目录拉取同样走 key 池：429/401 标记后换下一个 key。
+	tried := map[int]bool{}
+	for {
+		var key string
+		var idx int
+		var ok bool
+		if key, idx, ok = v.pool.tryAcquire(tried); !ok {
+			break
+		}
+		tried[idx] = true
+		ids, err = v.proto.listModels(ctx, v, key)
+		if err == nil {
+			break
+		}
+		if se, ok := err.(*keyStatusError); ok {
+			switch se.status {
+			case http.StatusUnauthorized, http.StatusForbidden:
+				v.pool.disable(idx)
+			case http.StatusTooManyRequests:
+				v.pool.cool(idx, se.retryAfter)
+			}
+			continue
+		}
+		break // 传输/解析错误：不标记，走缓存兜底
+	}
 	if err == nil && len(ids) == 0 {
 		// 成功但空列表：多为上游异常，按失败处理以保留既有目录。
 		err = fmt.Errorf("custom %s: empty model list", v.cfg.ID)
@@ -227,21 +259,93 @@ func (v *Vendor) markOK() {
 }
 
 // Chat 非流式：原始 OpenAI 请求体 → 上游协议适配 → OpenAI 形态响应。
+// key 池调度：失败按状态码标记并换 key 重试（见 withKeys）。
 func (v *Vendor) Chat(ctx context.Context, msg *contract.Message) (*contract.Reply, error) {
 	body, err := v.buildBody(msg, false)
 	if err != nil {
 		return nil, err
 	}
-	return v.proto.chat(ctx, v, v.upstreamModel(msg.Model), body)
+	return v.withKeys(func(key string) (*contract.Reply, error) {
+		return v.proto.chat(ctx, v, v.upstreamModel(msg.Model), key, body)
+	})
 }
 
-// ChatStream 流式：返回 OpenAI Chat 形态 SSE（协议层负责原生流转换）。
+// ChatStream 流式：返回 OpenAI Chat 形态 SSE（协议层负责原生流转换），同样走 key 池。
 func (v *Vendor) ChatStream(ctx context.Context, msg *contract.Message) (*contract.Stream, error) {
 	body, err := v.buildBody(msg, true)
 	if err != nil {
 		return nil, err
 	}
-	return v.proto.chatStream(ctx, v, v.upstreamModel(msg.Model), body)
+	return v.withKeysStream(func(key string) (*contract.Stream, error) {
+		return v.proto.chatStream(ctx, v, v.upstreamModel(msg.Model), key, body)
+	})
+}
+
+// withKeys 非流式调用的 key 池编排：按调度挑可用 key，429 冷却（Retry-After）、
+// 401/403 禁用并换下一个 key 重试，同请求每 key 至多一次；400/404 等请求级错误
+// 与 key 无关立即返回；全部耗尽返回最后一次结果（交由外层厂商级 failover 接管）。
+func (v *Vendor) withKeys(call func(key string) (*contract.Reply, error)) (*contract.Reply, error) {
+	tried := map[int]bool{}
+	var lastReply *contract.Reply
+	var lastErr error
+	for {
+		key, idx, ok := v.pool.tryAcquire(tried)
+		if !ok {
+			break
+		}
+		tried[idx] = true
+		reply, err := call(key)
+		lastReply, lastErr = reply, err
+		if err != nil || reply == nil {
+			continue // 传输错误：不标记，换下一个 key
+		}
+		if reply.Status >= 200 && reply.Status < 300 {
+			return reply, nil
+		}
+		switch {
+		case reply.Status == http.StatusUnauthorized || reply.Status == http.StatusForbidden:
+			v.pool.disable(idx)
+		case reply.Status == http.StatusTooManyRequests:
+			v.pool.cool(idx, parseRetryAfter(reply.Headers.Get("Retry-After")))
+		case reply.Status >= 500 || reply.Status == http.StatusRequestTimeout:
+			// 上游侧问题：不标记 key，仅换 key 重试
+		default:
+			return reply, nil // 请求级错误：换 key 也一样
+		}
+	}
+	return lastReply, lastErr
+}
+
+// withKeysStream 流式版（Stream 无响应头可读 Retry-After，429 用缺省冷却）。
+func (v *Vendor) withKeysStream(call func(key string) (*contract.Stream, error)) (*contract.Stream, error) {
+	tried := map[int]bool{}
+	var lastStream *contract.Stream
+	var lastErr error
+	for {
+		key, idx, ok := v.pool.tryAcquire(tried)
+		if !ok {
+			break
+		}
+		tried[idx] = true
+		stream, err := call(key)
+		lastStream, lastErr = stream, err
+		if err != nil || stream == nil {
+			continue
+		}
+		if stream.Status >= 200 && stream.Status < 300 {
+			return stream, nil
+		}
+		switch {
+		case stream.Status == http.StatusUnauthorized || stream.Status == http.StatusForbidden:
+			v.pool.disable(idx)
+		case stream.Status == http.StatusTooManyRequests:
+			v.pool.cool(idx, 0)
+		case stream.Status >= 500 || stream.Status == http.StatusRequestTimeout:
+		default:
+			return stream, nil
+		}
+	}
+	return lastStream, lastErr
 }
 
 // buildBody 取 Extra 里的原始 OpenAI 请求体，改写 model/stream 后交协议层。
@@ -278,12 +382,22 @@ func (v *Vendor) buildBody(msg *contract.Message, stream bool) ([]byte, error) {
 
 // chatProto 单个出站协议的适配器：统一 OpenAI 形态 ⇄ 厂商原生。
 type chatProto interface {
-	// listModels 拉取上游模型目录（原始 ID，不带本源前缀）。
-	listModels(ctx context.Context, v *Vendor) ([]string, error)
+	// listModels 拉取上游模型目录（原始 ID，不带本源前缀）；key 由池调度传入。
+	listModels(ctx context.Context, v *Vendor, key string) ([]string, error)
 	// chat 非流式调用；rawBody 为 OpenAI Chat 请求体，返回 OpenAI Chat 响应体。
-	chat(ctx context.Context, v *Vendor, model string, rawBody []byte) (*contract.Reply, error)
+	chat(ctx context.Context, v *Vendor, model, key string, rawBody []byte) (*contract.Reply, error)
 	// chatStream 流式调用；返回 OpenAI Chat 形态 SSE。
-	chatStream(ctx context.Context, v *Vendor, model string, rawBody []byte) (*contract.Stream, error)
+	chatStream(ctx context.Context, v *Vendor, model, key string, rawBody []byte) (*contract.Stream, error)
+}
+
+// keyStatusError 协议层携带上游状态码的错误（供 ListModels 的 key 池标记）。
+type keyStatusError struct {
+	status     int
+	retryAfter time.Duration
+}
+
+func (e *keyStatusError) Error() string {
+	return fmt.Sprintf("upstream status %d", e.status)
 }
 
 // do 经统一网关 Transport 发出请求（直连或代理池由配置决定），回传出口节点地址。
