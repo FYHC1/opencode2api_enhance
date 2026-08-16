@@ -3,6 +3,7 @@
 package manager
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -55,16 +56,50 @@ func (m *Manager) cleanDataAt(level int) error {
 		}
 	}
 
-	// 3) 删除配置（备份 .bak）
+	// 3) 删除配置（备份 .bak）——但保留 providers/routing：
+	// 自定义模型源定义存在 config.json 的 providers 里（桌面态核心与 manager 共用此文件），
+	// 整份删除会连带清空用户的自定义模型；"清除记录"的语义不应包含它们
+	//（想清空自定义模型请用自定义模型页的「清空全部」）。
 	if level == 3 {
 		if _, err := os.Stat(p.Config); err == nil {
 			_ = copyFile(p.Config, p.Config+".bak")
 			if err := os.Remove(p.Config); err != nil {
 				return fmt.Errorf("删除配置失败: %w", err)
 			}
+			if err := writePreservedVendorConfig(p.Config); err != nil {
+				return fmt.Errorf("保留自定义模型源失败: %w", err)
+			}
 		}
 	}
 	return nil
+}
+
+// writePreservedVendorConfig 从 .bak 中提取 providers/routing 写回最小配置，
+// 使三级清理后自定义模型源与路由映射幸存（其余配置项回到默认）。
+func writePreservedVendorConfig(configPath string) error {
+	data, err := os.ReadFile(configPath + ".bak")
+	if err != nil {
+		return nil // 无备份可提取：保持删除态
+	}
+	var full map[string]any
+	if json.Unmarshal(data, &full) != nil {
+		return nil // 备份损坏：保持删除态
+	}
+	minimal := map[string]any{}
+	if v, ok := full["providers"]; ok && v != nil {
+		minimal["providers"] = v
+	}
+	if v, ok := full["routing"]; ok && v != nil {
+		minimal["routing"] = v
+	}
+	if len(minimal) == 0 {
+		return nil
+	}
+	out, err := json.MarshalIndent(minimal, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(configPath, out, 0o644)
 }
 
 func writeFile(path string, data []byte) error {

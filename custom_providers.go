@@ -284,122 +284,147 @@ func customProvidersSaveHandler(m *manager.Manager) http.HandlerFunc {
 			writeAdminErr(w, http.StatusBadRequest, "请求体需为 {\"providers\":[...]}")
 			return
 		}
-		cfg := loadConfig(configPath)
-
-		// 保留非 custom 条目；providers 原本为空（隐式全注册）→ 物化内建条目，
-		// 防显式列表只含 custom 导致内建源全部失效。
-		var kept []ProviderCfg
-		for _, pc := range cfg.Providers {
-			if pc.Type != "custom" {
-				kept = append(kept, pc)
-			}
-		}
-		if len(cfg.Providers) == 0 {
-			for _, t := range []string{"opencode", "windsurf"} {
-				enabled := true
-				kept = append(kept, ProviderCfg{ID: t, Type: t, Enabled: &enabled})
-			}
-		}
-
-		seen := map[string]bool{}
-		// 旧 custom 条目的 key 列表（按 id）：编辑时 keys 全留空 → 保留旧 keys（「留空则不修改」）。
-		oldKeys := map[string][]string{}
-		for _, pc := range cfg.Providers {
-			if pc.Type == "custom" {
-				if ks := customKeyListFromParams(pc.Params); len(ks) > 0 {
-					oldKeys[pc.ID] = ks
-				}
-			}
-		}
-		for _, in := range req.Providers {
-			in.ID = strings.TrimSpace(in.ID)
-			if !customIDPattern.MatchString(in.ID) {
-				writeAdminErr(w, http.StatusBadRequest, fmt.Sprintf("无效 id %q：需字母数字开头，可含 - _，≤32 字符", in.ID))
-				return
-			}
-			if in.ID == "opencode" || in.ID == "windsurf" {
-				writeAdminErr(w, http.StatusBadRequest, fmt.Sprintf("id %q 与内建厂商冲突", in.ID))
-				return
-			}
-			if seen[in.ID] {
-				writeAdminErr(w, http.StatusBadRequest, fmt.Sprintf("重复 id %q", in.ID))
-				return
-			}
-			seen[in.ID] = true
-			in.BaseURL = strings.TrimRight(strings.TrimSpace(in.BaseURL), "/")
-			u, err := url.Parse(in.BaseURL)
-			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-				writeAdminErr(w, http.StatusBadRequest, fmt.Sprintf("源 %s：base_url 需为 http(s) 地址", in.ID))
-				return
-			}
-			switch in.Protocol {
-			case "":
-				in.Protocol = custom.ProtoOpenAI
-			case custom.ProtoOpenAI, custom.ProtoAnthropic, custom.ProtoGemini, custom.ProtoResponses:
-			default:
-				writeAdminErr(w, http.StatusBadRequest, fmt.Sprintf("源 %s：协议需为 openai|anthropic|gemini|responses", in.ID))
-				return
-			}
-			strategy := in.KeyStrategy
-			if strategy == "" {
-				strategy = custom.StrategyRoundRobin
-			}
-			if strategy != custom.StrategyRoundRobin && strategy != custom.StrategyFailover {
-				writeAdminErr(w, http.StatusBadRequest, fmt.Sprintf("源 %s：key 策略需为 round_robin|failover", in.ID))
-				return
-			}
-			keys := inputKeyList(in)
-			if len(keys) == 0 {
-				keys = oldKeys[in.ID] // 编辑时全留空 = 保留旧 keys
-			}
-			allowed := make([]string, 0, len(in.AllowedModels))
-			for _, m := range in.AllowedModels {
-				if m = strings.TrimSpace(m); m != "" {
-					allowed = append(allowed, m)
-				}
-			}
-			enabled := in.Enabled == nil || *in.Enabled
-			params := map[string]any{
-				custom.ParamBaseURL:     in.BaseURL,
-				custom.ParamProtocol:    in.Protocol,
-				custom.ParamKeyStrategy: strategy,
-				custom.ParamViaProxy:    in.ViaProxy,
-			}
-			if len(keys) > 0 {
-				params[custom.ParamAPIKeys] = keys
-			}
-			if len(allowed) > 0 {
-				params[custom.ParamAllowedModels] = allowed
-			}
-			pc := ProviderCfg{
-				ID: in.ID, Type: "custom", Name: strings.TrimSpace(in.Name),
-				Enabled: &enabled, Params: params,
-			}
-			kept = append(kept, pc)
-		}
-
-		cfg.Providers = kept
-		if err := saveConfig(configPath, cfg); err != nil {
-			writeAdminErr(w, http.StatusInternalServerError, "配置写入失败: "+err.Error())
+		views, err := applyCustomProvidersSave(m, req.Providers)
+		if err != nil {
+			writeAdminErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		applyConfig(cfg)
-		rebuildVendors()
+		writeAdminJSON(w, map[string]any{"status": "ok", "providers": views})
+	}
+}
 
-		// manager 配置透传：后续生成的实例/网关子进程配置继承自定义源（尽力而为）。
-		if m != nil {
-			if err := m.SyncCustomProviders(configPath, customEntriesForManager(kept)); err != nil {
-				slog.Warn("sync custom providers to manager config failed", "error", err)
-			}
-			// 传播到已存在实例/网关的 runtime 配置：运行中的子进程经 1s 配置监视
-			// 热重建厂商（不重启即出现在其 /v1/models），停着的实例保持磁盘一致。
-			if err := m.PropagateCustomProviders(); err != nil {
-				slog.Warn("propagate custom providers to runtime configs failed", "error", err)
+// customProvidersClearHandler POST：清空全部自定义源（含目录磁盘缓存）。
+// 与设置页「数据清理」相互独立——那里任何级别都不再动自定义模型源。
+func customProvidersClearHandler(m *manager.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		views, err := applyCustomProvidersSave(m, nil)
+		if err != nil {
+			writeAdminErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if err := custom.PurgeAllModelCaches(); err != nil {
+			slog.Warn("purge custom model caches failed", "error", err)
+		}
+		writeAdminJSON(w, map[string]any{"status": "ok", "cleared": true, "providers": views})
+	}
+}
+
+// applyCustomProvidersSave 校验并整表落盘自定义源集合：保存 → 热重建 →
+// manager 透传 → 子进程传播，返回最新视图。inputs 为 nil 即清空全部自定义源
+// （非 custom 条目保留）。
+func applyCustomProvidersSave(m *manager.Manager, inputs []customProviderInput) ([]customProviderView, error) {
+	cfg := loadConfig(configPath)
+
+	// 保留非 custom 条目；providers 原本为空（隐式全注册）→ 物化内建条目，
+	// 防显式列表只含 custom 导致内建源全部失效。
+	var kept []ProviderCfg
+	for _, pc := range cfg.Providers {
+		if pc.Type != "custom" {
+			kept = append(kept, pc)
+		}
+	}
+	if len(cfg.Providers) == 0 {
+		for _, t := range []string{"opencode", "windsurf"} {
+			enabled := true
+			kept = append(kept, ProviderCfg{ID: t, Type: t, Enabled: &enabled})
+		}
+	}
+
+	seen := map[string]bool{}
+	// 旧 custom 条目的 key 列表（按 id）：编辑时 keys 全留空 → 保留旧 keys（「留空则不修改」）。
+	oldKeys := map[string][]string{}
+	for _, pc := range cfg.Providers {
+		if pc.Type == "custom" {
+			if ks := customKeyListFromParams(pc.Params); len(ks) > 0 {
+				oldKeys[pc.ID] = ks
 			}
 		}
-
-		writeAdminJSON(w, map[string]any{"status": "ok", "providers": customProviderViews()})
 	}
+	for _, in := range inputs {
+		in.ID = strings.TrimSpace(in.ID)
+		if !customIDPattern.MatchString(in.ID) {
+			return nil, fmt.Errorf("无效 id %q：需字母数字开头，可含 - _，≤32 字符", in.ID)
+		}
+		if in.ID == "opencode" || in.ID == "windsurf" {
+			return nil, fmt.Errorf("id %q 与内建厂商冲突", in.ID)
+		}
+		if seen[in.ID] {
+			return nil, fmt.Errorf("重复 id %q", in.ID)
+		}
+		seen[in.ID] = true
+		in.BaseURL = strings.TrimRight(strings.TrimSpace(in.BaseURL), "/")
+		u, err := url.Parse(in.BaseURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return nil, fmt.Errorf("源 %s：base_url 需为 http(s) 地址", in.ID)
+		}
+		switch in.Protocol {
+		case "":
+			in.Protocol = custom.ProtoOpenAI
+		case custom.ProtoOpenAI, custom.ProtoAnthropic, custom.ProtoGemini, custom.ProtoResponses:
+		default:
+			return nil, fmt.Errorf("源 %s：协议需为 openai|anthropic|gemini|responses", in.ID)
+		}
+		strategy := in.KeyStrategy
+		if strategy == "" {
+			strategy = custom.StrategyRoundRobin
+		}
+		if strategy != custom.StrategyRoundRobin && strategy != custom.StrategyFailover {
+			return nil, fmt.Errorf("源 %s：key 策略需为 round_robin|failover", in.ID)
+		}
+		keys := inputKeyList(in)
+		if len(keys) == 0 {
+			keys = oldKeys[in.ID] // 编辑时全留空 = 保留旧 keys
+		}
+		allowed := make([]string, 0, len(in.AllowedModels))
+		for _, am := range in.AllowedModels {
+			if am = strings.TrimSpace(am); am != "" {
+				allowed = append(allowed, am)
+			}
+		}
+		enabled := in.Enabled == nil || *in.Enabled
+		params := map[string]any{
+			custom.ParamBaseURL:     in.BaseURL,
+			custom.ParamProtocol:    in.Protocol,
+			custom.ParamKeyStrategy: strategy,
+			custom.ParamViaProxy:    in.ViaProxy,
+		}
+		if len(keys) > 0 {
+			params[custom.ParamAPIKeys] = keys
+		}
+		if len(allowed) > 0 {
+			params[custom.ParamAllowedModels] = allowed
+		}
+		pc := ProviderCfg{
+			ID: in.ID, Type: "custom", Name: strings.TrimSpace(in.Name),
+			Enabled: &enabled, Params: params,
+		}
+		kept = append(kept, pc)
+	}
+
+	cfg.Providers = kept
+	if err := saveConfig(configPath, cfg); err != nil {
+		return nil, fmt.Errorf("配置写入失败: %w", err)
+	}
+	applyConfig(cfg)
+	rebuildVendors()
+
+	// manager 配置透传：后续生成的实例/网关子进程配置继承自定义源（尽力而为）。
+	if m != nil {
+		if err := m.SyncCustomProviders(configPath, customEntriesForManager(kept)); err != nil {
+			slog.Warn("sync custom providers to manager config failed", "error", err)
+		}
+		// 传播到已存在实例/网关的 runtime 配置：运行中的子进程经 1s 配置监视
+		// 热重建厂商（不重启即出现在其 /v1/models），停着的实例保持磁盘一致。
+		if err := m.PropagateCustomProviders(); err != nil {
+			slog.Warn("propagate custom providers to runtime configs failed", "error", err)
+		}
+	}
+
+	return customProviderViews(), nil
 }
 
 // customEntriesForManager 把 ProviderCfg 集合转为 manager 透传的 map 形态（custom 部分）。

@@ -56,6 +56,8 @@ export default function CustomModelsPage({ toast }: { toast: (msg: string, ok?: 
   const [saving, setSaving] = useState(false)
   const [testResult, setTestResult] = useState<CustomProviderTestResult | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  const [confirmClear, setConfirmClear] = useState(false)
+  const [clearing, setClearing] = useState(false)
 
   // toast 用 ref 封装（App 的 showToast 每次渲染重建），effect 只跑一次
   const toastRef = useRef(toast)
@@ -164,6 +166,21 @@ export default function CustomModelsPage({ toast }: { toast: (msg: string, ok?: 
     }
   }
 
+  // 清空全部自定义源（含本地模型缓存）；与设置页「数据清理」互不影响
+  const doClearAll = async () => {
+    setClearing(true)
+    try {
+      await api.customProvidersClear()
+      setList([])
+      setConfirmClear(false)
+      toast('已清空全部自定义模型源', true)
+    } catch (e) {
+      toast(`清空失败：${String(e)}`, false)
+    } finally {
+      setClearing(false)
+    }
+  }
+
   /** 上次成功时间的短显示（HH:MM） */
   const fmtTime = (iso?: string) => {
     if (!iso) return ''
@@ -256,14 +273,45 @@ export default function CustomModelsPage({ toast }: { toast: (msg: string, ok?: 
             保存后模型进入 /v1/models（模型名带 <code className="bg-zinc-100 px-1 rounded">源ID/</code> 前缀），调用、日志、统计与节点池全部复用统一网关。
           </p>
         </div>
-        <button
-          onClick={openAdd}
-          className="flex items-center gap-1.5 bg-zinc-900 text-white rounded-lg px-4 py-2 hover:bg-zinc-700 whitespace-nowrap"
-        >
-          <Plus size={14} />
-          添加模型源
-        </button>
+        <div className="flex items-center gap-2">
+          {(list?.length ?? 0) > 0 && (
+            <button
+              onClick={() => setConfirmClear(true)}
+              className="flex items-center gap-1.5 border border-red-200 text-red-600 rounded-lg px-3 py-2 hover:bg-red-50 whitespace-nowrap"
+            >
+              <Trash2 size={14} />
+              清空全部
+            </button>
+          )}
+          <button
+            onClick={openAdd}
+            className="flex items-center gap-1.5 bg-zinc-900 text-white rounded-lg px-4 py-2 hover:bg-zinc-700 whitespace-nowrap"
+          >
+            <Plus size={14} />
+            添加模型源
+          </button>
+        </div>
       </div>
+
+      {/* 清空全部二次确认 */}
+      {confirmClear && (
+        <div className="bg-red-50 border border-red-200 rounded-2xl p-4 flex items-center gap-3 text-sm">
+          <span className="flex-1 text-red-700">
+            确认清空全部 {list?.length ?? 0} 个自定义模型源？将同时删除本地模型清单缓存；内建模型源与其它数据不受影响（设置页「数据清理」也不会再动自定义模型源）。
+          </span>
+          <button
+            type="button"
+            onClick={() => void doClearAll()}
+            disabled={clearing}
+            className="px-3 py-1.5 rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 whitespace-nowrap"
+          >
+            {clearing ? '清空中…' : '确认清空'}
+          </button>
+          <button type="button" onClick={() => setConfirmClear(false)} className="px-3 py-1.5 rounded bg-white border border-zinc-200 text-zinc-600 whitespace-nowrap">
+            取消
+          </button>
+        </div>
+      )}
 
       {/* 源列表 */}
       {list === null ? (

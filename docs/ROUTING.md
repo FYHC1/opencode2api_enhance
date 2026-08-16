@@ -196,3 +196,50 @@
 | 质量分排序 | 自动降权坏节点 | 需探测数据积累 | ✅ 做 |
 | 流预检 Prime | 客户端无感挡死流 | 与现有超时重叠需整合 | ✅ 做 |
 | 巡检预算 | 防探测打爆额度 | 实现成本 | ✅ 做 |
+
+---
+
+## 出站链路：谁走 sing-box，谁直连（⭐ 修改前必读）
+
+> 本节回答一个高频困惑："我的模型到底走不走 sing-box？"以及维护者改动调用链前必须知道的分层语义。
+> 结论先行：**出站走不走代理由「进程内 Tier 判定 + 该进程配置的 SOCKS 池」共同决定**，两者缺一不可。
+
+### 1. Tier 判定（每个厂商自己决定）
+
+| 厂商/模型 | Tier | 含义 |
+|---|---|---|
+| opencode 免费模型（内建） | **恒 TierFree** | 永远走代理池，不看任何开关 |
+| windsurf（内建账号池） | 自有直连客户端 | 不经代理池（历史行为） |
+| **自定义模型源** | `via_proxy=true` → TierFree；`false`（默认）→ TierPaid | 仅此开关控制（`vendors/custom` 的 `tier()`），与实例池 `route_mode` **互不相干** |
+
+TierFree = `Transport.Client` 返回 SOCKS 池客户端；TierPaid = 裸直连客户端（`socks.go` 的
+`getHTTPClientForTierWithProxy`：TierPaid 恒返回直连）。**改 tier 语义前先想清楚会不会把内建免费模型改成直连**（上游会按 IP 风控）。
+
+### 2. 每个进程的"SOCKS 池"指什么（同样关键）
+
+| 请求打到 | 该进程的池 | 内建模型走 | 自定义 via_proxy=true 走 | false 走 |
+|---|---|---|---|---|
+| **实例端口**（独享/池成员，40100+/44200+） | `active_socks5` = 本实例 sing-box | 本实例节点 ✓ | 本实例节点 ✓ | 直连 |
+| **统一网关**（+80） | `socks5_proxies` = 入池成员 sing-box 列表（round_robin/failover/smart） | 成员节点 ✓ | 成员节点 ✓ | 直连 |
+| **管理端口**（40000/44100，面板 UI 同源） | **没有配置池** | **直连！** | **直连！** | 直连 |
+
+⚠️ 管理进程虽然也监听 `/v1`，但它的 config.json 不含 socks 池——**想走代理请打网关或实例端口**。
+日志页里"全部直连"的第一排查项就是：请求打的是哪个端口 + 该进程配置里 socks 三键（`socks5_proxies` / `active_socks5` / `route_mode`）是否还在。
+
+### 3. 「上游代理出口」（E1）会接管 TierFree 的含义
+
+设置页配置 `upstream_proxy` 后，实例/网关的 TierFree 出口全部改指该地址（跳过 sing-box 节点）。
+此时"走 sing-box"实际是"走那个上游代理"——**代理一死，勾了代理的自定义源和内建模型一起 502**
+（典型症状：`socks5 connect 127.0.0.1:xxx: connectex: ... actively refused`）。
+
+### 4. 网关配置文件的多写者警示（维护者）
+
+`runtime/_unified-gateway/opencode2api.json` 存在多个写者，**任何人改动这里都必须遵守**：
+
+- 写者清单：Go 管理器 `buildRouterCfg`（恒写完整形状，含 socks 三键）、Rust 壳 `sync_gateway`
+  （`opencode_cfg.rs`，同样恒写完整形状）、网关进程启动时的 AppConfig 自写回盘、
+  自定义源传播补丁（`patchProvidersFile`，map round-trip 保留既有键）
+- **新写者必须**：① 原子写（tmp + rename）；② 保留既有键，只增改自己的键段
+- 典型事故：配置文件丢失 socks 三键 → 网关全直连（日志 `route_mode: smart` 是**内置默认值**，
+  出现它 + 全部"直连"即配置丢段症状）。**恢复方法**：实例池页做一次成员变化（停/启一个池成员
+  或切路由模式）触发网关配置全量重生成 + 子进程重启
