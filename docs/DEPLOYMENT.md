@@ -87,7 +87,7 @@ journalctl -u opencode2api-manager -f        # 查看日志
 
 ### 6. Docker 部署（管理器镜像，含前端 + sing-box）
 
-仓库根目录提供管理器专用 `Dockerfile` 与 `docker-compose.yml`（与下方「上游代理本体」的 `deploy/compose/` 不同：本镜像 = core + 六页前端 + sing-box 出口，开箱即用的完整管理器）：
+仓库根目录提供管理器专用 `Dockerfile` 与 `docker-compose.yml`（与下方「上游代理本体」的 `deploy/compose/` 不同：本镜像 = core + 七页前端 + sing-box 出口，开箱即用的完整管理器）：
 
 ```bash
 docker compose up -d --build   # 或 docker build -t opencode2api-manager:latest .
@@ -201,13 +201,13 @@ sudo systemctl status opencode2api
 
 ## 管理器（Web UI）headless 部署
 
-同一二进制以管理器方式运行即是完整 Web 服务：直接提供六页管理 UI
+同一二进制以管理器方式运行即是完整 Web 服务：直接提供七页管理 UI
 （独享 / 实例池 / 节点池 / 统计 / 日志 / 设置）与 `/api/admin/*` API，
 无需桌面壳即可在服务器 / 内网使用（需在可执行文件旁放置 `sing-box.exe`）。
 
 ```bash
 ./opencode2api -port 40000 -password "" -listen 0.0.0.0
-# 浏览器访问 http://<host>:40000/（前端为无登录页六页 UI，默认无鉴权）
+# 浏览器访问 http://<host>:40000/（前端为无登录页七页 UI，默认无鉴权）
 ```
 
 - 默认监听 `:<port>`（全接口）；服务器部署建议显式 `-listen 0.0.0.0`，

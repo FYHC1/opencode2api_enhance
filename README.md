@@ -17,7 +17,9 @@
 
 本地**多实例代理管理器**，支持 Windows / Linux / macOS 桌面（Tauri 2 壳）与 **Docker / Headless Web**（同一 Go core）多端部署。每个"实例" = 一个 opencode2api 代理进程 + 一个 sing-box 出口，绑定不同代理节点，把 OpenAI / Anthropic / Responses 风格的请求转发到 OpenCode 上游，并可通过多实例 × 多节点分散请求、绕过按 IP 的频率限制。
 
-UI 参照 Windsurf Account Manager 的浅色官网风格：无边框窗口 + 自定义标题栏 + 侧边栏六页（独享 / 实例池 / 节点池 / 统计 / 日志 / 设置），关闭窗口最小化到托盘、实例继续运行；headless 端同一六页 UI 经浏览器访问。
+除内建免费源外，还支持**自定义模型源**：用你自己的 API Key 接入任意第三方供应商（GLM / DeepSeek / Kimi / OpenRouter / OpenAI / Anthropic / Gemini 等，四种上游协议），多 Key 轮询/错误转移，与免费源并列聚合在同一网关下——详见 [自定义模型源指南](docs/CUSTOM-MODELS.md)。
+
+UI 参照 Windsurf Account Manager 的浅色官网风格：无边框窗口 + 自定义标题栏 + 侧边栏七页（独享 / 实例池 / 节点池 / **自定义模型** / 统计 / 日志 / 设置），关闭窗口最小化到托盘、实例继续运行；headless 端同一七页 UI 经浏览器访问。
 
 > 本项目不是 OpenAI、Anthropic 或 OpenCode 的官方项目。请遵守上游服务条款，并只在你有权限的环境中使用。
 
@@ -34,6 +36,7 @@ UI 参照 Windsurf Account Manager 的浅色官网风格：无边框窗口 + 自
 - **Clash 集成**：配置 Clash 外部控制地址与密钥即可拉取节点；也可读取 Clash Verge 本地 profiles 目录（仅桌面端展示，headless 端隐藏）
 - **订阅管理**：支持添加多条订阅源，每条独立配置自动拉取间隔与导入目标（独享/进池/仅节点池）；自动识别 Clash YAML / V2Ray base64 / 明文链接三种格式，容错解码（URL-safe 变体/缺 padding/含换行均可）、节点名 percent-decode（中文/emoji）、公告伪节点过滤、重名去重、IPv6 主机，解析能力对齐 mihomo/v2rayN 等主流客户端
 - **性能模式**：链路级主动探活（质量分 0~100 / healthy·degraded·flaky·down）+ 质量加权路由 + 熔断自动恢复 + 请求级竞速（并行发最优 2 节点取快）——坏节点自动剔除、恢复自动回归，全程无感；单节点时自动退化直连。因对话卡顿而生，一篇想说清楚的[性能模式说明](docs/PERFORMANCE-MODE.md)
+- **自定义模型源**：自带 API Key 接入第三方供应商（**OpenAI 兼容 / Anthropic / OpenAI Responses / Gemini** 四协议，多源并存），多 Key 池支持**轮询 / 错误转移**调度——429 自动冷却、401/403 自动禁用换 Key；保存即热生效（含已运行实例，无需重启）、模型清单磁盘缓存（重启即得）；模型带 `源ID/` 前缀进入统一 `/v1/models`，统计/日志/失败切换全链路复用，详见 [指南](docs/CUSTOM-MODELS.md)
 - **Token 统计**：按实例聚合用量，支持按节点下钻明细与**按天查看**；重置统计（可清除已删除节点历史）
 - **调用日志**：全流程日志（成功/失败/切换/超时），按天筛选、时段/节点分析、一键清空；直连请求显示「直连」
 - **残留进程清理**：一键探测/勾选/清除占进程的孤儿节点与探针残留（运行中的实例/网关自动跳过）
@@ -44,7 +47,8 @@ UI 参照 Windsurf Account Manager 的浅色官网风格：无边框窗口 + 自
 
 1. 启动 `opencode2api-manager.exe`（首次运行自动在 exe 旁生成 `bin/` 目录，内含 opencode2api 与 sing-box 子程序）
 2. **节点池**页 →「订阅导入」添加订阅源（或设置 Clash 外部控制后扫描）→ 拉取节点 → 勾选可用 →【入池】聚合到统一网关 或【设为独享】
-3. **独享 / 实例池**页 →「启动」→ 用 `http://127.0.0.1:{实例端口}/v1`（独享）或统一网关地址（入池）作为 API 地址
+3. **自定义模型**页（可选）→「添加模型源」→ 填 API 地址 / 协议 / Key（可多 Key）→「测试并获取模型」→ 保存即热生效
+4. **独享 / 实例池**页 →「启动」→ 用 `http://127.0.0.1:{实例端口}/v1`（独享）或统一网关地址（入池）作为 API 地址
 
 ## Linux / Headless 部署
 
@@ -124,16 +128,16 @@ npm run tauri:dev
 ## 架构
 
 ```
-┌─────────────────────────────────────────────┐
-│  Tauri 2 前端（React + Tailwind）            │
-│  独享/实例池/节点池/统计/日志/设置（HTTP fetch）│
-└──────────────────┬──────────────────────────┘
+┌──────────────────────────────────────────────────┐
+│  Tauri 2 前端（React + Tailwind）                 │
+│  独享/实例池/节点池/自定义模型/统计/日志/设置       │
+└──────────────────┬───────────────────────────────┘
                    │ http://127.0.0.1:<port>/api/admin/*
-┌──────────────────▼──────────────────────────┐
-│  Go core 管理器（core/manager + main 包）     │
-│  实例/网关/节点/扫描/统计/日志/配置 + 协议转换   │
-│  vendors/opencode · vendors/windsurf（多厂商）│
-└──────────────────┬──────────────────────────┘
+┌──────────────────▼───────────────────────────────┐
+│  Go core 管理器（core/manager + main 包）          │
+│  实例/网关/节点/扫描/统计/日志/配置 + 协议转换       │
+│  vendors/opencode · windsurf · custom（多厂商）    │
+└──────────────────┬───────────────────────────────┘
                    │ 子进程管理
 ┌──────────────────▼──────────────────────────┐
 │  实例 = opencode2api.exe (Go) + sing-box.exe │
@@ -143,7 +147,7 @@ npm run tauri:dev
 
 - **Tauri 壳**：只做窗口/托盘/内嵌二进制释放/拉起 core 管理器（`src-tauri/src/lib.rs`），管理职责全部在 Go core；headless 端（Docker/Web）不依赖壳，同一 core 直接监听 HTTP 提供完整管理 UI
 - **Go core**：一份实现服务所有端（桌面 exe / Web 浏览器 / Docker），经 `/api/admin/*` HTTP 暴露；协议转换（OpenAI/Anthropic/Responses）与厂商契约在 main 包 + `core/contract`
-- **多厂商**：`vendors/opencode`（第一厂商）、`vendors/windsurf`（账号池型：无号自动注册/额度预注册/24h 冷却/无感换号）
+- **多厂商**：`vendors/opencode`（第一厂商）、`vendors/windsurf`（账号池型：无号自动注册/额度预注册/24h 冷却/无感换号）、`vendors/custom`（自定义模型源：自带 Key 接入第三方供应商，四协议 + 多 Key 池）
 - **环境隔离**：正式版 / dev（tauri dev）/ 便携测试（portable.txt）/ Docker 各自独立数据目录与**端口槽位**
   （40000 起每环境一段；sing-box = 实例端口 +2000 紧挨），互不干扰，新开环境无需手动配端口
 - **端口配置化**：来源优先级 环境变量 > config.json（gateway_port/instance_base_port/probe_*_port）> 编译默认
@@ -151,7 +155,7 @@ npm run tauri:dev
 ## 目录结构
 
 ```
-src/                      # React 前端（TitleBar + 侧边栏 + 六页）
+src/                      # React 前端（TitleBar + 侧边栏 + 七页）
 src/lib/api.ts            # 统一 HTTP 对接层（/api/admin/*）
 src-tauri/src/            # Tauri 薄壳（窗口/托盘/自启/内嵌释放）
   embed.rs                # 内嵌二进制释放（按内容哈希校验）
@@ -162,9 +166,10 @@ core/                     # Go 核心层
   aggregator/             # 多厂商模型聚合
   router/                 # 模型到厂商分发 + failover
   manager/                # 管理域（实例/网关/节点/扫描/统计/日志/配置）
-vendors/                  # 厂商层（一厂商 = 一文件夹）
-  opencode/               # 第一厂商
-  windsurf/               # 第二厂商（账号池型）
+vendors/                  # 厂商层（一厂商 = 一文件夹，新增供应商零 core 改动）
+  opencode/               # 第一厂商（免费源）
+  windsurf/               # 第二厂商（账号池型免费源）
+  custom/                 # 自定义模型源（四协议 + 多 Key 池 + 目录缓存）
 bin/                      # 内嵌子程序源（opencode2api.exe / sing-box.exe）
-docs/                     # 部署/性能模式/TESTING/FAQ 等文档
+docs/                     # 部署/自定义模型/性能模式/TESTING/FAQ 等文档
 ```
