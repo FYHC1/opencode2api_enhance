@@ -45,6 +45,7 @@ func TestMergeVendorParamsUnderscoreProtected(t *testing.T) {
 }
 
 func TestNewAggregatorCustomEntry(t *testing.T) {
+	t.Setenv("OPCODE2API_DATA_DIR", t.TempDir()) // 自定义源磁盘缓存隔离
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{{"id": "glm-4.7"}}})
 	}))
