@@ -41,6 +41,7 @@ const (
 	ProtoOpenAI    = "openai"
 	ProtoAnthropic = "anthropic"
 	ProtoGemini    = "gemini"
+	ProtoResponses = "responses"
 )
 
 // keyRawBody 与 core 适配层（upstream.go chatViaVendor）注入的原始 OpenAI 请求体
@@ -91,8 +92,10 @@ func New(cfg Config) (*Vendor, error) {
 		p = &anthropicProto{}
 	case ProtoGemini:
 		p = &geminiProto{}
+	case ProtoResponses:
+		p = &responsesProto{}
 	default:
-		return nil, fmt.Errorf("custom %s: unknown protocol %q (want openai|anthropic|gemini)", cfg.ID, cfg.Protocol)
+		return nil, fmt.Errorf("custom %s: unknown protocol %q (want openai|anthropic|gemini|responses)", cfg.ID, cfg.Protocol)
 	}
 	if cfg.Transport == nil {
 		cfg.Transport = contract.DirectTransport{}

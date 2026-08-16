@@ -129,7 +129,7 @@ SOCKS5 代理列表。
 | 参数 | 必填 | 说明 |
 |---|---|---|
 | `base_url` | ✅ | 上游 API 根地址（含版本路径，如 `https://api.openai.com/v1`、`https://api.anthropic.com/v1`、`https://generativelanguage.googleapis.com/v1beta`；尾斜杠容忍） |
-| `protocol` | — | 出站协议：`openai`（默认，OpenAI 兼容）/ `anthropic` / `gemini` |
+| `protocol` | — | 出站协议：`openai`（默认，OpenAI 兼容）/ `anthropic` / `responses`（OpenAI Responses API）/ `gemini` |
 | `api_key` | — | 上游密钥，由网关持有，调用方无需携带（本地无鉴权网关可留空） |
 | `via_proxy` | — | `true` 时出站走节点池代理（应对地区限制供应商）；默认 `false` 直连 |
 
