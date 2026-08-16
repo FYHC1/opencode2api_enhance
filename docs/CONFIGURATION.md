@@ -71,7 +71,8 @@ SOCKS5 代理列表。
 ### `providers`（厂商注册）
 
 每个厂商一个条目：`type`（对应厂商类型）、`id`、`name`、`enabled`、`params`（厂商自定义参数）。
-**未配置 `providers` 时自动注册全部已编译厂商**（扩增即生效）；配置后按配置注册（`enabled: false` 可关闭某厂商）。
+**未配置 `providers` 时自动注册全部内建厂商**（扩增即生效；`custom` 除外——必须带条目参数）；
+配置后按配置注册（`enabled: false` 可关闭某厂商）。
 
 ```json
 {
@@ -93,6 +94,18 @@ SOCKS5 代理列表。
         "cooldown_seconds": 86400,
         "store_file": ""
       }
+    },
+    {
+      "id": "myglm",
+      "type": "custom",
+      "name": "智谱 GLM",
+      "enabled": true,
+      "params": {
+        "base_url": "https://open.bigmodel.cn/api/paas/v4",
+        "api_key": "sk-...",
+        "protocol": "openai",
+        "via_proxy": false
+      }
     }
   ]
 }
@@ -106,6 +119,21 @@ SOCKS5 代理列表。
 | `quota_threshold` | 20 | 全池最低剩余额度（%）≤ 此值时触发后台预注册新号 |
 | `cooldown_seconds` | 86400（24h） | 换号/耗尽后的账号冷却时长，到期自动回池复用 |
 | `store_file` | 数据目录下 `windsurf_accounts.json` | 账号库持久化路径（跨重启复用账号，不重复注册） |
+
+#### custom 自定义模型源参数（`params`）
+
+用户自带 key 接入第三方供应商（管理面板「自定义模型」页可视化编辑，以下为配置等价形式）。
+**一条 `type: "custom"` 条目 = 一个源，可配多条**；模型在 `/v1/models` 中带 `{id}/` 前缀
+（如 `myglm/glm-4.7`），调用时网关自动剥前缀转发上游。
+
+| 参数 | 必填 | 说明 |
+|---|---|---|
+| `base_url` | ✅ | 上游 API 根地址（含版本路径，如 `https://api.openai.com/v1`、`https://api.anthropic.com/v1`、`https://generativelanguage.googleapis.com/v1beta`；尾斜杠容忍） |
+| `protocol` | — | 出站协议：`openai`（默认，OpenAI 兼容）/ `anthropic` / `gemini` |
+| `api_key` | — | 上游密钥，由网关持有，调用方无需携带（本地无鉴权网关可留空） |
+| `via_proxy` | — | `true` 时出站走节点池代理（应对地区限制供应商）；默认 `false` 直连 |
+
+> 注意：以 `_` 开头的 params 键保留给 core 运行时注入（Transport 等），配置中的同名键会被忽略。
 
 **账号池行为**：请求 swe 时——有可用号立即用（绝不等待注册）；池空时同步注册 1 个恢复服务，其余后台补齐；流中报错自动无感换号（需要备用号，由 `min_available` 保证）；失败账号标记 Dry+冷却，冷却结束自动回池。
 
