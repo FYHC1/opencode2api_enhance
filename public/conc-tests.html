@@ -155,7 +155,10 @@ function esc(s) {
 async function j(method, path, body, raw) {
   const t0 = performance.now();
   const opt = { method, headers: {}, credentials: 'same-origin' };
-  if (body !== undefined) opt.headers['Content-Type'] = 'application/json';
+  if (body !== undefined) {
+    opt.headers['Content-Type'] = 'application/json';
+    opt.body = JSON.stringify(body);
+  }
   let status, text;
   try {
     const res = await fetch('/api/admin' + path, opt);
