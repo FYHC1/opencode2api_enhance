@@ -30,6 +30,7 @@ const emptyForm = (): FormState => ({
 const PROTOCOLS: { value: CustomProtocol; label: string; hint: string }[] = [
   { value: 'openai', label: 'OpenAI 兼容', hint: 'https://api.openai.com/v1' },
   { value: 'anthropic', label: 'Anthropic', hint: 'https://api.anthropic.com/v1' },
+  { value: 'responses', label: 'OpenAI Responses', hint: 'https://api.openai.com/v1' },
   { value: 'gemini', label: 'Google Gemini', hint: 'https://generativelanguage.googleapis.com/v1beta' },
 ]
 
@@ -323,7 +324,7 @@ export default function CustomModelsPage({ toast }: { toast: (msg: string, ok?: 
 
             <div className="space-y-2">
               <label className="block text-sm font-medium text-zinc-700">协议</label>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 gap-2">
                 {PROTOCOLS.map((p) => (
                   <button
                     key={p.value}

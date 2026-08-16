@@ -73,7 +73,7 @@ export type PortCheckResult = {
 }
 
 // 自定义模型源（第七页「自定义模型」）
-export type CustomProtocol = 'openai' | 'anthropic' | 'gemini'
+export type CustomProtocol = 'openai' | 'anthropic' | 'gemini' | 'responses'
 
 export type CustomProviderView = {
   id: string

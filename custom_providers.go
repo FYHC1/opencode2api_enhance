@@ -299,9 +299,9 @@ func customProvidersSaveHandler(m *manager.Manager) http.HandlerFunc {
 			switch in.Protocol {
 			case "":
 				in.Protocol = custom.ProtoOpenAI
-			case custom.ProtoOpenAI, custom.ProtoAnthropic, custom.ProtoGemini:
+			case custom.ProtoOpenAI, custom.ProtoAnthropic, custom.ProtoGemini, custom.ProtoResponses:
 			default:
-				writeAdminErr(w, http.StatusBadRequest, fmt.Sprintf("源 %s：协议需为 openai|anthropic|gemini", in.ID))
+				writeAdminErr(w, http.StatusBadRequest, fmt.Sprintf("源 %s：协议需为 openai|anthropic|gemini|responses", in.ID))
 				return
 			}
 			enabled := in.Enabled == nil || *in.Enabled
@@ -334,6 +334,11 @@ func customProvidersSaveHandler(m *manager.Manager) http.HandlerFunc {
 		if m != nil {
 			if err := m.SyncCustomProviders(configPath, customEntriesForManager(kept)); err != nil {
 				slog.Warn("sync custom providers to manager config failed", "error", err)
+			}
+			// 传播到已存在实例/网关的 runtime 配置：运行中的子进程经 1s 配置监视
+			// 热重建厂商（不重启即出现在其 /v1/models），停着的实例保持磁盘一致。
+			if err := m.PropagateCustomProviders(); err != nil {
+				slog.Warn("propagate custom providers to runtime configs failed", "error", err)
 			}
 		}
 
