@@ -52,7 +52,7 @@ func (m *Manager) saveSubscriptions(list []SubscriptionSource) error {
 	if err != nil {
 		return fmt.Errorf("序列化订阅源失败: %v", err)
 	}
-	return writeFileMkdir(m.subscriptionsPath(), data)
+	return writeFileAtomic(m.subscriptionsPath(), data)
 }
 
 // loadSubscriptions 读取订阅源列表；兼容迁移：旧 config 单条并入。

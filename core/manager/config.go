@@ -122,13 +122,13 @@ func (m *Manager) loadConfig() Config {
 	return cfg
 }
 
-// saveConfig 写回应用配置。
+// saveConfig 写回应用配置（原子写，防半写损坏）。
 func (m *Manager) saveConfig(cfg Config) error {
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(m.configPath(), data, 0o644)
+	return writeFileAtomic(m.configPath(), data)
 }
 
 // SyncCustomProviders 把自定义模型源条目同步进本配置的 providers 透传

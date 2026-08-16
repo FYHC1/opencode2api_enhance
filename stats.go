@@ -84,7 +84,7 @@ func flushNodeStatsNow() {
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile(path, data, 0644)
+	_ = writeFileAtomic(path, data, 0o644)
 }
 
 func loadNodeStats() {
