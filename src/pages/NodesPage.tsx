@@ -52,6 +52,8 @@ export default function NodesPage({
   const [subs, setSubs] = useState<SubscriptionSource[]>([])
   const [subOpen, setSubOpen] = useState(false) // 订阅管理弹窗
   const [subBusy, setSubBusy] = useState(false) // 弹窗内动作忙态
+  // P3: 确定按钮导入等待计时（「已等待 N 秒」）
+  const [subWaitSec, setSubWaitSec] = useState(0)
   const [importingUrl, setImportingUrl] = useState<string | null>(null) // 正在拉取的订阅
   const [deletingUrl, setDeletingUrl] = useState<string | null>(null) // 正在删除的订阅
   // 删除订阅释放进度：{active, done, total}
@@ -64,7 +66,6 @@ export default function NodesPage({
   const [addOpen, setAddOpen] = useState(false)
   const [addUrl, setAddUrl] = useState('')
   const [addInterval, setAddInterval] = useState(30)
-  const [addTarget, setAddTarget] = useState<'solo' | 'pool' | 'pool-only'>('solo')
 
   // 首次加载订阅源列表
   useEffect(() => {
@@ -93,24 +94,54 @@ export default function NodesPage({
     }
   }, [])
 
-  // T3: 新增订阅
+  // T3/P3: 新增订阅 = 保存源 + 立即导入节点池（含「已等待 N 秒」进度）。
+  // P3: 10s 看门狗——超时 toast 报错、按钮恢复可用、弹窗不自动关闭；
+  // 后台请求不打断（节点稍后出现或点订阅行「拉取」重试）。
   const handleAddSubscription = async () => {
     if (!addUrl.trim()) {
       toast('请填写订阅 URL', false)
       return
     }
+    const url = addUrl.trim()
     setSubBusy(true)
+    setSubWaitSec(0)
+    // 每秒刷新「已等待 N 秒」（实际请求不打断，仅前端计时，超时即止损）
+    const ticker = window.setInterval(() => {
+      setSubWaitSec((s) => s + 1)
+    }, 1000)
+    const clearTicker = () => window.clearInterval(ticker)
     try {
-      await api.subscriptionsAdd(addUrl.trim(), addInterval, addTarget)
-      toast('订阅已添加', true)
-      setAddOpen(false)
-      setAddUrl('')
-      setAddInterval(30)
-      setAddTarget('solo')
-      await loadSubs()
+      // P3: 10s 看门狗——race 后端返回与 10s 延时；谁先到谁定夺；后台请求不打断
+      const r = await Promise.race([
+        api.subscriptionsAdd(url, addInterval),
+        new Promise<null>((resolve) => setTimeout(resolve, 10_000)),
+      ])
+      if (r === null) {
+        // 超时：后台仍在处理，恢复按钮让用户择机重试；弹窗不自动关闭
+        toast('拉取超时，后台仍在处理，稍后可点「拉取」重试', false)
+        return
+      }
+      if (r.error) {
+        // 返回 error：源已保存但首次拉取失败，提示稍后重试
+        toast(`订阅已添加，但首次拉取失败：${r.error}`, false)
+        setAddOpen(false)
+        setAddUrl('')
+        setAddInterval(30)
+        await loadSubs()
+      } else {
+        toast(`已导入 ${r.imported} 个节点到节点池`, true)
+        setAddOpen(false)
+        setAddUrl('')
+        setAddInterval(30)
+        await loadSubs()
+        await loadNodes()
+      }
     } catch (e) {
+      // 请求本身失败（HTTP 错误，如重复订阅）：保持弹窗，可修正后重试
       toast(String(e), false)
     } finally {
+      clearTicker()
+      setSubWaitSec(0)
       setSubBusy(false)
     }
   }
@@ -780,7 +811,7 @@ export default function NodesPage({
                 <X size={18} />
               </button>
             </div>
-            <p className="text-[12px] text-zinc-400">支持 Clash YAML / base64 / v2ray 链接（vmess/vless/trojan/ss/hysteria2），重复节点自动跳过。后台按每条订阅自己的间隔自动拉取。</p>
+            <p className="text-[12px] text-zinc-400">支持 Clash YAML / base64 / v2ray 链接（vmess/vless/trojan/ss/hysteria2），重复节点自动跳过。订阅拉取只进节点池（不自动建实例），需要实例时在节点池勾选后手动添加；后台按每条订阅自己的间隔自动拉取。</p>
 
             {/* 新增订阅 */}
             <button
@@ -813,28 +844,6 @@ export default function NodesPage({
                     className="w-28 shrink-0 px-3 py-2 border rounded-lg text-[13px]"
                   />
                 </div>
-                <div className="flex items-center gap-3">
-                  <label className="text-[13px] text-zinc-700 flex-1 min-w-0 whitespace-nowrap">导入目标</label>
-                  <div className="flex items-center rounded-lg border border-zinc-200 bg-white p-0.5 shrink-0">
-                    {([
-                      ['solo', '独享'],
-                      ['pool', '进池'],
-                      ['pool-only', '仅节点池'],
-                    ] as const).map(([v, label]) => (
-                      <button
-                        key={v}
-                        type="button"
-                        onClick={() => setAddTarget(v)}
-                        className={clsx(
-                          'px-3 py-1 rounded-md text-[12px] transition-colors',
-                          addTarget === v ? 'bg-zinc-900 text-white' : 'text-zinc-500 hover:bg-zinc-100',
-                        )}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
                 <div className="flex items-center gap-3 pt-1">
                   <button
                     type="button"
@@ -843,12 +852,27 @@ export default function NodesPage({
                     className="flex items-center gap-1.5 bg-green-600 text-white rounded-lg px-4 py-2 text-[13px] hover:bg-green-700 disabled:opacity-60 disabled:cursor-not-allowed"
                   >
                     {subBusy ? <Loader2 size={14} className="animate-spin" /> : null}
-                    确定
+                    {subBusy ? '导入中…' : '确定'}
                   </button>
                   <button onClick={() => setAddOpen(false)} className="px-4 py-2 rounded-lg text-[13px] text-zinc-600 hover:bg-zinc-100">
                     取消
                   </button>
                 </div>
+                {/* P3: 确定按钮等待反馈——不确定进度条 + 已等待 N 秒（10s 看门狗） */}
+                {subBusy && (
+                  <div className="space-y-1">
+                    <div className="h-1.5 bg-zinc-100 rounded-full overflow-hidden relative">
+                      <div
+                        className="absolute top-0 bottom-0 w-1/3 rounded-full bg-zinc-900"
+                        style={{ animation: 'indeterminate-slide 1.8s ease-in-out infinite' }}
+                      />
+                    </div>
+                    <div className="flex justify-between text-[11px] text-zinc-400">
+                      <span>正在导入订阅…</span>
+                      <span>已等待 {subWaitSec} 秒</span>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -867,7 +891,7 @@ export default function NodesPage({
                       <div className="flex-1 min-w-0">
                         <div className="text-[13px] text-zinc-800 truncate">{s.url}</div>
                         <div className="text-[11px] text-zinc-400 mt-0.5">
-                          每{s.interval_min > 0 ? `${s.interval_min} 分钟` : '不自动拉取'} · {s.target === 'solo' ? '独享' : s.target === 'pool' ? '进池' : '仅节点池'}
+                          每{s.interval_min > 0 ? `${s.interval_min} 分钟` : '不自动拉取'} · 节点池
                         </div>
                       </div>
                       <button

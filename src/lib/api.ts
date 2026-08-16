@@ -495,8 +495,14 @@ export const api = {
   subscriptionsList: () => req<{ subscriptions: SubscriptionSource[] }>('GET', '/subscriptions'),
   subscriptionsCount: (url: string) =>
     req<{ group: string; running: number; stopped: number }>('GET', `/subscriptions/count?url=${encodeURIComponent(url)}`),
-  subscriptionsAdd: (url: string, intervalMin: number, target: SubscriptionTargetLabel) =>
-    req<void>('POST', '/subscriptions/add', { url, interval_min: intervalMin, target }),
+  // T3/P3: 新增订阅 = 保存源 + 立即导入节点池；返回 imported/target（拉取失败时 error 非空、
+  // 源已保存）。target 可选，默认 'pool-only'（2026-08-16 决策：订阅导入一律只进节点池）。
+  subscriptionsAdd: (url: string, intervalMin: number, target?: SubscriptionTargetLabel) =>
+    req<{ status: string; imported: number; target: string; error?: string }>('POST', '/subscriptions/add', {
+      url,
+      interval_min: intervalMin,
+      target: target ?? 'pool-only',
+    }),
   subscriptionsDelete: (url: string) =>
     req<{ status: string; removed: boolean; group: string; running: number; stopped: number; removed_nodes?: number; instances?: string[] }>(
       'POST',
