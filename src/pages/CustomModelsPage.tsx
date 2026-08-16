@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
-import { Loader2, Pencil, Plus, PlugZap, Trash2, X } from 'lucide-react'
+import { Loader2, Pencil, Plus, PlugZap, Activity, Trash2, X } from 'lucide-react'
 import { api, type CustomKeyStrategy, type CustomProviderInput, type CustomProviderTestResult, type CustomProviderView, type CustomProtocol } from '../lib/api'
 
 // 自定义模型源表单（新增/编辑共用）。编辑时 key 留空 = 保留原 key。
@@ -14,6 +14,12 @@ type FormState = {
   key_strategy: CustomKeyStrategy
   via_proxy: boolean
   enabled: boolean
+  /** 全量模型清单（上游 ID；来自视图或测试结果） */
+  allModels: string[]
+  /** 全部暴露（默认 true；false = 只暴露 allowed 里的勾选项） */
+  exposeAll: boolean
+  /** 勾选暴露的模型 */
+  allowed: Set<string>
   /** 编辑中的原条目 id（空 = 新增） */
   editing: string | null
 }
@@ -27,6 +33,9 @@ const emptyForm = (): FormState => ({
   key_strategy: 'round_robin',
   via_proxy: false,
   enabled: true,
+  allModels: [],
+  exposeAll: true,
+  allowed: new Set(),
   editing: null,
 })
 
@@ -82,6 +91,9 @@ export default function CustomModelsPage({ toast }: { toast: (msg: string, ok?: 
       key_strategy: p.key_strategy ?? 'round_robin',
       via_proxy: p.via_proxy,
       enabled: p.enabled,
+      allModels: p.models_all ?? [],
+      exposeAll: !p.allowed_models || p.allowed_models.length === 0,
+      allowed: new Set(p.allowed_models ?? []),
       editing: p.id,
     })
   }
@@ -97,6 +109,11 @@ export default function CustomModelsPage({ toast }: { toast: (msg: string, ok?: 
       return null
     }
     const keys = f.api_keys.split('\n').map((k) => k.trim()).filter(Boolean)
+    const allowed = f.exposeAll ? undefined : Array.from(f.allowed)
+    if (!f.exposeAll && allowed && allowed.length === 0) {
+      toast('请至少勾选一个要暴露的模型，或选择「全部暴露」')
+      return null
+    }
     return {
       id: f.id.trim(),
       name: f.name.trim() || f.id.trim(),
@@ -104,6 +121,7 @@ export default function CustomModelsPage({ toast }: { toast: (msg: string, ok?: 
       base_url: f.base_url.trim(),
       api_keys: keys.length > 0 ? keys : undefined, // 整体留空 = 保留原 keys
       key_strategy: f.key_strategy,
+      allowed_models: allowed,
       via_proxy: f.via_proxy,
       enabled: f.enabled,
     }
@@ -119,10 +137,41 @@ export default function CustomModelsPage({ toast }: { toast: (msg: string, ok?: 
     try {
       const r = await api.customProvidersTest(input)
       setTestResult(r)
+      if (r.models && r.models.length > 0) {
+        // 测试拿到最新全量清单：保留现有勾选状态（新模型默认不勾）。
+        setForm((prev) => (prev ? { ...prev, allModels: r.models! } : prev))
+      }
     } catch (e) {
       setTestResult({ ok: false, error: String(e) })
     } finally {
       setTesting(false)
+    }
+  }
+
+  // 活性探测：手动触发（后台每 5 分钟也会自动刷新健康）
+  const probing = useRef<string | null>(null)
+  const doProbe = async (id: string) => {
+    if (probing.current) return
+    probing.current = id
+    try {
+      const r = await api.customProvidersProbe(id)
+      toast(r.ok ? `探测成功 · ${r.latency_ms}ms` : `探测失败：${r.error}`, r.ok)
+      await reload()
+    } catch (e) {
+      toast(`探测失败：${String(e)}`, false)
+    } finally {
+      probing.current = null
+    }
+  }
+
+  /** 上次成功时间的短显示（HH:MM） */
+  const fmtTime = (iso?: string) => {
+    if (!iso) return ''
+    try {
+      const d = new Date(iso)
+      return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+    } catch {
+      return ''
     }
   }
 
@@ -243,6 +292,7 @@ export default function CustomModelsPage({ toast }: { toast: (msg: string, ok?: 
                   <div className="text-xs text-zinc-500 font-mono truncate">{p.base_url}</div>
                   <div className="text-xs text-zinc-500">
                     前缀 <code className="bg-zinc-100 px-1 rounded">{p.id}/</code> · {p.models} 个模型
+                    {p.allowed_models && p.allowed_models.length > 0 && p.models_all && p.models_all.length > 0 ? `（共 ${p.models_all.length}，白名单）` : ''}
                     {p.api_key_set ? ` · ${p.api_keys?.length ?? p.keys_total} 个 Key` : ' · 无 Key'}
                     {p.keys_total > 1 && (
                       <>
@@ -255,6 +305,19 @@ export default function CustomModelsPage({ toast }: { toast: (msg: string, ok?: 
                   </div>
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
+                  {/* 活性徽标 + 手动探测 */}
+                  <button
+                    type="button"
+                    onClick={() => void doProbe(p.id)}
+                    className={clsx(
+                      'flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium transition-colors',
+                      p.last_error ? 'bg-red-50 text-red-600 hover:bg-red-100' : p.last_success ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'bg-zinc-100 text-zinc-500 hover:bg-zinc-200',
+                    )}
+                    title={p.last_error ? p.last_error : p.last_success ? `上次成功 ${p.last_success}` : '尚未探测'}
+                  >
+                    <Activity size={12} />
+                    {p.last_error ? '异常' : p.last_success ? `活跃 ${fmtTime(p.last_success)}` : '探测'}
+                  </button>
                   {/* 启停 */}
                   <button
                     type="button"
@@ -312,7 +375,7 @@ export default function CustomModelsPage({ toast }: { toast: (msg: string, ok?: 
       {/* 新增/编辑弹层 */}
       {form && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-900/40 p-4" onClick={() => !saving && setForm(null)}>
-          <div className="bg-white rounded-2xl shadow-xl w-[520px] max-h-[90vh] overflow-y-auto p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-[722px] max-h-[90vh] overflow-y-auto p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between">
               <div className="text-[15px] font-semibold text-zinc-900">{form.editing ? `编辑模型源 · ${form.editing}` : '添加模型源'}</div>
               <button type="button" onClick={() => setForm(null)} className="p-1.5 rounded-lg text-zinc-400 hover:bg-zinc-100">
@@ -436,6 +499,58 @@ export default function CustomModelsPage({ toast }: { toast: (msg: string, ok?: 
               </label>
               <span className="text-sm text-zinc-700">出站走节点池代理</span>
               <span className="text-zinc-500 text-xs">（默认直连；供应商有地区限制时开启）</span>
+            </div>
+
+            {/* 暴露模型白名单 */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="block text-sm font-medium text-zinc-700">暴露模型</label>
+                <label className="flex items-center gap-1.5 text-xs text-zinc-600 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={form.exposeAll}
+                    onChange={(e) => setForm({ ...form, exposeAll: e.target.checked })}
+                    className="accent-zinc-900"
+                  />
+                  全部暴露
+                </label>
+              </div>
+              {form.allModels.length === 0 ? (
+                <p className="text-zinc-500 text-xs">先「测试并获取模型」拉取清单后可勾选要暴露的模型；留空默认全部暴露</p>
+              ) : (
+                <>
+                  <div className={clsx('border rounded-lg max-h-44 overflow-y-auto', form.exposeAll && 'opacity-50 pointer-events-none')}>
+                    {form.allModels.map((m) => (
+                      <label key={m} className="flex items-center gap-2 px-3 py-1.5 text-[13px] font-mono text-zinc-700 hover:bg-zinc-50 cursor-pointer border-b last:border-b-0">
+                        <input
+                          type="checkbox"
+                          checked={form.exposeAll || form.allowed.has(m)}
+                          disabled={form.exposeAll}
+                          onChange={() => {
+                            setForm((prev) => {
+                              if (!prev) return prev
+                              const next = new Set(prev.allowed)
+                              if (next.has(m)) next.delete(m)
+                              else next.add(m)
+                              return { ...prev, allowed: next }
+                            })
+                          }}
+                          className="accent-zinc-900"
+                        />
+                        <span className="truncate">{m}</span>
+                      </label>
+                    ))}
+                  </div>
+                  {!form.exposeAll && (
+                    <div className="flex items-center gap-3 text-xs text-zinc-500">
+                      <span>已勾选 {form.allowed.size} / {form.allModels.length}</span>
+                      <button type="button" className="text-zinc-600 hover:text-zinc-900 underline" onClick={() => setForm({ ...form, allowed: new Set(form.allModels) })}>全选</button>
+                      <button type="button" className="text-zinc-600 hover:text-zinc-900 underline" onClick={() => setForm({ ...form, allowed: new Set() })}>清零</button>
+                    </div>
+                  )}
+                  <p className="text-zinc-500 text-xs">未勾选的模型不会出现在 /v1/models，也无法经网关调用</p>
+                </>
+              )}
             </div>
 
             {/* 测试结果 */}

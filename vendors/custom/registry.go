@@ -9,25 +9,27 @@ import (
 
 // Params 键（ProviderSpec.Params；配置 providers[].params 同名透传）。
 const (
-	ParamBaseURL     = "base_url"
-	ParamAPIKey      = "api_key"
-	ParamAPIKeys     = "api_keys"     // 多 key（优先于 api_key，两者合并去重）
-	ParamKeyStrategy = "key_strategy" // round_robin（默认）| failover；仅作用于本源
-	ParamProtocol    = "protocol"
-	ParamViaProxy    = "via_proxy"
+	ParamBaseURL       = "base_url"
+	ParamAPIKey        = "api_key"
+	ParamAPIKeys       = "api_keys"       // 多 key（优先于 api_key，两者合并去重）
+	ParamKeyStrategy   = "key_strategy"   // round_robin（默认）| failover；仅作用于本源
+	ParamAllowedModels = "allowed_models" // 暴露白名单（上游模型 ID；空 = 全部暴露）
+	ParamProtocol      = "protocol"
+	ParamViaProxy      = "via_proxy"
 )
 
 func init() {
 	contract.Register("custom", func(spec contract.ProviderSpec) (contract.Vendor, error) {
 		cfg := Config{
-			ID:          spec.ID,
-			Name:        spec.Name,
-			BaseURL:     strParam(spec.Params, ParamBaseURL),
-			APIKey:      strParam(spec.Params, ParamAPIKey),
-			APIKeys:     strSliceParam(spec.Params, ParamAPIKeys),
-			KeyStrategy: strParam(spec.Params, ParamKeyStrategy),
-			Protocol:    strParam(spec.Params, ParamProtocol),
-			ViaProxy:    boolParam(spec.Params, ParamViaProxy),
+			ID:            spec.ID,
+			Name:          spec.Name,
+			BaseURL:       strParam(spec.Params, ParamBaseURL),
+			APIKey:        strParam(spec.Params, ParamAPIKey),
+			APIKeys:       strSliceParam(spec.Params, ParamAPIKeys),
+			KeyStrategy:   strParam(spec.Params, ParamKeyStrategy),
+			AllowedModels: strSliceParam(spec.Params, ParamAllowedModels),
+			Protocol:      strParam(spec.Params, ParamProtocol),
+			ViaProxy:      boolParam(spec.Params, ParamViaProxy),
 		}
 		if tr, ok := spec.Params[opencode.ParamTransport].(contract.Transport); ok && tr != nil {
 			cfg.Transport = tr

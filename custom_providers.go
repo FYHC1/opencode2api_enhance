@@ -141,17 +141,20 @@ func rebuildVendors() {
 // customProviderView 列表项。key 明文回传给已鉴权的面板（单用户/内网定位，
 // key 本就明文存于本机 config.json）：编辑表单直接回填，免得每次测试连通重新粘贴。
 type customProviderView struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Protocol    string   `json:"protocol"`
-	BaseURL     string   `json:"base_url"`
-	APIKeys     []string `json:"api_keys"` // 全部 key（明文回填编辑表单）
-	APIKey      string   `json:"api_key"`  // 首 key（旧 UI 兼容）
-	APIKeySet   bool     `json:"api_key_set"`
-	KeyStrategy string   `json:"key_strategy"` // round_robin | failover
-	ViaProxy    bool     `json:"via_proxy"`
-	Enabled     bool     `json:"enabled"`
-	Models      int      `json:"models"` // 聚合目录中该源模型数（实时）
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	Protocol      string   `json:"protocol"`
+	BaseURL       string   `json:"base_url"`
+	APIKeys       []string `json:"api_keys"` // 全部 key（明文回填编辑表单）
+	APIKey        string   `json:"api_key"`  // 首 key（旧 UI 兼容）
+	APIKeySet     bool     `json:"api_key_set"`
+	KeyStrategy   string   `json:"key_strategy"` // round_robin | failover
+	ViaProxy      bool     `json:"via_proxy"`
+	Enabled       bool     `json:"enabled"`
+	Models        int      `json:"models"`                 // 聚合目录中该源模型数（实时，经白名单过滤）
+	ModelsAll     []string `json:"models_all"`             // 全量模型清单（上游 ID，编辑勾选用）
+	AllowedModels []string `json:"allowed_models"`         // 暴露白名单（空 = 全部暴露）
+	LastSuccess   string   `json:"last_success,omitempty"` // 最近一次成功（探测/请求）
 	// key 健康计数（运行时快照；无活实例时全 0）
 	KeysTotal     int    `json:"keys_total"`
 	KeysAvailable int    `json:"keys_available"`
@@ -162,15 +165,16 @@ type customProviderView struct {
 
 // customProviderInput 保存请求中的单个源定义。
 type customProviderInput struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Protocol    string   `json:"protocol"`
-	BaseURL     string   `json:"base_url"`
-	APIKey      string   `json:"api_key"`      // 单 key 兼容输入
-	APIKeys     []string `json:"api_keys"`     // 多 key（优先于 api_key）
-	KeyStrategy string   `json:"key_strategy"` // round_robin（默认）| failover
-	ViaProxy    bool     `json:"via_proxy"`
-	Enabled     *bool    `json:"enabled"`
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	Protocol      string   `json:"protocol"`
+	BaseURL       string   `json:"base_url"`
+	APIKey        string   `json:"api_key"`        // 单 key 兼容输入
+	APIKeys       []string `json:"api_keys"`       // 多 key（优先于 api_key）
+	KeyStrategy   string   `json:"key_strategy"`   // round_robin（默认）| failover
+	AllowedModels []string `json:"allowed_models"` // 暴露白名单（空 = 全部暴露）
+	ViaProxy      bool     `json:"via_proxy"`
+	Enabled       *bool    `json:"enabled"`
 }
 
 // customProvidersView 聚合目录中该源模型数。
@@ -228,13 +232,22 @@ func customProviderViews() []customProviderView {
 			strategy = custom.StrategyRoundRobin
 		}
 		kh := vendorKeyHealth(pc.ID)
+		allowed, _ := p[custom.ParamAllowedModels].([]any)
+		allowedIDs := make([]string, 0, len(allowed))
+		for _, a := range allowed {
+			if s, ok := a.(string); ok {
+				allowedIDs = append(allowedIDs, s)
+			}
+		}
 		views = append(views, customProviderView{
 			ID: pc.ID, Name: pc.Name, Protocol: proto, BaseURL: baseURL,
 			APIKeys: keys, APIKey: firstKey, APIKeySet: len(keys) > 0,
 			KeyStrategy: strategy,
 			ViaProxy:    via, Enabled: enabled,
 			Models: counts[pc.ID], LastError: vendorLastErr(pc.ID),
-			KeysTotal: kh.Total, KeysAvailable: kh.Available, KeysCooling: kh.Cooling, KeysDisabled: kh.Disabled,
+			ModelsAll: vendorFullModels(pc.ID), AllowedModels: allowedIDs,
+			LastSuccess: vendorLastSuccess(pc.ID),
+			KeysTotal:   kh.Total, KeysAvailable: kh.Available, KeysCooling: kh.Cooling, KeysDisabled: kh.Disabled,
 		})
 	}
 	return views
@@ -339,6 +352,12 @@ func customProvidersSaveHandler(m *manager.Manager) http.HandlerFunc {
 			if len(keys) == 0 {
 				keys = oldKeys[in.ID] // 编辑时全留空 = 保留旧 keys
 			}
+			allowed := make([]string, 0, len(in.AllowedModels))
+			for _, m := range in.AllowedModels {
+				if m = strings.TrimSpace(m); m != "" {
+					allowed = append(allowed, m)
+				}
+			}
 			enabled := in.Enabled == nil || *in.Enabled
 			params := map[string]any{
 				custom.ParamBaseURL:     in.BaseURL,
@@ -348,6 +367,9 @@ func customProvidersSaveHandler(m *manager.Manager) http.HandlerFunc {
 			}
 			if len(keys) > 0 {
 				params[custom.ParamAPIKeys] = keys
+			}
+			if len(allowed) > 0 {
+				params[custom.ParamAllowedModels] = allowed
 			}
 			pc := ProviderCfg{
 				ID: in.ID, Type: "custom", Name: strings.TrimSpace(in.Name),
@@ -435,6 +457,7 @@ func customProvidersTestHandler() http.HandlerFunc {
 		}
 		results := make([]keyResult, 0, len(keys))
 		allOK := true
+		var firstOKModels []string
 		for _, key := range keys {
 			v, err := custom.New(custom.Config{
 				ID: in.ID, Name: in.Name, BaseURL: in.BaseURL,
@@ -461,10 +484,13 @@ func customProvidersTestHandler() http.HandlerFunc {
 			for _, m := range models {
 				ids = append(ids, strings.TrimPrefix(m.ID, in.ID+"/"))
 			}
+			if firstOKModels == nil {
+				firstOKModels = ids
+			}
 			results = append(results, keyResult{KeyTail: keyTail(key), OK: true, Count: len(ids), LatencyMS: latency})
 		}
 		writeAdminJSON(w, map[string]any{
-			"ok": allOK, "results": results, "count": len(results),
+			"ok": allOK, "results": results, "count": len(results), "models": firstOKModels,
 		})
 	}
 }
@@ -547,4 +573,93 @@ func vendorKeyHealth(id string) custom.KeyPoolStatus {
 		}
 	}
 	return custom.KeyPoolStatus{}
+}
+
+// vendorFullModels 活实例的全量模型清单（上游 ID；无实例返回空）。
+func vendorFullModels(id string) []string {
+	if globalAgg == nil {
+		return nil
+	}
+	for _, v := range globalAgg.Vendors() {
+		if cv, ok := v.(*custom.Vendor); ok && cv.ID() == id {
+			return cv.FullModelIDs()
+		}
+	}
+	return nil
+}
+
+// vendorLastSuccess 活实例最近一次成功时间（探测或真实请求）。
+func vendorLastSuccess(id string) string {
+	if globalAgg == nil {
+		return ""
+	}
+	for _, v := range globalAgg.Vendors() {
+		if v.ID() == id {
+			return v.Health().LastSuccess
+		}
+	}
+	return ""
+}
+
+// customProvidersProbeHandler POST：手动活性探测 {"id":"src1"}——真实拉一次上游目录，
+// 刷新健康状态并返回结果（不落盘、不走缓存）。
+func customProvidersProbeHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			ID string `json:"id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID == "" {
+			writeAdminErr(w, http.StatusBadRequest, "请求体需为 {\"id\":\"源ID\"}")
+			return
+		}
+		if globalAgg == nil {
+			writeAdminErr(w, http.StatusServiceUnavailable, "聚合器未装配")
+			return
+		}
+		var cv *custom.Vendor
+		for _, v := range globalAgg.Vendors() {
+			if c, ok := v.(*custom.Vendor); ok && c.ID() == req.ID {
+				cv = c
+				break
+			}
+		}
+		if cv == nil {
+			writeAdminErr(w, http.StatusNotFound, "源 "+req.ID+" 未启用或未装配（停用状态请先启用）")
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+		ok, latency, errStr := cv.Probe(ctx)
+		writeAdminJSON(w, map[string]any{
+			"id": req.ID, "ok": ok, "latency_ms": latency,
+			"error": errStr, "last_success": cv.Health().LastSuccess,
+		})
+	}
+}
+
+// startCustomProbeLoop 后台活性探测：每 5 分钟对所有已装配自定义源真实拉一次目录，
+// 刷新健康（LastSuccess/LastError 供列表页活性徽标；无流量时也保持新鲜）。
+func startCustomProbeLoop() {
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			if globalAgg == nil {
+				continue
+			}
+			for _, v := range globalAgg.Vendors() {
+				cv, isCustom := v.(*custom.Vendor)
+				if !isCustom {
+					continue
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				cv.Probe(ctx)
+				cancel()
+			}
+		}
+	}()
 }

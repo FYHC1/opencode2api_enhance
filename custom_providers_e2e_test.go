@@ -337,3 +337,62 @@ func TestCustomProvidersMultiKeySaveE2E(t *testing.T) {
 		t.Fatalf("blank-key save must keep old keys, got %v", keys)
 	}
 }
+
+func TestCustomAllowedModelsE2E(t *testing.T) {
+	s := setupCustomE2E(t)
+	// 白名单只暴露 gpt-test-2。
+	saveBody := `{"providers":[{"id":"src1","protocol":"openai","base_url":"` + s.upstream.URL + `","api_key":"k","allowed_models":["gpt-test-2"]}]}`
+	if code, resp := callHandlerJSON(t, customProvidersSaveHandler(s.mgr), http.MethodPost, saveBody); code != http.StatusOK {
+		t.Fatalf("save failed: %v", resp)
+	}
+	// /v1/models 只出现白名单内模型。
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	rec := httptest.NewRecorder()
+	listModelsHandler(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, "src1/gpt-test-2") {
+		t.Fatalf("allowed model missing: %s", body)
+	}
+	if strings.Contains(body, "src1/gpt-test-1") {
+		t.Fatalf("non-allowed model leaked: %s", body)
+	}
+	// 视图：models（过滤后）=1，models_all（全量）=2。
+	_, resp := callHandlerJSON(t, customProvidersHandler(), http.MethodGet, "")
+	plist, _ := resp["providers"].([]any)
+	p0, _ := plist[0].(map[string]any)
+	if p0["models"].(float64) != 1 {
+		t.Fatalf("filtered count = %v", p0["models"])
+	}
+	all, _ := p0["models_all"].([]any)
+	if len(all) != 2 {
+		t.Fatalf("models_all = %v", all)
+	}
+	// 白名单外模型请求：路由不到该源（目录无此模型）。
+	creq := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"src1/gpt-test-1","messages":[{"role":"user","content":"q"}]}`))
+	creq.Header.Set("Authorization", "Bearer x")
+	crec := httptest.NewRecorder()
+	chatCompletionsHandler(crec, creq)
+	if lastUpstreamModel != "gpt-test-1" && crec.Code == http.StatusOK {
+		t.Fatalf("non-allowed model should not route to custom source")
+	}
+}
+
+func TestCustomProbeEndpointE2E(t *testing.T) {
+	s := setupCustomE2E(t)
+	saveBody := `{"providers":[{"id":"src1","protocol":"openai","base_url":"` + s.upstream.URL + `","api_key":"k"}]}`
+	if code, _ := callHandlerJSON(t, customProvidersSaveHandler(s.mgr), http.MethodPost, saveBody); code != http.StatusOK {
+		t.Fatal("save failed")
+	}
+	code, resp := callHandlerJSON(t, customProvidersProbeHandler(), http.MethodPost, `{"id":"src1"}`)
+	if code != http.StatusOK || resp["ok"] != true {
+		t.Fatalf("probe: code=%d resp=%v", code, resp)
+	}
+	if resp["last_success"] == nil || resp["last_success"] == "" {
+		t.Fatalf("probe must refresh last_success: %v", resp)
+	}
+	// 不存在的源 → 404。
+	if code, _ := callHandlerJSON(t, customProvidersProbeHandler(), http.MethodPost, `{"id":"nope"}`); code != http.StatusNotFound {
+		t.Fatalf("probe unknown = %d, want 404", code)
+	}
+}

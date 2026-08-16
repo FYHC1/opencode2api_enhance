@@ -136,6 +136,7 @@ SOCKS5 代理列表。
 | `api_keys` | — | **多 key**（数组）：429 冷却（读 `Retry-After`，缺省 60s）、401/403 禁用后自动换 key，同请求每 key 至多试一次，全部耗尽才交外层厂商级切换 |
 | `key_strategy` | `round_robin` | key 调度：`round_robin` 轮询 / `failover` 错误转移（按数组顺序主 key 优先）。**仅作用于本自定义源，与实例池 `route_mode` 互不影响** |
 | `via_proxy` | — | `true` 时出站走节点池代理（应对地区限制供应商）；默认 `false` 直连 |
+| `allowed_models` | — | 暴露白名单（上游模型 ID 数组；空 = 全部暴露），热生效 |
 
 > 模型清单缓存在 `<数据目录>/custom_models/<id>.json`（成功拉取时原子写；拉取失败时兜底返回，
 > 重启后无需等上游即出模型）。连通测试（面板「测试并获取模型」）不走缓存、强制真实触达。

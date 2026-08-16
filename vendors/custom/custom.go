@@ -52,6 +52,9 @@ type Config struct {
 	APIKeys     []string
 	APIKey      string
 	KeyStrategy string // round_robin（默认）| failover
+	// AllowedModels 暴露白名单（上游模型 ID；空 = 全部暴露）。目录/缓存保存全量，
+	// 仅在 ListModels 返回时过滤——编辑界面始终能拿到全量清单。
+	AllowedModels []string
 	// NoModelCache 禁用目录磁盘缓存（读与写）：连通测试等"必须真连"的场景使用。
 	NoModelCache bool
 }
@@ -182,13 +185,13 @@ func (v *Vendor) ListModels(ctx context.Context) ([]contract.Model, error) {
 		cached := append([]contract.Model(nil), v.models...)
 		v.mu.Unlock()
 		if len(cached) > 0 {
-			return cached, nil
+			return v.filterAllowed(cached), nil
 		}
 		if disk := v.loadModelsCache(); !v.cfg.NoModelCache && len(disk) > 0 {
 			v.mu.Lock()
 			v.models = disk
 			v.mu.Unlock()
-			return disk, nil
+			return v.filterAllowed(disk), nil
 		}
 		return nil, err
 	}
@@ -207,13 +210,62 @@ func (v *Vendor) ListModels(ctx context.Context) ([]contract.Model, error) {
 	if len(out) == 0 {
 		return nil, fmt.Errorf("custom %s: empty model list", v.cfg.ID)
 	}
+	// 内存/磁盘缓存保存全量（白名单变更无需重新拉取），返回时过滤。
 	v.mu.Lock()
 	v.models = out
 	v.mu.Unlock()
 	if !v.cfg.NoModelCache {
 		v.saveModelsCache(out)
 	}
-	return out, nil
+	return v.filterAllowed(out), nil
+}
+
+// filterAllowed 按暴露白名单过滤目录（空白名单 = 全部暴露）。
+func (v *Vendor) filterAllowed(models []contract.Model) []contract.Model {
+	if len(v.cfg.AllowedModels) == 0 {
+		return models
+	}
+	allow := make(map[string]bool, len(v.cfg.AllowedModels))
+	for _, id := range v.cfg.AllowedModels {
+		allow[id] = true
+	}
+	out := make([]contract.Model, 0, len(models))
+	for _, m := range models {
+		if allow[strings.TrimPrefix(m.ID, v.prefix())] {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// FullModelIDs 全量模型清单（上游 ID，不含前缀、不经白名单过滤）——编辑界面勾选用。
+func (v *Vendor) FullModelIDs() []string {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	out := make([]string, 0, len(v.models))
+	for _, m := range v.models {
+		out = append(out, strings.TrimPrefix(m.ID, v.prefix()))
+	}
+	return out
+}
+
+// Probe 活性探测：真实拉一次上游目录（无缓存语义），刷新健康状态。
+// 返回（是否成功，耗时毫秒，错误描述）。逐 key 细节探测见管理端 test 端点。
+func (v *Vendor) Probe(ctx context.Context) (bool, int64, string) {
+	key, _, ok := v.pool.tryAcquire(map[int]bool{})
+	if !ok {
+		v.markErr("probe: 无可用 key（全部冷却或禁用）")
+		return false, 0, "无可用 key（全部冷却或禁用）"
+	}
+	start := time.Now()
+	_, err := v.proto.listModels(ctx, v, key)
+	latency := time.Since(start).Milliseconds()
+	if err != nil {
+		v.markErr(fmt.Sprintf("probe: %v", err))
+		return false, latency, err.Error()
+	}
+	v.markOK()
+	return true, latency, ""
 }
 
 // IsFree 自定义源模型恒可用（key 在网关侧），返回 true。
