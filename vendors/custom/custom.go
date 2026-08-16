@@ -54,9 +54,11 @@ type Config struct {
 	Name      string // 展示名
 	BaseURL   string // 上游根地址（尾斜杠容忍）
 	APIKey    string
-	Protocol  string // openai | anthropic | gemini
+	Protocol  string // openai | anthropic | gemini | responses
 	ViaProxy  bool   // 出站走代理池（TierFree）；默认直连（TierPaid）
 	Transport contract.Transport
+	// NoModelCache 禁用目录磁盘缓存（读与写）：连通测试等"必须真连"的场景使用。
+	NoModelCache bool
 }
 
 // Vendor 自定义模型源厂商。
@@ -100,7 +102,12 @@ func New(cfg Config) (*Vendor, error) {
 	if cfg.Transport == nil {
 		cfg.Transport = contract.DirectTransport{}
 	}
-	return &Vendor{cfg: cfg, proto: p}, nil
+	v := &Vendor{cfg: cfg, proto: p}
+	// 预热磁盘缓存：启动首拉失败时 ListModels 也能立即给出上次目录（stale-while-revalidate）。
+	if !cfg.NoModelCache {
+		v.models = v.loadModelsCache()
+	}
+	return v, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -129,15 +136,27 @@ func (v *Vendor) upstreamModel(model string) string {
 // prefixedModel 给上游模型名加本源前缀。
 func (v *Vendor) prefixedModel(upstream string) string { return v.prefix() + upstream }
 
-// ListModels 拉取上游目录并加前缀。失败时回退最近一次成功缓存。
+// ListModels 拉取上游目录并加前缀。失败（含空列表，防上游抖动清空）时回退
+// 内存缓存 → 磁盘缓存；成功则更新两级缓存并写盘（stale-while-revalidate：
+// 进程重启后无需等上游，首个 /v1/models 即含自定义模型）。
 func (v *Vendor) ListModels(ctx context.Context) ([]contract.Model, error) {
 	ids, err := v.proto.listModels(ctx, v)
+	if err == nil && len(ids) == 0 {
+		// 成功但空列表：多为上游异常，按失败处理以保留既有目录。
+		err = fmt.Errorf("custom %s: empty model list", v.cfg.ID)
+	}
 	if err != nil {
 		v.mu.Lock()
 		cached := append([]contract.Model(nil), v.models...)
 		v.mu.Unlock()
 		if len(cached) > 0 {
 			return cached, nil
+		}
+		if disk := v.loadModelsCache(); !v.cfg.NoModelCache && len(disk) > 0 {
+			v.mu.Lock()
+			v.models = disk
+			v.mu.Unlock()
+			return disk, nil
 		}
 		return nil, err
 	}
@@ -159,6 +178,9 @@ func (v *Vendor) ListModels(ctx context.Context) ([]contract.Model, error) {
 	v.mu.Lock()
 	v.models = out
 	v.mu.Unlock()
+	if !v.cfg.NoModelCache {
+		v.saveModelsCache(out)
+	}
 	return out, nil
 }
 

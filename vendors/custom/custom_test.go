@@ -15,6 +15,8 @@ import (
 
 func newTestVendor(t *testing.T, protocol, baseURL string) *Vendor {
 	t.Helper()
+	// 磁盘目录缓存隔离到临时目录（防测试写真实用户配置目录）。
+	t.Setenv("OPCODE2API_DATA_DIR", t.TempDir())
 	v, err := New(Config{ID: "src1", Name: "Source1", BaseURL: baseURL, APIKey: "sk-test", Protocol: protocol})
 	if err != nil {
 		t.Fatalf("New: %v", err)

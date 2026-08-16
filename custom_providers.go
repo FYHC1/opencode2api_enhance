@@ -391,6 +391,8 @@ func customProvidersTestHandler() http.HandlerFunc {
 			ID: in.ID, Name: in.Name, BaseURL: in.BaseURL,
 			APIKey: strings.TrimSpace(in.APIKey), Protocol: in.Protocol,
 			ViaProxy: in.ViaProxy,
+			// 连通测试必须真实触达上游：禁用目录缓存（防不可达时拿旧缓存误报成功）。
+			NoModelCache: true,
 		})
 		if err != nil {
 			writeAdminJSON(w, map[string]any{"ok": false, "error": err.Error()})

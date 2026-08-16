@@ -32,6 +32,8 @@ type customE2EScaffold struct {
 
 func setupCustomE2E(t *testing.T) *customE2EScaffold {
 	t.Helper()
+	// 自定义源目录磁盘缓存隔离到临时目录。
+	t.Setenv("OPCODE2API_DATA_DIR", t.TempDir())
 	s := &customE2EScaffold{}
 
 	// 上游假服务：/models 目录 + /chat/completions 对话（记录收到的 model）。
