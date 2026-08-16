@@ -1,23 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
 import { invoke } from '@tauri-apps/api/core'
-import { Server, Layers, Radar, Settings, BarChart3, ScrollText, LogOut, Loader2 } from 'lucide-react'
+import { Server, Layers, Radar, Settings, BarChart3, ScrollText, LogOut, Loader2, Plug } from 'lucide-react'
 import { api } from './lib/api'
 import { TitleBar } from './components/TitleBar'
 import TaskPanel from './components/TaskPanel'
 import InstancesPage from './pages/InstancesPage'
 import PoolPage from './pages/PoolPage'
 import NodesPage from './pages/NodesPage'
+import CustomModelsPage from './pages/CustomModelsPage'
 import SettingsPage from './pages/SettingsPage'
 import StatsPage from './pages/StatsPage'
 import LogsPage from './pages/LogsPage'
 
-type Tab = 'instances' | 'pool' | 'nodes' | 'settings' | 'stats' | 'logs'
+type Tab = 'instances' | 'pool' | 'nodes' | 'custom' | 'settings' | 'stats' | 'logs'
 
 const NAV: { id: Tab; label: string; icon: typeof Server }[] = [
   { id: 'instances', label: '独享', icon: Server },
   { id: 'pool', label: '实例池', icon: Layers },
   { id: 'nodes', label: '节点池', icon: Radar },
+  { id: 'custom', label: '自定义模型', icon: Plug },
   { id: 'stats', label: '统计', icon: BarChart3 },
   { id: 'logs', label: '日志', icon: ScrollText },
   { id: 'settings', label: '设置', icon: Settings },
@@ -278,6 +280,7 @@ export default function App() {
           {tab === 'instances' && <InstancesPage toast={showToast} />}
           {tab === 'pool' && <PoolPage toast={showToast} onRelease={onRelease} onTask={upsertTask} />}
           {tab === 'nodes' && <NodesPage toast={showToast} onTask={upsertTask} onRemove={removeTask} />}
+          {tab === 'custom' && <CustomModelsPage toast={showToast} />}
           {tab === 'stats' && <StatsPage toast={showToast} />}
           {tab === 'logs' && <LogsPage toast={showToast} />}
           {tab === 'settings' && <SettingsPage toast={showToast} onRequestExit={() => setExitOpen(true)} />}

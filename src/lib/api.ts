@@ -72,6 +72,42 @@ export type PortCheckResult = {
   reason: string
 }
 
+// 自定义模型源（第七页「自定义模型」）
+export type CustomProtocol = 'openai' | 'anthropic' | 'gemini'
+
+export type CustomProviderView = {
+  id: string
+  name: string
+  protocol: CustomProtocol
+  base_url: string
+  /** 是否已配置 key（明文不回传） */
+  api_key_set: boolean
+  via_proxy: boolean
+  enabled: boolean
+  /** 聚合目录中该源模型数（实时） */
+  models: number
+  last_error?: string
+}
+
+export type CustomProviderInput = {
+  id: string
+  name?: string
+  protocol: CustomProtocol
+  base_url: string
+  /** 编辑时留空 = 保留原 key */
+  api_key?: string
+  via_proxy?: boolean
+  enabled?: boolean
+}
+
+export type CustomProviderTestResult = {
+  ok: boolean
+  models?: string[]
+  count?: number
+  latency_ms?: number
+  error?: string
+}
+
 export type ScanStatus = 'idle' | 'running' | 'stopping' | 'done' | 'error'
 
 export type ProbeResult = {
@@ -483,6 +519,15 @@ export const api = {
   // 配置
   configGet: () => req<ConfigView>('GET', '/config'),
   configSet: (key: string, value: string) => req<void>('POST', '/config/set', { key, value }),
+
+  // 自定义模型源（第七页「自定义模型」）：用户自带 key 接入第三方供应商
+  customProvidersList: () => req<{ providers: CustomProviderView[] }>('GET', '/custom-providers'),
+  /** 整表保存（增/改/删一次到位）；编辑时 api_key 留空 = 保留原 key */
+  customProvidersSave: (providers: CustomProviderInput[]) =>
+    req<{ status: string; providers: CustomProviderView[] }>('POST', '/custom-providers/save', { providers }),
+  /** 连通测试（不落盘）：拉取模型目录，返回模型列表与延迟 */
+  customProvidersTest: (input: CustomProviderInput) =>
+    req<CustomProviderTestResult>('POST', '/custom-providers/test', input),
 
   // 订阅（main 功能 M1）：preview 拉取解析、import 建实例、import-pool 仅入缓存
   subscribePreview: (url: string) => req<SubscribeResult>('POST', '/subscribe/preview', { url }),

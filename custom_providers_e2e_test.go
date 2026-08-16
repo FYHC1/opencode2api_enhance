@@ -270,3 +270,28 @@ func TestCustomModelChatE2E(t *testing.T) {
 		t.Fatalf("upstream model = %q, want stripped gpt-test-1", lastUpstreamModel)
 	}
 }
+
+func TestCustomProvidersSaveKeepsExistingKey(t *testing.T) {
+	s := setupCustomE2E(t)
+	h := customProvidersSaveHandler(s.mgr)
+	// 首次保存带 key。
+	withKey := `{"providers":[{"id":"src1","protocol":"openai","base_url":"` + s.upstream.URL + `","api_key":"sk-1"}]}`
+	if code, _ := callHandlerJSON(t, h, http.MethodPost, withKey); code != http.StatusOK {
+		t.Fatalf("first save failed")
+	}
+	// 二次保存 key 留空（编辑场景）→ 旧 key 保留。
+	noKey := `{"providers":[{"id":"src1","protocol":"openai","base_url":"` + s.upstream.URL + `"}]}`
+	if code, _ := callHandlerJSON(t, h, http.MethodPost, noKey); code != http.StatusOK {
+		t.Fatalf("second save failed")
+	}
+	cfg := loadConfig(configPath)
+	for _, pc := range cfg.Providers {
+		if pc.ID == "src1" {
+			if k, _ := pc.Params["api_key"].(string); k != "sk-1" {
+				t.Fatalf("api_key after blank-key save = %q, want kept sk-1", k)
+			}
+			return
+		}
+	}
+	t.Fatal("src1 entry missing after second save")
+}

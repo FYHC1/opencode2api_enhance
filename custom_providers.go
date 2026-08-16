@@ -266,6 +266,15 @@ func customProvidersSaveHandler(m *manager.Manager) http.HandlerFunc {
 		}
 
 		seen := map[string]bool{}
+		// 旧 custom 条目的 key（按 id）：编辑时 key 留空 → 保留旧 key（「留空则不修改」）。
+		oldKeys := map[string]string{}
+		for _, pc := range cfg.Providers {
+			if pc.Type == "custom" && pc.Params != nil {
+				if k, _ := pc.Params[custom.ParamAPIKey].(string); k != "" {
+					oldKeys[pc.ID] = k
+				}
+			}
+		}
 		for _, in := range req.Providers {
 			in.ID = strings.TrimSpace(in.ID)
 			if !customIDPattern.MatchString(in.ID) {
@@ -303,6 +312,8 @@ func customProvidersSaveHandler(m *manager.Manager) http.HandlerFunc {
 			}
 			if strings.TrimSpace(in.APIKey) != "" {
 				params[custom.ParamAPIKey] = strings.TrimSpace(in.APIKey)
+			} else if k, ok := oldKeys[in.ID]; ok {
+				params[custom.ParamAPIKey] = k
 			}
 			pc := ProviderCfg{
 				ID: in.ID, Type: "custom", Name: strings.TrimSpace(in.Name),
