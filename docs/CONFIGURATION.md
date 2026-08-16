@@ -162,6 +162,30 @@ SOCKS5 代理列表。
 - `default_provider`：兜底厂商
 - 未命中映射时，按聚合器倒排索引找"提供该模型的厂商"，再无则走默认厂商
 
+### `auto_model`（auto 虚拟模型）
+
+> 完整行为说明见 [ROUTING.md 第七节](ROUTING.md)。配置入口：实例池页 → 右上齿轮 → 「auto 模型 · 智能选路」；默认关闭。
+
+```json
+{
+  "auto_model": {
+    "enabled": true,
+    "strategy": "balanced",
+    "weights": { "deepseek-v4-flash": 9, "big-pickle": 3 },
+    "context_windows": { "deepseek-v4-flash": 200000, "big-pickle": 1000000 }
+  }
+}
+```
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `enabled` | `false` | 开启后 `/v1/models` 顶部出现虚拟模型 `auto`，客户端填 `model:"auto"` 即智能选路；关闭即消失 |
+| `strategy` | `balanced` | `balanced` 均衡（SWRR 按权重分流）/ `speed` 速度优先（权重≥5 中选实测最快）/ `quality` 能力优先（按权重锁定，失败才降） |
+| `weights` | 缺省 5 | 模型展示名（`/v1/models` 可见名）→ 权重 0~10；**0 = 永不参与**；按模型粒度，同模型跨实例同权重 |
+| `context_windows` | 保守 128k | 模型展示名 → 上下文上限 token；超限请求自动避开该模型（est≤上限×0.9），上游报上下文错误时系统还会自动学习收紧 |
+
+管理端 `GET /api/admin/auto-model` 读取、`POST /api/admin/auto-model` 保存（保存即传播子进程，3s 热重载生效）。
+
 ### 订阅导入边界（2026-08-16 拍板）
 
 订阅导入（节点池页「订阅导入」及后台按间隔自动拉取）**一律只更新节点池**：
