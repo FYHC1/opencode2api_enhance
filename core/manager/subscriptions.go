@@ -387,8 +387,12 @@ func (m *Manager) SubscriptionsCountHandler() http.HandlerFunc {
 	}
 }
 
-// SubscriptionsDeleteHandler POST {url} → 删除订阅源，并同步清理订阅缓存中该分组节点（P4）。
+// SubscriptionsDeleteHandler POST {url} → 删除订阅源，并同步清理该订阅占用的全部资源：
+// 1) 该分组使用中的实例主动停止；2) 全部停止后从实例池/独享移除释放（含网关同步）；
+// 3) 然后删除订阅源；4) 最后清理订阅缓存中该分组节点（节点池页不再残留）。
 // 分组名优先取源记录持久化 Group（导入时已写入，URL 失效也准）；未持久化时临时解析。
+// 顺序约定：先停实例（使用中的主动停止）→ 全部停止后移除释放 → 删源 → 最后清节点组，
+// 节点组是最后一步——任何一步失败都不会把节点组先清掉。
 func (m *Manager) SubscriptionsDeleteHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !requireMethodOK(w, r, http.MethodPost) {
@@ -404,14 +408,31 @@ func (m *Manager) SubscriptionsDeleteHandler() http.HandlerFunc {
 		group := m.subscriptionGroupFor(req.URL)
 		// 统计该分组使用中实例数（订阅缓存节点名 → 实例 Node 匹配）——须在清理缓存前统计
 		running, stopped := m.countInstancesForGroup(group)
-		// 受影响实例名快照——清缓存后前端无法再按 listNodes 反查分组，须随响应一并返回
+		// 受影响实例名快照——清缓存后无法再按缓存节点名反查分组，须在此刻快照
 		instances := m.instanceNamesForGroup(group)
+		// 1) 主动停止全部相关实例（已停止的幂等跳过）
+		// 2) 全部停止后从注册表移除（实例池/独享一并释放）
+		released := 0
+		if len(instances) > 0 {
+			runner := m.Run()
+			_ = m.BatchStop(runner, instances)
+			for _, err := range m.BatchDelete(runner, instances) {
+				if err == nil {
+					released++
+				}
+			}
+			// 移除入池（join_gateway）实例后同步统一网关池
+			if released > 0 {
+				_ = m.Gateway().sync(runner)
+			}
+		}
+		// 3) 删除订阅源
 		removed, err := m.RemoveSubscription(req.URL)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		// P4：删除源后同步清理订阅缓存中该分组节点（节点池页不再残留）
+		// 4) 最后清理订阅缓存中该分组节点（节点池页不再残留）
 		removedNodes := 0
 		if group != "" {
 			removedNodes, err = m.RemoveSubscriptionGroupNodes(group)
@@ -420,7 +441,7 @@ func (m *Manager) SubscriptionsDeleteHandler() http.HandlerFunc {
 				return
 			}
 		}
-		writeJSON(w, map[string]any{"status": "ok", "removed": removed, "group": group, "running": running, "stopped": stopped, "removed_nodes": removedNodes, "instances": instances})
+		writeJSON(w, map[string]any{"status": "ok", "removed": removed, "group": group, "running": running, "stopped": stopped, "released": released, "removed_nodes": removedNodes, "instances": instances})
 	}
 }
 

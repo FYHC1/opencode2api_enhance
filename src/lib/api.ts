@@ -504,7 +504,7 @@ export const api = {
       target: target ?? 'pool-only',
     }),
   subscriptionsDelete: (url: string) =>
-    req<{ status: string; removed: boolean; group: string; running: number; stopped: number; removed_nodes?: number; instances?: string[] }>(
+    req<{ status: string; removed: boolean; group: string; running: number; stopped: number; released?: number; removed_nodes?: number; instances?: string[] }>(
       'POST',
       '/subscriptions/delete',
       { url },

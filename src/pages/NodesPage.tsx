@@ -59,12 +59,6 @@ export default function NodesPage({
   const [subWaitSec, setSubWaitSec] = useState(0)
   const [importingUrl, setImportingUrl] = useState<string | null>(null) // 正在拉取的订阅
   const [deletingUrl, setDeletingUrl] = useState<string | null>(null) // 正在删除的订阅
-  // 删除订阅释放进度：{active, done, total}
-  const [subDeleteProgress, setSubDeleteProgress] = useState<{ active: boolean; done: number; total: number }>({
-    active: false,
-    done: 0,
-    total: 0,
-  })
   // 新增订阅表单
   const [addOpen, setAddOpen] = useState(false)
   const [addUrl, setAddUrl] = useState('')
@@ -98,8 +92,8 @@ export default function NodesPage({
   }, [])
 
   // T3/P3: 新增订阅 = 保存源 + 立即导入节点池（含「已等待 N 秒」进度）。
-  // P3: 10s 看门狗——超时 toast 报错、按钮恢复可用、弹窗不自动关闭；
-  // 后台请求不打断（节点稍后出现或点订阅行「拉取」重试）。
+  // P3: 10s 看门狗——超时 toast 提示、按钮恢复可用、弹窗不自动关闭；
+  // Q2: 超时不丢弃真实请求——后台完成导入后自动刷新节点池（节点获取到即显示，无需手动刷新）。
   const handleAddSubscription = async () => {
     if (!addUrl.trim()) {
       toast('请填写订阅 URL', false)
@@ -113,15 +107,34 @@ export default function NodesPage({
       setSubWaitSec((s) => s + 1)
     }, 1000)
     const clearTicker = () => window.clearInterval(ticker)
+    // 真实请求引用：看门狗超时后仍要等它完成（后台已拉取，完成后节点池自动更新）
+    const req = api.subscriptionsAdd(url, addInterval)
     try {
       // P3: 10s 看门狗——race 后端返回与 10s 延时；谁先到谁定夺；后台请求不打断
       const r = await Promise.race([
-        api.subscriptionsAdd(url, addInterval),
+        req,
         new Promise<null>((resolve) => setTimeout(resolve, 10_000)),
       ])
       if (r === null) {
-        // 超时：后台仍在处理，恢复按钮让用户择机重试；弹窗不自动关闭
-        toast('拉取超时，后台仍在处理，稍后可点「拉取」重试', false)
+        // 超时：后台仍在处理。不丢弃真实请求——完成时自动刷新节点池并提示，
+        // 节点获取到即在节点池显示（Q2），弹窗不自动关闭，按钮由 finally 恢复
+        toast('拉取较慢，后台仍在处理，完成后节点池自动更新', false)
+        req
+          .then((rr) => {
+            if (rr.error) {
+              toast(`订阅已添加，但首次拉取失败：${rr.error}`, false)
+            } else {
+              toast(`已导入 ${rr.imported} 个节点到节点池`, true)
+              setAddOpen(false)
+              setAddUrl('')
+              setAddInterval(30)
+            }
+          })
+          .catch(() => {})
+          .finally(() => {
+            void loadSubs()
+            void loadNodes()
+          })
         return
       }
       if (r.error) {
@@ -164,7 +177,8 @@ export default function NodesPage({
     }
   }
 
-  // T3/V2: 删除订阅——先查使用中实例数并确认，再停止+释放（右下角进度面板）
+  // T3/V2: 删除订阅——先查使用中实例数并确认，再整体删除（Q1：后端原子完成
+  // 停止→释放实例→同步网关→删源→清节点组，前端不再补刀分步释放）
   const handleDeleteSub = async (url: string) => {
     setDeletingUrl(url)
     try {
@@ -179,7 +193,8 @@ export default function NodesPage({
         setDeletingUrl(null)
         return
       }
-      // 2) 删除订阅源（返回分组名）
+      // 2) 后端一次完成：停止使用中的实例 → 全部停止后移除释放（实例池/独享）→ 同步网关
+      //    → 删除订阅源 → 清理该分组节点（Q1）
       const r = await api.subscriptionsDelete(url)
       if (!r.removed) {
         toast('订阅源未找到，可能已删除', false)
@@ -187,38 +202,19 @@ export default function NodesPage({
         setDeletingUrl(null)
         return
       }
-      // 3) 按后端返回的受影响实例名停止并释放（P-2：后端删除时已同步清理分组节点缓存，
-      //    前端不再依赖 listNodes 反查分组；旧后端无 instances 时退回旧逻辑）
-      let names: string[] = r.instances ?? []
-      if (names.length === 0 && r.group) {
-        const insts = await api.listInstances()
-        const nodes = await api.listNodes()
-        const subNodes = nodes.filter((n) => n.group === r.group)
-        names = insts.filter((i) => subNodes.some((n) => n.name === i.node)).map((i) => i.name)
-      }
-      const total = Math.max(names.length, 1)
-      setSubDeleteProgress({ active: true, done: 0, total })
-      // 停止全部实例（已停止的幂等跳过），再释放
-      if (names.length > 0) {
-        await api.batchStop([...names]).catch(() => {})
-        setSubDeleteProgress({ active: true, done: 0, total })
-      }
-      // 分块并发释放（与实例池释放一致：4 并发）
-      let done = 0
-      for (let i = 0; i < names.length; i += 4) {
-        const chunk = names.slice(i, i + 4)
-        await Promise.allSettled(chunk.map((n) => api.removeInstance(n)))
-        done += chunk.length
-        setSubDeleteProgress({ active: true, done, total })
-      }
-      toast(`已删除订阅，并释放 ${names.length} 个实例`, true)
+      const released = r.released ?? r.instances?.length ?? 0
+      toast(
+        released > 0
+          ? `已删除订阅，并停止释放 ${released} 个实例${r.removed_nodes ? `，清理 ${r.removed_nodes} 个节点` : ''}`
+          : '已删除订阅',
+        true,
+      )
       await loadSubs()
       await loadNodes()
     } catch (e) {
       toast(String(e), false)
     } finally {
       setDeletingUrl(null)
-      setSubDeleteProgress({ active: false, done: 0, total: 0 })
     }
   }
 
@@ -939,23 +935,6 @@ export default function NodesPage({
                 </div>
               )}
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* T3: 全局删除进度悬浮面板（释放订阅实例，不阻塞其他操作） */}
-      {subDeleteProgress.active && (
-        <div className="fixed bottom-4 right-4 z-[70] w-60 bg-white/95 backdrop-blur rounded-xl border border-zinc-200 shadow-lg px-4 py-3">
-          <div className="text-[12px] font-medium text-zinc-700 mb-1">正在释放订阅实例…</div>
-          <div className="flex items-center justify-between text-[12px] text-zinc-500 mb-1.5">
-            <span>{subDeleteProgress.done} / {subDeleteProgress.total}</span>
-            <span>{subDeleteProgress.total > 0 ? Math.round((subDeleteProgress.done / subDeleteProgress.total) * 100) : 0}%</span>
-          </div>
-          <div className="h-1.5 bg-zinc-100 rounded-full overflow-hidden">
-            <div
-              className="h-full bg-red-500 transition-all duration-200"
-              style={{ width: `${subDeleteProgress.total > 0 ? (subDeleteProgress.done / subDeleteProgress.total) * 100 : 0}%` }}
-            />
           </div>
         </div>
       )}
