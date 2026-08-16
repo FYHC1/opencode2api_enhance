@@ -215,10 +215,10 @@ func parseSubscription(body string) ([]SubscribeNode, error) {
 	if err != nil {
 		return nil, err
 	}
-	// 出口统一过滤公告/伪节点（官网/更新时间/剩余时长…，名称含全角冒号）
+	// 出口统一过滤公告/伪节点（官网/更新时间/剩余流量…，全角/半角冒号均覆盖，口径同 Clash）
 	filtered := nodes[:0]
 	for _, n := range nodes {
-		if !isInfoPseudoNode(n.Name) {
+		if !isPseudoNode(n.Name) {
 			filtered = append(filtered, n)
 		}
 	}
@@ -340,8 +340,8 @@ func parsePlainLinks(s string) ([]SubscribeNode, error) {
 			// 对齐 Rust：跳过无法解析的行（仅记录，不中断）
 			continue
 		} else if ok {
-			if isInfoPseudoNode(node.Name) {
-				// 对齐 Rust is_info_pseudo_node：公告/信息伪节点（官网/更新时间/剩余时长…）过滤
+			if isPseudoNode(node.Name) {
+				// 公告/信息伪节点（官网/时间/流量/邮箱…，口径同 Clash）过滤
 				continue
 			}
 			nodes = append(nodes, node)
@@ -377,6 +377,12 @@ func isInfoPseudoNode(name string) bool {
 		}
 	}
 	return false
+}
+
+// isPseudoNode 统一伪节点判定：公告前缀（isInfoPseudoNode）+ Clash 垃圾关键词（isJunkNode）并集。
+// 全角冒号由 isInfoPseudoNode 覆盖、半角冒号/`-----` 前缀由 isJunkNode 覆盖；两个基础谓词语义不变。
+func isPseudoNode(name string) bool {
+	return isInfoPseudoNode(name) || isJunkNode(name)
 }
 
 // parseURILink 识别并解析单个 v2ray 风格链接。
@@ -1151,10 +1157,14 @@ func toClashNode(n SubscribeNode) ClashNode {
 }
 
 // listSubscriptionNodes 订阅缓存节点 → ClashNode 列表（并入节点池）。
+// 展示时套统一伪节点谓词：旧缓存残留的伪节点从节点池隐藏（不改缓存文件）。
 func (m *Manager) listSubscriptionNodes() []ClashNode {
 	cache := m.loadSubscriptionCache()
 	out := make([]ClashNode, 0, len(cache))
 	for _, n := range cache {
+		if isPseudoNode(n.Name) {
+			continue
+		}
 		out = append(out, toClashNode(n))
 	}
 	return out

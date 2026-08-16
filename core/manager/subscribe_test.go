@@ -34,6 +34,41 @@ func TestIsInfoPseudoNode(t *testing.T) {
 	}
 }
 
+// P1: 统一伪节点谓词 isPseudoNode = isInfoPseudoNode ∪ isJunkNode（全角/半角冒号、`-----`、正常节点）。
+func TestIsPseudoNode(t *testing.T) {
+	cases := []struct {
+		name string
+		want bool
+	}{
+		// 全角冒号公告（isInfoPseudoNode 命中）
+		{"官网：https://t.me/example", true},
+		{"更新时间：2026-08-01", true},
+		{"[anytls]官网：xuelian.pro", true},
+		// 半角冒号（isJunkNode 命中）
+		{"剩余流量: 12GB", true},
+		{"官网: xuelian.pro", true},
+		{"时间: 2026-01-01", true},
+		{"登录账号: admin", true},
+		{"流量重置: 每月1日", true},
+		// `-----` 前缀
+		{"-----广告", true},
+		// 无冒号公告（两个基础谓词均不命中，当前口径下保留）
+		{"官网 xuelian.pro", false},
+		{"更新时间 2026-08-01", false},
+		// 正常节点必须保留
+		{"HK-01", false},
+		{"香港 01", false},
+		{"JP-东京-02", false},
+		{"正常节点-01", false},
+		{"余量：100GB", false},
+	}
+	for _, c := range cases {
+		if got := isPseudoNode(c.name); got != c.want {
+			t.Errorf("isPseudoNode(%q) = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 // V1: parseSubscription 出口统一过滤伪节点（明文链接含公告行）。
 func TestParseSubscriptionFiltersPseudoNodes(t *testing.T) {
 	body := "官网：https://t.me/official\n" +
@@ -54,10 +89,38 @@ func TestParseSubscriptionFiltersPseudoNodes(t *testing.T) {
 	}
 }
 
-// V1: Clash YAML 路径同样过滤伪节点。
+// P1: 半角冒号/`-----` 伪节点（旧版 isInfoPseudoNode 漏判）经 parseSubscription 同样被过滤，
+// 正常节点保留。
+func TestParseSubscriptionFiltersPseudoNodesHalfWidth(t *testing.T) {
+	body := "vless://uuid1@x.example.com:443?security=tls#剩余流量:12GB\n" +
+		"vless://uuid2@y.example.com:443?security=tls#官网:xuelian.pro\n" +
+		"vless://uuid3@z.example.com:443?security=tls#-----广告\n" +
+		"vless://uuid4@h.example.com:443?security=tls#官网：xuelian.pro\n" +
+		"vless://uuid5@hk.example.com:443?security=tls#HK-01\n" +
+		"vless://uuid6@jp.example.com:443?security=tls#JP-02\n"
+	nodes, err := parseSubscription(body)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(nodes) != 2 {
+		t.Fatalf("nodes = %d, want 2 (半角/全角伪节点均过滤)", len(nodes))
+	}
+	for _, n := range nodes {
+		if isPseudoNode(n.Name) {
+			t.Fatalf("pseudo node leaked: %q", n.Name)
+		}
+	}
+}
+
+// V1: Clash YAML 路径同样过滤伪节点（全角 + 半角）。
 func TestParseSubscriptionClashYAMLFiltersPseudo(t *testing.T) {
 	body := `proxies:
   - name: 官网：xuelian.pro
+    type: trojan
+    server: x.example.com
+    port: 443
+    password: s
+  - name: 剩余流量: 12GB
     type: trojan
     server: x.example.com
     port: 443
@@ -203,6 +266,37 @@ func TestSubscriptionCacheAndRemove(t *testing.T) {
 	}
 	if len(m.loadSubscriptionCache()) != 0 {
 		t.Fatal("cache should be empty")
+	}
+}
+
+// P1: 旧缓存残留的伪节点在节点池展示时被隐藏（listSubscriptionNodes 过滤，不改缓存文件）。
+func TestListSubscriptionNodesFiltersStalePseudo(t *testing.T) {
+	m := New(t.TempDir())
+	mk := func(name string) SubscribeNode {
+		return SubscribeNode{Name: name, Server: "1.2.3.4", Port: 443, NodeType: "trojan",
+			Password: "pw", TLS: true, Raw: "trojan://pw@1.2.3.4:443#" + name}
+	}
+	// 模拟旧版本已写入缓存的全角/半角伪节点
+	if err := m.saveSubscriptionCache([]SubscribeNode{
+		mk("HK-01"),
+		mk("官网：xuelian.pro"),
+		mk("剩余流量:12GB"),
+		mk("JP-02"),
+	}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	got := m.listSubscriptionNodes()
+	if len(got) != 2 {
+		t.Fatalf("nodes = %d, want 2 (伪节点仅隐藏): %+v", len(got), got)
+	}
+	for _, n := range got {
+		if isPseudoNode(n.Name) {
+			t.Fatalf("pseudo node leaked: %q", n.Name)
+		}
+	}
+	// 缓存文件原样保留（删除接口仍按原名工作）
+	if len(m.loadSubscriptionCache()) != 4 {
+		t.Fatalf("cache = %+v, want 4 (缓存文件不修改)", m.loadSubscriptionCache())
 	}
 }
 
