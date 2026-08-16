@@ -30,6 +30,11 @@ export default function SettingsPage({
   const [orphanBusy, setOrphanBusy] = useState(false)
   const [killBusy, setKillBusy] = useState(false)
   const [selected, setSelected] = useState<Set<number>>(new Set())
+  // P2 audit: 保存 Clash / 保存代理 / 开机自启开关 / 数据清理 忙态
+  const [savingClash, setSavingClash] = useState(false)
+  const [savingProxy, setSavingProxy] = useState(false)
+  const [autostartBusy, setAutostartBusy] = useState(false)
+  const [cleanLevel, setCleanLevel] = useState<1 | 2 | 3 | null>(null)
 
 
   // G31/L10: toast 用 ref 封装（App 的 showToast 每次渲染重建）——effect 固定只跑一次，
@@ -66,6 +71,7 @@ export default function SettingsPage({
   }, [])
 
   const handleSaveClash = async () => {
+    setSavingClash(true)
     try {
       await api.configSet('clash_external_url', clashUrl)
       if (clashToken.trim()) {
@@ -79,21 +85,28 @@ export default function SettingsPage({
     } catch (e) {
       console.error('保存失败', e)
       toast('保存失败', false)
+    } finally {
+      setSavingClash(false)
     }
   }
 
   // 代理出口（E1）：保存上游代理配置（留空 = 直连）
   const handleSaveUpstreamProxy = async () => {
+    setSavingProxy(true)
     try {
       await api.configSet('upstream_proxy', upstreamProxy)
       toast('已保存', true)
     } catch (e) {
       console.error('保存失败', e)
       toast('保存失败', false)
+    } finally {
+      setSavingProxy(false)
     }
   }
 
   const handleAutostartChange = async (enabled: boolean) => {
+    if (autostartBusy) return
+    setAutostartBusy(true)
     try {
       await api.autostartSet(enabled)
       setAutostart(enabled)
@@ -101,6 +114,8 @@ export default function SettingsPage({
     } catch (e) {
       console.error('设置开机自启失败', e)
       toast('设置失败', false)
+    } finally {
+      setAutostartBusy(false)
     }
   }
 
@@ -164,6 +179,8 @@ export default function SettingsPage({
     }
     if (!window.confirm(`确定要执行「${labels[level]}」？\n\n这会先停止所有运行中的实例与网关。此操作不可撤销。`)) return
     if (level === 3 && !window.confirm('这是完全重置，将删除所有配置并备份到 config.json.bak。\n请再次确认继续？')) return
+    if (cleanLevel) return
+    setCleanLevel(level)
     try {
       await api.dataClean(level)
       try {
@@ -175,6 +192,8 @@ export default function SettingsPage({
     } catch (e) {
       console.error('清理失败', e)
       toast('清理失败', false)
+    } finally {
+      setCleanLevel(null)
     }
   }
 
@@ -220,9 +239,11 @@ export default function SettingsPage({
 
         <button
           onClick={handleSaveClash}
-          className="bg-zinc-900 text-white rounded-lg px-4 py-2 hover:bg-zinc-700"
+          disabled={savingClash}
+          className="flex items-center gap-1.5 bg-zinc-900 text-white rounded-lg px-4 py-2 hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          保存
+          {savingClash ? <Loader2 size={14} className="animate-spin" /> : null}
+          {savingClash ? '保存中…' : '保存'}
         </button>
       </div>
       )}
@@ -248,9 +269,11 @@ export default function SettingsPage({
 
         <button
           onClick={handleSaveUpstreamProxy}
-          className="bg-zinc-900 text-white rounded-lg px-4 py-2 hover:bg-zinc-700"
+          disabled={savingProxy}
+          className="flex items-center gap-1.5 bg-zinc-900 text-white rounded-lg px-4 py-2 hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          保存
+          {savingProxy ? <Loader2 size={14} className="animate-spin" /> : null}
+          {savingProxy ? '保存中…' : '保存'}
         </button>
       </div>
 
@@ -265,6 +288,7 @@ export default function SettingsPage({
               type="checkbox"
               checked={autostart}
               onChange={(e) => handleAutostartChange(e.target.checked)}
+              disabled={autostartBusy}
               className="sr-only peer"
             />
             <div className="w-11 h-6 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-zinc-900"></div>
@@ -366,20 +390,26 @@ export default function SettingsPage({
         <div className="flex flex-wrap gap-2">
           <button
             onClick={() => handleDataClean(1)}
-            className="px-4 py-2 rounded-lg border border-zinc-300 text-sm hover:bg-zinc-100"
+            disabled={!!cleanLevel}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-lg border border-zinc-300 text-sm hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50"
           >
+            {cleanLevel === 1 ? <Loader2 size={14} className="animate-spin" /> : null}
             清理运行数据
           </button>
           <button
             onClick={() => handleDataClean(2)}
-            className="px-4 py-2 rounded-lg border border-amber-300 text-sm text-amber-700 hover:bg-amber-50"
+            disabled={!!cleanLevel}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-lg border border-amber-300 text-sm text-amber-700 hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-50"
           >
+            {cleanLevel === 2 ? <Loader2 size={14} className="animate-spin" /> : null}
             清空实例记录
           </button>
           <button
             onClick={() => handleDataClean(3)}
-            className="px-4 py-2 rounded-lg bg-red-600 text-white text-sm hover:bg-red-700"
+            disabled={!!cleanLevel}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-red-600 text-white text-sm hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
+            {cleanLevel === 3 ? <Loader2 size={14} className="animate-spin" /> : null}
             全部重置
           </button>
         </div>

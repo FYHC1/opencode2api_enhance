@@ -88,12 +88,15 @@ export default memo(function InstancesPage({
   // 独享实例探测开关（V4）：控制是否对独享实例做链路质量检查
   const doToggleProbeSolo = async () => {
     const next = !probeSolo
+    setProbeSoloBusy(true)
     try {
       await api.configSet('probe_solo_enabled', String(next))
       setProbeSolo(next)
       toast(next ? '已开启独享实例链路探测' : '已关闭独享实例链路探测（只探测池成员）', true)
     } catch (e) {
       toast(String(e), false)
+    } finally {
+      setProbeSoloBusy(false)
     }
   }
 
@@ -118,6 +121,7 @@ export default memo(function InstancesPage({
       toast('刷新间隔需为 0~60 的整数（0 = 关闭自动刷新）', false)
       return
     }
+    setSavingUi(true)
     try {
       await api.configSet('ui_poll_interval_sec', String(v))
       setUiPollSec(v)
@@ -125,6 +129,8 @@ export default memo(function InstancesPage({
     } catch (e) {
       console.error('保存界面刷新配置失败', e)
       toast('保存失败', false)
+    } finally {
+      setSavingUi(false)
     }
   }
 
@@ -228,7 +234,14 @@ export default memo(function InstancesPage({
 
   // 忙态：optimistic —— 变化触发重渲染；key=实例名，值为该实例正在进行的操作
   const [pending, setPending] = useState<Record<string, 'start' | 'stop'>>({})
-  const [batchBusy, setBatchBusy] = useState(false)
+  // P2 audit: 批量操作忙态按动作区分（对齐 PoolPage allBusy）+ 行内测试/释放忙态
+  const [batchKind, setBatchKind] = useState<'start' | 'stop' | 'delete' | null>(null)
+  const [rowTestBusy, setRowTestBusy] = useState<Record<string, boolean>>({})
+  const [rowRemoveBusy, setRowRemoveBusy] = useState<Record<string, boolean>>({})
+  // P2 audit: 设置弹窗「保存」忙态
+  const [savingUi, setSavingUi] = useState(false)
+  // P2 audit: 链路探测开关切身忙态（防连点重入）
+  const [probeSoloBusy, setProbeSoloBusy] = useState(false)
 
   // 标记/清除某实例的进行中操作
   const setOp = (name: string, op: 'start' | 'stop' | null) => {
@@ -268,6 +281,7 @@ export default memo(function InstancesPage({
 
 const doRemove = async (name: string) => {
     if (!confirm(`确定释放实例 ${name}？将关闭实例并释放节点。`)) return
+    setRowRemoveBusy((prev) => ({ ...prev, [name]: true }))
     try {
       await api.removeInstance(name)
       toast(`已释放实例 ${name}`)
@@ -279,10 +293,17 @@ const doRemove = async (name: string) => {
       await load()
     } catch (e) {
       toast(String(e), false)
+    } finally {
+      setRowRemoveBusy((prev) => {
+        const next = { ...prev }
+        delete next[name]
+        return next
+      })
     }
   }
 
   const doTest = async (name: string) => {
+    setRowTestBusy((prev) => ({ ...prev, [name]: true }))
     try {
       const r = await api.testInstance(name)
       setTestResults((prev) => ({ ...prev, [name]: r }))
@@ -291,6 +312,12 @@ const doRemove = async (name: string) => {
       else toast(r.message || '测试失败', false)
     } catch (e) {
       toast(String(e), false)
+    } finally {
+      setRowTestBusy((prev) => {
+        const next = { ...prev }
+        delete next[name]
+        return next
+      })
     }
   }
 
@@ -304,7 +331,7 @@ const doRemove = async (name: string) => {
       return
     }
 if (kind === 'delete' && !confirm(`确定释放选中的 ${names.length} 个实例？将自动关闭并释放节点。`)) return
-    setBatchBusy(true)
+    setBatchKind(kind)
     try {
       const fn =
         kind === 'start' ? api.batchStart : kind === 'stop' ? api.batchStop : api.batchDelete
@@ -321,7 +348,7 @@ if (kind === 'delete' && !confirm(`确定释放选中的 ${names.length} 个实�
     } catch (e) {
       toast(String(e), false)
     } finally {
-      setBatchBusy(false)
+      setBatchKind(null)
     }
   }
 
@@ -396,7 +423,7 @@ if (kind === 'delete' && !confirm(`确定释放选中的 ${names.length} 个实�
             <span className="text-[12px] text-zinc-600 whitespace-nowrap">链路探测</span>
             <button
               onClick={() => void doToggleProbeSolo()}
-              disabled={qualityBusy}
+              disabled={qualityBusy || probeSoloBusy}
               className={clsx(
                 'relative inline-flex items-center h-5 w-9 rounded-full transition-colors disabled:opacity-50',
                 probeSolo ? 'bg-teal-600' : 'bg-zinc-300',
@@ -443,17 +470,17 @@ if (kind === 'delete' && !confirm(`确定释放选中的 ${names.length} 个实�
             <div className="flex items-center gap-2">
               <button
                 onClick={() => void batch('start')}
-                disabled={selected.size === 0 || batchBusy}
+                disabled={selected.size === 0 || !!batchKind}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-white bg-green-600 hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-40"
               >
-                {batchBusy ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />} 批量启动
+                {batchKind === 'start' ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />} 批量启动
               </button>
               <button
                 onClick={() => void batch('stop')}
-                disabled={selected.size === 0 || batchBusy}
+                disabled={selected.size === 0 || !!batchKind}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-zinc-700 bg-white border border-zinc-200 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-40"
               >
-                <Square size={14} /> 批量停止
+                {batchKind === 'stop' ? <Loader2 size={14} className="animate-spin" /> : <Square size={14} />} 批量停止
               </button>
               <button
                 onClick={() => void doBatchTest()}
@@ -464,10 +491,10 @@ if (kind === 'delete' && !confirm(`确定释放选中的 ${names.length} 个实�
               </button>
               <button
                 onClick={() => void batch('delete')}
-                disabled={selected.size === 0 || batchBusy}
+                disabled={selected.size === 0 || !!batchKind}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-red-600 bg-red-50 border border-red-100 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-40"
               >
-                {batchBusy ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />} 批量释放
+                {batchKind === 'delete' ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />} 批量释放
               </button>
               <div
                 className={clsx(
@@ -584,11 +611,13 @@ if (kind === 'delete' && !confirm(`确定释放选中的 ${names.length} 个实�
                             {pending[i.name] === 'start' ? '启动中…' : '启动'}
                           </button>
                         )}
-                        <button onClick={() => void doTest(i.name)} className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[12px] text-teal-700 bg-teal-50 hover:bg-teal-100">
-                          <TestTube2 size={12} /> 测试
+                        <button onClick={() => void doTest(i.name)} disabled={!!rowTestBusy[i.name]} className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[12px] text-teal-700 bg-teal-50 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-60">
+                          {rowTestBusy[i.name] ? <Loader2 size={12} className="animate-spin" /> : <TestTube2 size={12} />}
+                          {rowTestBusy[i.name] ? '测试中…' : '测试'}
                         </button>
-<button onClick={() => void doRemove(i.name)} className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[12px] text-red-600 bg-red-50 hover:bg-red-100">
-                          <Trash2 size={12} /> 释放
+                        <button onClick={() => void doRemove(i.name)} disabled={!!rowRemoveBusy[i.name]} className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[12px] text-red-600 bg-red-50 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60">
+                          {rowRemoveBusy[i.name] ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
+                          {rowRemoveBusy[i.name] ? '释放中…' : '释放'}
                         </button>
                       </div>
                     </td>
@@ -655,8 +684,9 @@ if (kind === 'delete' && !confirm(`确定释放选中的 ${names.length} 个实�
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-[11px] text-zinc-400">保存后即时生效</span>
-                    <button onClick={() => void handleSaveUi()} className="bg-zinc-900 text-white rounded-lg px-4 py-2 text-[13px] hover:bg-zinc-700">
-                      保存
+                    <button onClick={() => void handleSaveUi()} disabled={savingUi} className="flex items-center gap-1.5 bg-zinc-900 text-white rounded-lg px-4 py-2 text-[13px] hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-60">
+                      {savingUi ? <Loader2 size={14} className="animate-spin" /> : null}
+                      {savingUi ? '保存中…' : '保存'}
                     </button>
                   </div>
                 </div>

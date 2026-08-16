@@ -68,6 +68,15 @@ export default memo(function PoolPage({
   const [stopping, setStopping] = useState(false)
   const [routeBusy, setRouteBusy] = useState(false)
   const [kickBusy, setKickBusy] = useState<string | null>(null)
+  // P2 audit: 工具条「刷新」/ 路由模式切换目标 / 性能模式/节点前缀开关切身忙态
+  const [refreshing, setRefreshing] = useState(false)
+  const [routeTarget, setRouteTarget] = useState<'smart' | 'failover' | 'round_robin' | null>(null)
+  const [perfBusy, setPerfBusy] = useState(false)
+  const [prefixBusy, setPrefixBusy] = useState(false)
+  // P2 audit: 设置弹窗三个「保存」按钮忙态
+  const [savingPool, setSavingPool] = useState(false)
+  const [savingTimeout, setSavingTimeout] = useState(false)
+  const [savingUi, setSavingUi] = useState(false)
   const [search, setSearch] = useState('')
   const [searchFocus, setSearchFocus] = useState(false)
   // 状态筛选（U2，对齐独享页）：全部 / 运行中 / 已停止
@@ -134,6 +143,16 @@ export default memo(function PoolPage({
       /* 轮询静默失败，保留上次状态 */
     }
   }, [])
+
+  // P2 audit: 工具条「刷新」显式忙态（spinner + 禁用）
+  const doRefresh = async () => {
+    setRefreshing(true)
+    try {
+      await load()
+    } finally {
+      setRefreshing(false)
+    }
+  }
 
   // 性能模式参数初始值（P2）：从配置加载生效默认值，保证输入框有默认填充
   useEffect(() => {
@@ -223,6 +242,7 @@ export default memo(function PoolPage({
 
   const doSetRouteMode = async (mode: 'smart' | 'failover' | 'round_robin') => {
     if (!gw || gw.route_mode === mode) return
+    setRouteTarget(mode)
     setRouteBusy(true)
     try {
       await api.gatewaySetRouteMode(mode)
@@ -232,6 +252,7 @@ export default memo(function PoolPage({
     } catch (e) {
       toast(String(e), false)
     } finally {
+      setRouteTarget(null)
       setRouteBusy(false)
     }
   }
@@ -253,12 +274,15 @@ export default memo(function PoolPage({
   // 性能模式开关（P2）：关闭时路由行为与基线一致
   const doTogglePerf = async () => {
     const next = !(perfMode ?? true)
+    setPerfBusy(true)
     try {
       await api.configSet('pool_performance_mode', String(next))
       setPerfMode(next)
       toast(next ? '性能模式已开启：质量加权路由 + 熔断自动恢复' : '性能模式已关闭：回到基线路由行为', true)
     } catch (e) {
       toast(String(e), false)
+    } finally {
+      setPerfBusy(false)
     }
   }
 
@@ -283,6 +307,7 @@ export default memo(function PoolPage({
         return
       }
     }
+    setSavingPool(true)
     try {
       await api.configSet('pool_probe_interval_sec', String(f.pool_probe_interval_sec))
       await api.configSet('pool_quality_window_min', String(f.pool_quality_window_min))
@@ -298,6 +323,8 @@ export default memo(function PoolPage({
     } catch (e) {
       console.error('保存性能模式配置失败', e)
       toast('保存失败', false)
+    } finally {
+      setSavingPool(false)
     }
   }
 
@@ -318,6 +345,7 @@ export default memo(function PoolPage({
       toast('日志保留上限至少 100 条', false)
       return
     }
+    setSavingTimeout(true)
     try {
       await api.configSet('timeout_ttft_min_ms', String(f.timeout_ttft_min_ms))
       await api.configSet('timeout_ttft_max_ms', String(f.timeout_ttft_max_ms))
@@ -330,6 +358,8 @@ export default memo(function PoolPage({
     } catch (e) {
       console.error('保存超时配置失败', e)
       toast('保存失败', false)
+    } finally {
+      setSavingTimeout(false)
     }
   }
 
@@ -340,6 +370,7 @@ export default memo(function PoolPage({
       toast('刷新间隔需为 0~60 的整数（0 = 关闭自动刷新）', false)
       return
     }
+    setSavingUi(true)
     try {
       await api.configSet('ui_poll_interval_sec', String(v))
       setUiPollSec(v)
@@ -347,10 +378,13 @@ export default memo(function PoolPage({
     } catch (e) {
       console.error('保存界面刷新配置失败', e)
       toast('保存失败', false)
+    } finally {
+      setSavingUi(false)
     }
   }
 
   const handleShowNodePrefixChange = async (enabled: boolean) => {
+    setPrefixBusy(true)
     try {
       await api.configSet('show_node_prefix', String(enabled))
       setShowNodePrefix(enabled)
@@ -358,6 +392,8 @@ export default memo(function PoolPage({
     } catch (e) {
       console.error('设置节点前缀失败', e)
       toast('设置失败', false)
+    } finally {
+      setPrefixBusy(false)
     }
   }
 
@@ -595,10 +631,12 @@ export default memo(function PoolPage({
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => void load()}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-zinc-700 bg-white border border-zinc-200 hover:bg-zinc-50"
+            onClick={() => void doRefresh()}
+            disabled={refreshing}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-zinc-700 bg-white border border-zinc-200 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-70"
           >
-            <RefreshCw size={14} /> 刷新
+            <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
+            {refreshing ? '刷新中…' : '刷新'}
           </button>
           <button
             onClick={() => void doStopGateway()}
@@ -715,7 +753,7 @@ export default memo(function PoolPage({
           <div className="flex items-center gap-2" title={perfMode ? '开启：质量加权路由 + 熔断/半开自动恢复' : '关闭：路由行为与基线一致（纯游标+冷却）'}>
             <button
               onClick={() => void doTogglePerf()}
-              disabled={perfMode === null}
+              disabled={perfMode === null || perfBusy}
               className={clsx(
                 'relative inline-flex items-center h-6 w-11 rounded-full transition-colors disabled:opacity-50',
                 perfMode ? 'bg-teal-600' : 'bg-zinc-300',
@@ -748,6 +786,9 @@ export default memo(function PoolPage({
                     : 'text-zinc-600 bg-white border-zinc-200 hover:bg-zinc-50',
                 )}
               >
+                {routeBusy && routeTarget === m ? (
+                  <Loader2 size={12} className="mr-1 inline animate-spin" />
+                ) : null}
                 {m === 'smart' ? 'smart（默认）' : m}
               </button>
             ))}
@@ -924,7 +965,8 @@ export default memo(function PoolPage({
                           disabled={!!rowBusy[i.name]}
                           className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[12px] text-teal-700 bg-teal-50 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-60"
                         >
-                          <TestTube2 size={12} /> 测试
+                          {rowBusy[i.name] === 'test' ? <Loader2 size={12} className="animate-spin" /> : <TestTube2 size={12} />}
+                          {rowBusy[i.name] === 'test' ? '测试中…' : '测试'}
                         </button>
 <button
                           onClick={() => void doRelease(i.name)}
@@ -1106,8 +1148,13 @@ export default memo(function PoolPage({
                   </label>
                   <span className="text-sm text-zinc-700">链路主动探活</span>
                 </div>
-                <button onClick={() => void handleSavePool()} className="bg-zinc-900 text-white rounded-lg px-4 py-2 text-[13px] hover:bg-zinc-700">
-                  保存
+                <button
+                  onClick={() => void handleSavePool()}
+                  disabled={savingPool}
+                  className="flex items-center gap-1.5 bg-zinc-900 text-white rounded-lg px-4 py-2 text-[13px] hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {savingPool ? <Loader2 size={14} className="animate-spin" /> : null}
+                  {savingPool ? '保存中…' : '保存'}
                 </button>
               </div>
                 </div>
@@ -1205,14 +1252,20 @@ export default memo(function PoolPage({
                       type="checkbox"
                       checked={showNodePrefix}
                       onChange={(e) => handleShowNodePrefixChange(e.target.checked)}
+                      disabled={prefixBusy}
                       className="sr-only peer"
                     />
                     <div className="w-11 h-6 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-zinc-900"></div>
                   </label>
                   <span className="text-sm text-zinc-700">对话流首段展示「节点 · 模型」前缀</span>
                 </div>
-                <button onClick={() => void handleSaveTimeout()} className="bg-zinc-900 text-white rounded-lg px-4 py-2 text-[13px] hover:bg-zinc-700">
-                  保存超时配置
+                <button
+                  onClick={() => void handleSaveTimeout()}
+                  disabled={savingTimeout}
+                  className="flex items-center gap-1.5 bg-zinc-900 text-white rounded-lg px-4 py-2 text-[13px] hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {savingTimeout ? <Loader2 size={14} className="animate-spin" /> : null}
+                  {savingTimeout ? '保存中…' : '保存超时配置'}
                 </button>
               </div>
                 </div>
@@ -1248,8 +1301,13 @@ export default memo(function PoolPage({
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-[11px] text-zinc-400">保存后即时生效</span>
-                    <button onClick={() => void handleSaveUi()} className="bg-zinc-900 text-white rounded-lg px-4 py-2 text-[13px] hover:bg-zinc-700">
-                      保存
+                    <button
+                      onClick={() => void handleSaveUi()}
+                      disabled={savingUi}
+                      className="flex items-center gap-1.5 bg-zinc-900 text-white rounded-lg px-4 py-2 text-[13px] hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {savingUi ? <Loader2 size={14} className="animate-spin" /> : null}
+                      {savingUi ? '保存中…' : '保存'}
                     </button>
                   </div>
                 </div>

@@ -35,6 +35,9 @@ export default function NodesPage({
   const [showResult, setShowResult] = useState(false)
   // 入池/独享动作进行中（弹窗按钮禁用）
   const [acting, setActing] = useState(false)
+  // P2 audit: 删除勾选节点 / 保存扫描配置 忙态（spinner + 禁用，防连点）
+  const [deleting, setDeleting] = useState(false)
+  const [savingScanConf, setSavingScanConf] = useState(false)
   // 追踪上一次扫描状态：仅在「本次扫描 running → done」时弹出结果弹窗
   const prevScanStatusRef = useRef<string | null>(null)
   // N1: 三态切换（ref 同步：poll 闭包只读 phaseRef，避免 stale closure）。
@@ -242,14 +245,17 @@ export default function NodesPage({
         const prev = prevScanStatusRef.current
         prevScanStatusRef.current = p.status
         // N1 三态状态机（逻辑不变）：startScan/stopScan 同步置位；poll 只做收尾确认
-        // （stopping→done 回 idle）与页面加载后的状态恢复，不再直接驱动按钮态，
-        // 杜绝闪烁；停止请求后也不回填 scan（进度条立即消失、无 5/10 残留）。
+        // （stopping→done 回 idle）与页面加载后的状态恢复，不再直接驱动按钮态，杜绝闪烁。
+        // P5: 停止清空结果 → 改为 status 置 'stopping' 隐藏进度条（进度条仅 running 渲染，
+        // 已扫节点结果/延迟徽章保留）；后端确认停止完成（done/error/idle）时回填 scan，
+        // 展示后端保留的最终部分结果，可继续勾选使用。
         // V2: 顺带同步全局任务悬浮窗的 scan / stop-scan 进度。
         if (phaseRef.current === 'stopping') {
           // 已请求停止：等后端确认终止（done/error/idle 等价收尾）才回 idle；期间持续上报停止进度
           // M11: error/idle 与 done 同等收敛——停止被中止或状态回落时不再永久 busy
           if (p.status === 'done' || p.status === 'error' || p.status === 'idle') {
             setScanPhase('idle')
+            setScan(p) // P5: 回填后端最终部分结果（已扫节点徽章/延迟保留）
             onTask({ id: 'stop-scan', type: 'stop-scan', title: '停止扫描', done: p.stopped_count ?? 0, total: p.stopping_count ?? 0, busy: false })
           } else {
             onTask({ id: 'stop-scan', type: 'stop-scan', title: '停止扫描', done: p.stopped_count ?? 0, total: p.stopping_count ?? 0, busy: true })
@@ -267,6 +273,8 @@ export default function NodesPage({
           } else if (p.status === 'stopping') {
             // 非本页发起的停止（另一会话/上次请求已到达）：scan 任务先收尾移除，再跟随真实状态
             setScanPhase('stopping')
+            // P5: 同样隐藏进度条保留结果（进度条仅 running 渲染）
+            setScan((prev) => (prev ? { ...prev, status: 'stopping' } : prev))
             onRemove('scan')
             onTask({ id: 'stop-scan', type: 'stop-scan', title: '停止扫描', done: p.stopped_count ?? 0, total: p.stopping_count ?? 0, busy: true })
           } else {
@@ -342,12 +350,13 @@ export default function NodesPage({
     }
   }
 
-  // N1: 停止扫描——点击即同步进入「正在停止中」（禁用态、不闪烁），进度条立即消失；
-  // 后端确认 stopping→done 由 poll 收敛回 idle，之后可重新扫描。
+  // N1: 停止扫描——点击即同步进入「正在停止中」（禁用态、不闪烁）；
+  // P5: 停止不再清空结果——scan 仅置 status 'stopping'（进度条只在 running 渲染，即隐藏），
+  // 已扫节点的结果/延迟徽章保留；停止完成后由 poll 用后端保留的最终部分结果回填。
   // V2: scan 任务同步收尾移除（进度移交 stop-scan）；请求失败时 poll 会按后端真实状态重新上报。
   const stopScan = async () => {
     setScanPhase('stopping')
-    setScan(null)
+    setScan((prev) => (prev ? { ...prev, status: 'stopping' } : prev))
     onRemove('scan')
     try {
       const p = await api.scanStop()
@@ -373,12 +382,32 @@ export default function NodesPage({
       toast('停止并发需在 1~8 之间', false)
       return
     }
+    setSavingScanConf(true)
     try {
       await api.configSet('scan_concurrency', String(scan_concurrency))
       await api.configSet('stop_scan_concurrency', String(stop_scan_concurrency))
       toast('节点扫描配置已保存', true)
     } catch (e) {
       toast(String(e), false)
+    } finally {
+      setSavingScanConf(false)
+    }
+  }
+
+  // P2 audit: 删除勾选节点（仅订阅缓存节点可删；外部 Clash 节点只读跳过）
+  const handleDeleteNodes = async () => {
+    if (selected.size === 0 || deleting) return
+    if (!window.confirm(`删除勾选的 ${selected.size} 个节点？（仅订阅导入的节点可删，外部 Clash 节点只读）`)) return
+    setDeleting(true)
+    try {
+      const r = await api.deleteNodes([...selected])
+      toast(`已删除 ${r.removed} 个订阅节点` + (r.removed < selected.size ? '（其余为外部节点，只读跳过）' : ''), true)
+      setSelected(new Set())
+      await loadNodes()
+    } catch (e) {
+      toast(String(e), false)
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -484,7 +513,8 @@ export default function NodesPage({
         <div className="flex items-center gap-2">
           <button
             onClick={() => void doRefresh()}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-zinc-700 bg-white border border-zinc-200 hover:bg-zinc-50"
+            disabled={refreshing}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-zinc-700 bg-white border border-zinc-200 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-70"
           >
             <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
             {refreshing ? '刷新中…' : '刷新'}
@@ -499,29 +529,18 @@ export default function NodesPage({
           </button>
           {/* 删除勾选节点（仅订阅缓存节点可删；外部 Clash 节点只读跳过） */}
           <button
-            onClick={async () => {
-              if (selected.size === 0) return
-              if (!window.confirm(`删除勾选的 ${selected.size} 个节点？（仅订阅导入的节点可删，外部 Clash 节点只读）`)) return
-              try {
-                const r = await api.deleteNodes([...selected])
-                toast(`已删除 ${r.removed} 个订阅节点` + (r.removed < selected.size ? '（其余为外部节点，只读跳过）' : ''), true)
-                setSelected(new Set())
-                await loadNodes()
-              } catch (e) {
-                toast(String(e), false)
-              }
-            }}
-            disabled={selected.size === 0}
+            onClick={() => void handleDeleteNodes()}
+            disabled={selected.size === 0 || deleting}
             className={clsx(
               'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] transition-colors',
-              selected.size === 0
+              selected.size === 0 || deleting
                 ? 'bg-zinc-200 text-zinc-500 cursor-not-allowed'
                 : 'bg-white border border-red-200 text-red-600 hover:bg-red-50',
             )}
             title={selected.size === 0 ? '请先勾选节点' : '删除勾选的订阅节点'}
           >
-            <Trash2 size={14} />
-            删除
+            {deleting ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+            {deleting ? '删除中…' : '删除'}
           </button>
           {phase === 'scanning' ? (
             <button
@@ -787,8 +806,13 @@ export default function NodesPage({
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-[11px] text-zinc-400">并发过高可能引起进程风暴，建议保持默认</span>
-                    <button onClick={() => void handleSaveScanConf()} className="bg-zinc-900 text-white rounded-lg px-4 py-2 text-[13px] hover:bg-zinc-700">
-                      保存
+                    <button
+                      onClick={() => void handleSaveScanConf()}
+                      disabled={savingScanConf}
+                      className="flex items-center gap-1.5 bg-zinc-900 text-white rounded-lg px-4 py-2 text-[13px] hover:bg-zinc-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                    >
+                      {savingScanConf ? <Loader2 size={14} className="animate-spin" /> : null}
+                      {savingScanConf ? '保存中…' : '保存'}
                     </button>
                   </div>
                 </div>
@@ -907,7 +931,8 @@ export default function NodesPage({
                         disabled={deletingUrl === s.url}
                         className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-[12px] text-red-600 bg-red-50 hover:bg-red-100 disabled:opacity-60"
                       >
-                        <Trash2 size={12} /> 删除
+                        {deletingUrl === s.url ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
+                        {deletingUrl === s.url ? '删除中…' : '删除'}
                       </button>
                     </div>
                   ))}
