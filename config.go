@@ -176,12 +176,10 @@ func getSocks5ProxyCount() int {
 	return len(socks5Proxies)
 }
 
-// maxRouteRetries 返回同模型路由重试上限：多代理时按代理数扩展，否则沿用上游重试上限。
+// maxRouteRetries 返回同模型路由重试上限。
+// 历史实现会随代理池规模线性放大（proxyCount>3 时返回 proxyCount），
+// 上游故障时单请求可串行打上游数十次，形成重试风暴；现收敛为固定上限。
 func maxRouteRetries() int {
-	proxyCount := getSocks5ProxyCount()
-	if proxyCount > maxUpstreamRetries {
-		return proxyCount
-	}
 	return maxUpstreamRetries
 }
 

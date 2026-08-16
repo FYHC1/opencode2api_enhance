@@ -190,8 +190,9 @@ func listModelsHandler(w http.ResponseWriter, r *http.Request) {
 	modelMu.RUnlock()
 	// 目录未就绪（启动后首请求早于首次聚合刷新）→ 走聚合器路径同步拉取一次。
 	// 聚合器是唯一数据源：不保留直连上游的兜底（双轨已消灭）。
+	// 节流版：上游故障导致目录持续为空时，至多每 10s 重拉一轮（防每请求惊群）。
 	if !loaded || len(models) == 0 {
-		refreshModelCatalog()
+		refreshModelCatalogIfDue()
 		modelMu.RLock()
 		loaded, models = modelsLoaded, modelsCache
 		modelMu.RUnlock()
