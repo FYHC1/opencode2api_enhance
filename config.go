@@ -37,9 +37,9 @@ func saveConfig(path string, cfg AppConfig) error {
 // 声明于 config.go：socks_perf.go 由 S3 并行维护，不做 S2 改动。
 // G5：热重载（applyConfig）原子写、请求路径原子读，默认值写于 init。
 var (
-	rateLimitCooldownSec    atomic.Int64
-	rateLimitBackoffBaseMS  atomic.Int64
-	rateLimitBackoffCapMS   atomic.Int64
+	rateLimitCooldownSec   atomic.Int64
+	rateLimitBackoffBaseMS atomic.Int64
+	rateLimitBackoffCapMS  atomic.Int64
 )
 
 func init() {
@@ -203,6 +203,8 @@ func startConfigWatcher(path string) {
 				continue
 			}
 			applyConfig(cfg)
+			// providers 变化（如自定义模型源增删改）→ 原地重建厂商集合并刷新目录。
+			maybeRebuildVendors()
 			lastData = append(lastData[:0], data...)
 			slog.Info("config hot-reloaded", "path", path)
 		}

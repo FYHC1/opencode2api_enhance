@@ -34,6 +34,18 @@
 - `public` 只显示免费 Zen 模型。
 - 默认或 `zen:` 模式显示 Zen 目录。
 - `go:` 模式显示 Go 目录，并附带 public 可用的免费模型。
+- 管理面板「自定义模型」页接入的自定义源模型**恒展示**，ID 带 `{源ID}/` 前缀（如 `myglm/glm-4.7`），
+  三种入站协议均可直接调用（网关剥前缀转发对应上游，协议自动转换）。
+
+## 自定义模型源（管理）
+
+管理面板「自定义模型」页使用的后台接口（`requireAuth` 鉴权）：
+
+| 路由 | 方法 | 说明 |
+| --- | --- | --- |
+| `/api/admin/custom-providers` | `GET` | 自定义源列表（key 不回显，含模型数与最近错误） |
+| `/api/admin/custom-providers/save` | `POST` | 整表保存（增/改/删一次到位），保存即热生效 |
+| `/api/admin/custom-providers/test` | `POST` | 连通测试（不落盘）：拉取上游模型目录返回清单与延迟 |
 
 ## Chat Completions
 

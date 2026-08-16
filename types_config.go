@@ -72,10 +72,13 @@ type AppConfig struct {
 // ProviderCfg 描述一个模型厂商（vendors/ 下的实现）。
 type ProviderCfg struct {
 	ID   string `json:"id"`   // 厂商标识，与厂商实现 ID() 一致（如 "opencode"）
-	Type string `json:"type"` // 厂商类型（"opencode" | "windsurf" | ...），用于选择实现
+	Type string `json:"type"` // 厂商类型（"opencode" | "windsurf" | "custom" | ...），用于选择实现
 	Name string `json:"name,omitempty"`
 	// Enabled 开关；nil 视为 true。
 	Enabled *bool `json:"enabled,omitempty"`
+	// Params 厂商自定义装配参数（透传给工厂，厂商自行解释）。
+	// 以 "_" 开头的键保留给 core 运行时注入（Transport 等），配置中的同名键会被忽略。
+	Params map[string]any `json:"params,omitempty"`
 }
 
 // RoutingCfg 是模型→厂商分发配置。
