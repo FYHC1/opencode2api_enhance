@@ -15,15 +15,29 @@ import (
 )
 
 // frontendDistDir 返回前端构建产物目录（存在 dist/index.html 时）。
-// 查找顺序：exe 旁 → 当前工作目录；dev（tauri dev，cwd=src-tauri）额外向上找仓库根 dist。
+// 查找顺序：
+//   - dev/本机构建产物（cargo target 树内的 core）：优先仓库根 dist
+//     （src-tauri/target/debug/bin → 仓库根 4 级上溯），exe 旁 dist（陈旧副本）仅兜底；
+//   - 便携包/发布（core 不在 target 树内）：dist 固定 exe 旁 bin\dist；
+//   - cwd 兜底（web-dev/headless：cwd=仓库根 → dist；Docker：cwd=/app → /app/dist）。
 func frontendDistDir() string {
 	var cands []string
 	if exe, err := os.Executable(); err == nil {
 		exeDir := filepath.Dir(exe)
-		cands = append(cands,
-			filepath.Join(exeDir, "dist"),                   // 便携包：exe 旁
-			filepath.Join(exeDir, "..", "..", "..", "dist"), // dev：target/debug/bin → 仓库根
-		)
+		sep := string(filepath.Separator)
+		inTargetTree := strings.Contains(exeDir, sep+"target"+sep+"debug") ||
+			strings.Contains(exeDir, sep+"target"+sep+"release")
+		if inTargetTree {
+			// dev：src-tauri/target/debug/bin → 仓库根（4 级上溯）+ dist；
+			// exe 旁 dist（构建产物）放其后再兜底，避免陈旧副本抢跑新面板。
+			cands = append(cands,
+				filepath.Join(exeDir, "..", "..", "..", "..", "dist"),
+				filepath.Join(exeDir, "dist"),
+			)
+		} else {
+			// 便携包/发布：dist 固定 exe 旁 bin\dist。
+			cands = append(cands, filepath.Join(exeDir, "dist"))
+		}
 	}
 	if wd, err := os.Getwd(); err == nil {
 		cands = append(cands,
