@@ -75,7 +75,7 @@ export default function CustomModelsPage({ toast }: { toast: (msg: string, ok?: 
       name: p.name,
       protocol: p.protocol,
       base_url: p.base_url,
-      api_key: '', // 留空 = 保留
+      api_key: p.api_key ?? '', // 回填已存 key：测试连通免重新粘贴
       via_proxy: p.via_proxy,
       enabled: p.enabled,
       editing: p.id,
@@ -358,7 +358,7 @@ export default function CustomModelsPage({ toast }: { toast: (msg: string, ok?: 
               <label className="block text-sm font-medium text-zinc-700">API Key</label>
               <input
                 type="password"
-                placeholder={form.editing ? '留空则不修改' : 'sk-...（本地无鉴权网关可留空）'}
+                placeholder="sk-...（本地无鉴权网关可留空）"
                 value={form.api_key}
                 onChange={(e) => setForm({ ...form, api_key: e.target.value })}
                 className="w-full px-3 py-2 border rounded-lg font-mono text-[13px]"

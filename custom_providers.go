@@ -138,12 +138,14 @@ func rebuildVendors() {
 // 视图与请求类型
 // ---------------------------------------------------------------------------
 
-// customProviderView 列表项（key 不回传明文）。
+// customProviderView 列表项。key 明文回传给已鉴权的面板（单用户/内网定位，
+// key 本就明文存于本机 config.json）：编辑表单直接回填，免得每次测试连通重新粘贴。
 type customProviderView struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
 	Protocol  string `json:"protocol"`
 	BaseURL   string `json:"base_url"`
+	APIKey    string `json:"api_key"`
 	APIKeySet bool   `json:"api_key_set"`
 	ViaProxy  bool   `json:"via_proxy"`
 	Enabled   bool   `json:"enabled"`
@@ -210,7 +212,7 @@ func customProviderViews() []customProviderView {
 		baseURL, _ := p[custom.ParamBaseURL].(string)
 		views = append(views, customProviderView{
 			ID: pc.ID, Name: pc.Name, Protocol: proto, BaseURL: baseURL,
-			APIKeySet: key != "", ViaProxy: via, Enabled: enabled,
+			APIKey: key, APIKeySet: key != "", ViaProxy: via, Enabled: enabled,
 			Models: counts[pc.ID], LastError: vendorLastErr(pc.ID),
 		})
 	}
