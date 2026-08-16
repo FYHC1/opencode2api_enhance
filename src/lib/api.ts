@@ -498,7 +498,11 @@ export const api = {
   subscriptionsAdd: (url: string, intervalMin: number, target: SubscriptionTargetLabel) =>
     req<void>('POST', '/subscriptions/add', { url, interval_min: intervalMin, target }),
   subscriptionsDelete: (url: string) =>
-    req<{ status: string; removed: boolean; group: string; running: number; stopped: number }>('POST', '/subscriptions/delete', { url }),
+    req<{ status: string; removed: boolean; group: string; running: number; stopped: number; removed_nodes?: number; instances?: string[] }>(
+      'POST',
+      '/subscriptions/delete',
+      { url },
+    ),
   subscriptionsImport: (url: string) =>
     req<{ status: string; imported: number; target: string }>('POST', '/subscriptions/import', { url }),
 

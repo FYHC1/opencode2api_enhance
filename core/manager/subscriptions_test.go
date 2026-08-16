@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -83,7 +84,7 @@ func TestSubscriptionsMigrateFromConfig(t *testing.T) {
 	}
 }
 
-// T3: 立即拉取单条订阅（真实 HTTP 源 → 独享实例）。
+// P3b: 立即拉取单条订阅（真实 HTTP 源）——无论 target 新旧值一律只进节点池、不建实例。
 func TestSubscriptionsImportNowHTTP(t *testing.T) {
 	m := New(t.TempDir())
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -91,8 +92,8 @@ func TestSubscriptionsImportNowHTTP(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// 登记为 pool-only（仅节点池）
-	if err := m.AddSubscription(srv.URL, 0, TargetPoolOnly); err != nil {
+	// 登记为 solo（旧配置值）：导入也只进节点池缓存、不建实例
+	if err := m.AddSubscription(srv.URL, 0, TargetSolo); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 	n, label, err := m.ImportSubscriptionNow(srv.URL)
@@ -105,36 +106,34 @@ func TestSubscriptionsImportNowHTTP(t *testing.T) {
 	if label != "节点池" {
 		t.Fatalf("label = %q, want 节点池", label)
 	}
-	// pool-only 不应建实例
+	// solo 旧配置不再建实例（2026-08-16 决策）
 	if len(m.ListInstances()) != 0 {
-		t.Fatalf("pool-only must not create instances, got %d", len(m.ListInstances()))
+		t.Fatalf("import must not create instances, got %d", len(m.ListInstances()))
 	}
 	// 节点池缓存应有 1 条
 	if len(m.loadSubscriptionCache()) != 1 {
 		t.Fatalf("cache = %+v", m.loadSubscriptionCache())
 	}
-
-	// 改为 solo → 立即拉取应建实例
-	if err := m.AddSubscription(srv.URL, 0, TargetSolo); err == nil {
-		t.Fatal("duplicate add should error (solo)")
+	// 分组名已持久化到源记录（删除订阅时直接读取）
+	srcs := m.loadSubscriptions()
+	if len(srcs) != 1 || srcs[0].Group == "" {
+		t.Fatalf("source group not persisted: %+v", srcs)
 	}
+
+	// pool-only 与 solo 行为一致：只进节点池
 	_, _ = m.RemoveSubscription(srv.URL)
-	if err := m.AddSubscription(srv.URL, 0, TargetSolo); err != nil {
-		t.Fatalf("re-add solo: %v", err)
+	if err := m.AddSubscription(srv.URL, 0, TargetPoolOnly); err != nil {
+		t.Fatalf("re-add pool-only: %v", err)
 	}
 	n, label, err = m.ImportSubscriptionNow(srv.URL)
 	if err != nil {
-		t.Fatalf("import solo: %v", err)
+		t.Fatalf("import pool-only: %v", err)
 	}
-	if label != "独享" {
-		t.Fatalf("label = %q, want 独享", label)
+	if label != "节点池" {
+		t.Fatalf("label = %q, want 节点池", label)
 	}
-	insts := m.ListInstances()
-	if len(insts) != 1 {
-		t.Fatalf("solo must create 1 instance, got %d", len(insts))
-	}
-	if insts[0].JoinGateway {
-		t.Fatal("solo instance must not join gateway")
+	if len(m.ListInstances()) != 0 {
+		t.Fatalf("pool-only must not create instances, got %d", len(m.ListInstances()))
 	}
 }
 
@@ -370,4 +369,97 @@ func TestSubscriptionLoopStartsOnce(t *testing.T) {
 		t.Fatalf("双入口启动了双循环，同一 URL 并发拉取 %d 次", n)
 	}
 	releaseNow()
+}
+
+// P3b: 自动拉取（target=solo 旧配置）只更新节点池缓存、不重建实例，并持久化分组名。
+func TestSubscriptionsAutoImportOnlyUpdatesPool(t *testing.T) {
+	m := New(t.TempDir())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("vless://uuid@x.example.com:443?security=tls#X\nvless://uuid@y.example.com:8443?security=tls#Y"))
+	}))
+	defer srv.Close()
+	_ = m.AddSubscription(srv.URL, 1, TargetSolo) // 旧 solo 值：自动拉取不得重建实例
+
+	stop := m.RunAllSubscriptionLoop()
+	defer stop()
+
+	// 等首轮自动拉取落盘（缓存出现 2 条即完成）
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if len(m.loadSubscriptionCache()) == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("自动拉取未写入节点池缓存: %+v", m.loadSubscriptionCache())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// 只进节点池：不建实例
+	if len(m.ListInstances()) != 0 {
+		t.Fatalf("自动拉取不得建实例，got %d", len(m.ListInstances()))
+	}
+	// 分组名已持久化到源记录
+	srcs := m.loadSubscriptions()
+	if len(srcs) != 1 || srcs[0].Group == "" {
+		t.Fatalf("source group not persisted: %+v", srcs)
+	}
+}
+
+// P4: 删除订阅后同步清理订阅缓存中该分组节点（节点池页不再残留）；
+// URL 失效也能按持久化 Group 对分组，不退回逐节点删除。
+func TestSubscriptionsDeleteClearsGroupNodes(t *testing.T) {
+	m := New(t.TempDir())
+	subOf := func(name string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+			_, _ = w.Write([]byte("vless://uuid@x.example.com:443?security=tls#X"))
+		}))
+	}
+	srvA := subOf("机场A")
+	srvB := subOf("机场B")
+	defer srvB.Close()
+
+	_ = m.AddSubscription(srvA.URL, 0, TargetSolo)
+	_ = m.AddSubscription(srvB.URL, 0, TargetPoolOnly)
+	for _, u := range []string{srvA.URL, srvB.URL} {
+		if _, _, err := m.ImportSubscriptionNow(u); err != nil {
+			t.Fatalf("import %s: %v", u, err)
+		}
+	}
+	if len(m.loadSubscriptionCache()) != 2 {
+		t.Fatalf("cache before delete = %+v", m.loadSubscriptionCache())
+	}
+
+	// 源 A 挂掉后再删：持久化 Group 保证仍能按分组清理（不再拉取解析）
+	srvA.Close()
+	h := m.SubscriptionsDeleteHandler()
+	rec := httptest.NewRecorder()
+	h(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"url":"`+srvA.URL+`"}`)))
+	if rec.Code != 200 {
+		t.Fatalf("delete code = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Removed      bool   `json:"removed"`
+		Group        string `json:"group"`
+		RemovedNodes int    `json:"removed_nodes"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode delete resp: %v", err)
+	}
+	if !resp.Removed || resp.Group != "机场A" {
+		t.Fatalf("delete resp = %+v", resp)
+	}
+	if resp.RemovedNodes != 1 {
+		t.Fatalf("removed_nodes = %d, want 1", resp.RemovedNodes)
+	}
+	// 源记录只剩 B
+	srcs := m.loadSubscriptions()
+	if len(srcs) != 1 || srcs[0].URL != srvB.URL {
+		t.Fatalf("sources after delete = %+v", srcs)
+	}
+	// 订阅缓存：机场A 节点被清、机场B 分组保留
+	cache := m.loadSubscriptionCache()
+	if len(cache) != 1 || cache[0].Group != "机场B" {
+		t.Fatalf("cache after delete = %+v", cache)
+	}
 }
