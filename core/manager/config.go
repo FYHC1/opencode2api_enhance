@@ -143,19 +143,26 @@ func (m *Manager) SyncCustomProviders(coreConfigPath string, customs []map[strin
 		return nil
 	}
 	cfg := m.loadConfig()
-	kept := make([]map[string]any, 0, len(cfg.Providers)+len(customs))
-	for _, p := range cfg.Providers {
+	cfg.Providers = mergeProviderEntries(cfg.Providers, customs)
+	return m.saveConfig(cfg)
+}
+
+// mergeProviderEntries 把 custom 条目合并进既有 providers 列表：
+// 非 custom 原样保留、custom 全量替换；原列表为空且 customs 非空时物化内建条目
+// （显式列表语义下防只写 custom 丢掉 opencode/windsurf）。
+func mergeProviderEntries(existing, customs []map[string]any) []map[string]any {
+	kept := make([]map[string]any, 0, len(existing)+len(customs))
+	for _, p := range existing {
 		if t, _ := p["type"].(string); t != "custom" {
 			kept = append(kept, p)
 		}
 	}
-	if len(cfg.Providers) == 0 && len(customs) > 0 {
+	if len(existing) == 0 && len(customs) > 0 {
 		for _, t := range []string{"opencode", "windsurf"} {
 			kept = append(kept, map[string]any{"id": t, "type": t, "enabled": true})
 		}
 	}
-	cfg.Providers = append(kept, customs...)
-	return m.saveConfig(cfg)
+	return append(kept, customs...)
 }
 
 // effectiveDefaultPassword 生效默认密码：未设置 → "123456"。
