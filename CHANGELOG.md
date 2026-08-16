@@ -23,6 +23,8 @@
   连通测试逐 key 验证；列表页展示 key 健康计数（可用/冷却/禁用，状态非用量）。
 - 架构配套：`providers[].params` 条目级参数真正接线（此前文档承诺未实现）、`Aggregator.ReplaceAll`
   热替换、`/v1/models` 空判定后移（仅有自定义源也可正常返回）。
+- 文档：新增 [docs/CUSTOM-MODELS.md](docs/CUSTOM-MODELS.md) 自定义模型源完整指南（快速开始/协议/多 Key/
+  生效机制/配置参考/管理 API/二次开发/FAQ）；README 与部署文档同步七页 UI。
 
 ## v1.3.0（2026-08-09）
 
