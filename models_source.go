@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/6Kmfi6HP/opencode2api/core/aggregator"
@@ -12,6 +13,7 @@ import (
 	"github.com/6Kmfi6HP/opencode2api/vendors/opencode"
 	// 聚合厂商注册：blank import 触发各厂商 init() 自注册（扩增即生效）。
 	// 新厂商加一行 blank import 即可，无需改装配逻辑。
+	_ "github.com/6Kmfi6HP/opencode2api/vendors/custom"
 	_ "github.com/6Kmfi6HP/opencode2api/vendors/windsurf"
 )
 
@@ -124,7 +126,7 @@ func newAggregator() *aggregator.Aggregator {
 				Type:   pc.Type,
 				ID:     pc.ID,
 				Name:   name,
-				Params: vendorParams(pc.Type),
+				Params: mergeVendorParams(pc.Type, pc.Params),
 			}); err == nil {
 				agg.Register(v)
 			} else {
@@ -134,8 +136,12 @@ func newAggregator() *aggregator.Aggregator {
 		return agg
 	}
 
-	// 未配置 → 自动注册所有已编译厂商（扩增供应商零配置）
+	// 未配置 → 自动注册所有已编译厂商（扩增供应商零配置）。
+	// custom 例外：必须带 base_url 等条目级参数，无参自动注册必失败 → 跳过。
 	for _, t := range contract.RegisteredTypes() {
+		if t == "custom" {
+			continue
+		}
 		if v, err := contract.Create(t, contract.ProviderSpec{
 			Type:   t,
 			Params: vendorParams(t),
@@ -168,8 +174,32 @@ func vendorParams(t string) map[string]any {
 		}
 	case "windsurf":
 		return map[string]any{}
+	case "custom":
+		// 自定义模型源：只需传输注入（出站经统一网关，直连或代理池由 via_proxy 决定）。
+		return map[string]any{
+			opencode.ParamTransport: rootTransport{},
+		}
 	}
 	return map[string]any{}
+}
+
+// mergeVendorParams 合并「类型级运行时注入」与「条目级配置参数」：
+// 运行时键（"_" 前缀，如 _transport）不可被配置覆盖；其余以条目 params 为准。
+func mergeVendorParams(t string, entry map[string]any) map[string]any {
+	merged := vendorParams(t)
+	if len(entry) == 0 {
+		return merged
+	}
+	if merged == nil {
+		merged = map[string]any{}
+	}
+	for k, v := range entry {
+		if strings.HasPrefix(k, "_") {
+			continue
+		}
+		merged[k] = v
+	}
+	return merged
 }
 
 // newChatRouter 按配置构造"模型→厂商"路由器（缺省默认 opencode）。
