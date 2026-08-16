@@ -2,6 +2,8 @@
 // Same package (main) - do not change package clause manually.
 package main
 
+import "github.com/6Kmfi6HP/opencode2api/core/manager"
+
 type AppConfig struct {
 	ModelAlias           map[string]string `json:"model_alias"`
 	ReasoningEffortMap   map[string]string `json:"reasoning_effort_map"`
@@ -67,6 +69,9 @@ type AppConfig struct {
 	Providers []ProviderCfg `json:"providers,omitempty"`
 	// Routing 模型→厂商路由
 	Routing RoutingCfg `json:"routing,omitempty"`
+	// AutoModel auto 虚拟模型配置（与 core/manager Config 双结构共用 auto_model 键，
+	// 任一写者重写 config.json 都不丢；子进程经 3s 配置热重载消费）。
+	AutoModel *manager.AutoModelCfg `json:"auto_model,omitempty"`
 }
 
 // ProviderCfg 描述一个模型厂商（vendors/ 下的实现）。

@@ -104,6 +104,9 @@ type Config struct {
 	Providers []map[string]any `json:"providers,omitempty"`
 	// Routing 模型→厂商路由（透传，供子进程按模型路由到正确厂商）。
 	Routing map[string]any `json:"routing,omitempty"`
+	// AutoModel auto 虚拟模型配置（与根进程 AppConfig 双结构共用 auto_model 键，
+	// 任一写者重写 config.json 都不丢；详见 automodel.go）。
+	AutoModel *AutoModelCfg `json:"auto_model,omitempty"`
 }
 
 // configPath 返回配置文件路径。
