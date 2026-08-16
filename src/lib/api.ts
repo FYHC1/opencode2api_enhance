@@ -287,6 +287,18 @@ export type RestartPoolResult = {
   error: string | null
 }
 
+// ─── auto 虚拟模型（实例池设置弹层） ─────────────────────────────────────────────
+
+/** auto 模型配置：enabled 开启后 /v1/models 顶部出现 auto；权重按模型展示名（0~10，0=永不参与，缺省 5） */
+export type AutoModelConfig = {
+  enabled: boolean
+  /** 选择策略：balanced（默认，平滑加权轮询）/ speed（权重≥5 中选最快）/ quality（按权重锁定） */
+  strategy?: string
+  weights?: Record<string, number>
+  /** 模型展示名 → 上下文上限 token（留空 = 保守默认 128k） */
+  context_windows?: Record<string, number>
+}
+
 // ─── 实例池链路质量（性能模式 P1/P2） ─────────────────────────────────────────────
 
 export type PoolQualityLevel = 'healthy' | 'degraded' | 'flaky' | 'down'
@@ -562,6 +574,9 @@ export const api = {
   // 配置
   configGet: () => req<ConfigView>('GET', '/config'),
   configSet: (key: string, value: string) => req<void>('POST', '/config/set', { key, value }),
+  // auto 虚拟模型：GET 当前配置 / POST 保存即传播子进程（热生效，无需重启）
+  autoModelGet: () => req<AutoModelConfig>('GET', '/auto-model'),
+  autoModelSave: (cfg: AutoModelConfig) => req<{ status: string; config: AutoModelConfig }>('POST', '/auto-model', cfg),
 
   // 自定义模型源（第七页「自定义模型」）：用户自带 key 接入第三方供应商
   customProvidersList: () => req<{ providers: CustomProviderView[] }>('GET', '/custom-providers'),
