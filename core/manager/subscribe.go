@@ -1125,6 +1125,31 @@ func (m *Manager) removeSubscriptionNodesLocked(names []string) (int, error) {
 	return before - len(filtered), nil
 }
 
+// RemoveSubscriptionGroupNodes 从订阅缓存删除某分组全部节点（一次加载+持久化），
+// 返回删除数量。删除订阅时同步清理该分组节点，节点池页不再残留（P4）。
+func (m *Manager) RemoveSubscriptionGroupNodes(group string) (int, error) {
+	if group == "" {
+		return 0, nil
+	}
+	m.subscriptionCacheMu.Lock()
+	defer m.subscriptionCacheMu.Unlock()
+	nodes := m.loadSubscriptionCacheLocked()
+	before := len(nodes)
+	filtered := nodes[:0]
+	for _, n := range nodes {
+		if n.Group != group {
+			filtered = append(filtered, n)
+		}
+	}
+	if len(filtered) == before {
+		return 0, nil
+	}
+	if err := m.saveSubscriptionCacheLocked(filtered); err != nil {
+		return 0, err
+	}
+	return before - len(filtered), nil
+}
+
 // toClashNode SubscribeNode → ClashNode（供 sing-box 生成与节点列表合并）。
 func toClashNode(n SubscribeNode) ClashNode {
 	skip := n.SkipCertVerify
@@ -1172,30 +1197,31 @@ func (m *Manager) listSubscriptionNodes() []ClashNode {
 
 // ---------- 导入 ----------
 
-// importSubscriptionPool 仅拉取并缓存订阅节点（不创建实例），返回节点数。
-func (m *Manager) importSubscriptionPool(url string) (int, error) {
+// importSubscriptionPool 仅拉取并缓存订阅节点（不创建实例），返回节点数与分组名。
+func (m *Manager) importSubscriptionPool(url string) (int, string, error) {
 	nodes, meta, err := fetchSubscriptionWithMeta(url)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	if len(nodes) == 0 {
-		return 0, fmt.Errorf("订阅中未解析到任何节点")
+		return 0, "", fmt.Errorf("订阅中未解析到任何节点")
 	}
-	m.applyGroup(nodes, url, meta)
+	group := m.applyGroup(nodes, url, meta)
 	if err := m.saveSubscriptionCacheGrouped(nodes); err != nil {
-		return 0, err
+		return 0, "", err
 	}
-	return len(nodes), nil
+	return len(nodes), group, nil
 }
 
-// applyGroup 给节点标注订阅分组名（未标注的节点）。
-func (m *Manager) applyGroup(nodes []SubscribeNode, url string, meta SubscriptionMeta) {
+// applyGroup 给节点标注订阅分组名（未标注的节点），返回分组名。
+func (m *Manager) applyGroup(nodes []SubscribeNode, url string, meta SubscriptionMeta) string {
 	group := m.groupNameFor(url, meta)
 	for i := range nodes {
 		if nodes[i].Group == "" {
 			nodes[i].Group = group
 		}
 	}
+	return group
 }
 
 // saveSubscriptionCacheGrouped 按分组合并订阅缓存：同分组节点替换、其他分组保留
@@ -1379,7 +1405,7 @@ func (m *Manager) SubscribeImportPoolHandler() http.HandlerFunc {
 			writeErr(w, http.StatusBadRequest, "url 必填")
 			return
 		}
-		n, err := m.importSubscriptionPool(req.URL)
+		n, _, err := m.importSubscriptionPool(req.URL)
 		if err != nil {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return

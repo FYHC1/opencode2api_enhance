@@ -1,6 +1,8 @@
 // 订阅源管理（T3：订阅从单条 config 升级为多条列表）。
-// 订阅源存储 dataDir/subscriptions.json：每条含 URL / 自动拉取间隔（分钟） / 导入目标。
-// 目标：solo = 建实例-独享；pool = 建实例-进池；pool-only = 仅导入节点池。
+// 订阅源存储 dataDir/subscriptions.json：每条含 URL / 自动拉取间隔（分钟） / 导入目标 / 分组名。
+// 2026-08-16 决策：订阅导入一律只进节点池（拉取+缓存，不创建实例），实例由用户在节点池手动添加；
+// target 字段仅保留兼容旧配置，不再影响导入行为。导入时把分组名持久化到源记录，
+// 删除订阅/统计据此直接读取（URL 失效也准）。
 // 兼容迁移：首次读取时若旧 config.subscribe_url 非空，并入列表为第一条。
 package manager
 
@@ -18,13 +20,17 @@ import (
 	"time"
 )
 
-// SubscriptionTarget 订阅导入目标。
+// SubscriptionTarget 订阅导入目标（2026-08-16 决策：订阅导入一律只进节点池，不再按目标分流；
+// 类型与旧配置保持兼容——旧 solo/pool 值读出后同样只更新节点池缓存，不建实例）。
 type SubscriptionTarget string
 
 const (
-	TargetSolo     SubscriptionTarget = "solo"      // 建实例-独享
-	TargetPool     SubscriptionTarget = "pool"      // 建实例-进池
-	TargetPoolOnly SubscriptionTarget = "pool-only" // 仅导入节点池（不进实例）
+	// 旧值：建实例-独享（现仅兼容存储，导入行为不变）
+	TargetSolo SubscriptionTarget = "solo"
+	// 旧值：建实例-进池（现仅兼容存储，导入行为不变）
+	TargetPool SubscriptionTarget = "pool"
+	// 仅导入节点池（即现唯一行为）
+	TargetPoolOnly SubscriptionTarget = "pool-only"
 )
 
 // SubscriptionSource 一条订阅源。
@@ -32,7 +38,7 @@ type SubscriptionSource struct {
 	URL         string             `json:"url"`
 	IntervalMin int                `json:"interval_min"` // <=0 = 不自动拉取
 	Target      SubscriptionTarget `json:"target"`
-	Group       string             `json:"group,omitempty"` // 订阅来源分组名（由 URL 派生，删除时按此释放实例）
+	Group       string             `json:"group,omitempty"` // 订阅分组名（导入时解析写入；删除订阅/统计直接读取）
 }
 
 // subscriptionsPath 订阅源列表文件路径。
@@ -116,29 +122,16 @@ func (m *Manager) RemoveSubscription(url string) (bool, error) {
 	return true, nil
 }
 
-// ImportSubscriptionNow 立即执行某条订阅源的导入（按目标）。
+// ImportSubscriptionNow 立即执行某条订阅源的导入（2026-08-16 决策：一律只进节点池）。
+// 拉取并刷新订阅缓存，不创建任何实例；返回导入节点数与目标标签（恒为「节点池」）。
 func (m *Manager) ImportSubscriptionNow(url string) (int, string, error) {
 	url = strings.TrimSpace(url)
-	// 目标从源列表取；未登记则按 solo 处理
-	target := TargetSolo
-	for _, s := range m.loadSubscriptions() {
-		if s.URL == url {
-			target = s.Target
-			break
-		}
+	n, group, err := m.importSubscriptionPool(url)
+	if err != nil {
+		return 0, "", err
 	}
-	switch target {
-	case TargetPoolOnly:
-		n, err := m.importSubscriptionPool(url)
-		return n, "节点池", err
-	default:
-		join := target == TargetPool
-		n, err := m.importSubscription(url, join)
-		if join {
-			return n, "实例池", err
-		}
-		return n, "独享", err
-	}
+	m.persistSourceGroup(url, group)
+	return n, "节点池", nil
 }
 
 // subscribeFetchConcurrency 订阅拉取并发上限（防多源到点同步尖峰）。
@@ -288,14 +281,47 @@ func (m *Manager) subscriptionSourceByURL(url string) (SubscriptionSource, bool)
 	return SubscriptionSource{}, false
 }
 
-// importSubscriptionForSource 按订阅源目标导入。
+// importSubscriptionForSource 自动拉取路径：2026-08-16 决策——一律只进节点池
+// （target 值不影响，永不重建实例）；导入后把分组名持久化到源记录。
 func (m *Manager) importSubscriptionForSource(s SubscriptionSource) (int, error) {
-	switch s.Target {
-	case TargetPoolOnly:
-		return m.importSubscriptionPool(s.URL)
-	default:
-		return m.importSubscription(s.URL, s.Target == TargetPool)
+	n, group, err := m.importSubscriptionPool(s.URL)
+	if err != nil {
+		return 0, err
 	}
+	m.persistSourceGroup(s.URL, group)
+	return n, nil
+}
+
+// persistSourceGroup 把当次解析出的订阅分组名写回源记录（导入成功后调用）。
+// 删除订阅/统计直接读持久化 Group，URL 失效后仍能准确对分组。
+func (m *Manager) persistSourceGroup(url, group string) {
+	if group == "" {
+		return
+	}
+	list := m.loadSubscriptions()
+	changed := false
+	for i := range list {
+		if list[i].URL == url && list[i].Group != group {
+			list[i].Group = group
+			changed = true
+		}
+	}
+	if changed {
+		_ = m.saveSubscriptions(list)
+	}
+}
+
+// subscriptionGroupFor 解析订阅分组名（删除/统计通用）：
+// 优先读源记录已持久化的 Group（导入时写回，URL 失效也准）；
+// 未持久化（旧配置/从未导入）时临时拉取元信息解析，失败退回 URL 末段兜底。
+func (m *Manager) subscriptionGroupFor(url string) string {
+	if s, ok := m.subscriptionSourceByURL(url); ok && s.Group != "" {
+		return s.Group
+	}
+	if _, meta, err := fetchSubscriptionWithMeta(url); err == nil {
+		return m.groupNameFor(url, meta)
+	}
+	return m.groupNameFor(url, SubscriptionMeta{})
 }
 
 // ---------- HTTP handlers ----------
@@ -345,17 +371,15 @@ func (m *Manager) SubscriptionsCountHandler() http.HandlerFunc {
 			writeErr(w, http.StatusBadRequest, "url 必填")
 			return
 		}
-		group := ""
-		if _, meta, err := fetchSubscriptionWithMeta(url); err == nil {
-			group = m.groupNameFor(url, meta)
-		}
+		// 分组名优先取源记录持久化 Group（导入时已写入）；未持久化时临时解析
+		group := m.subscriptionGroupFor(url)
 		running, stopped := m.countInstancesForGroup(group)
 		writeJSON(w, map[string]any{"group": group, "running": running, "stopped": stopped})
 	}
 }
 
-// SubscriptionsDeleteHandler POST {url} → 删除订阅源；返回该订阅分组名 + 该分组使用中实例数。
-// 删除前先拉取一次该 URL 的元信息以获得分组名（失败则返回空 group，仅删源不释放）。
+// SubscriptionsDeleteHandler POST {url} → 删除订阅源，并同步清理订阅缓存中该分组节点（P4）。
+// 分组名优先取源记录持久化 Group（导入时已写入，URL 失效也准）；未持久化时临时解析。
 func (m *Manager) SubscriptionsDeleteHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !requireMethodOK(w, r, http.MethodPost) {
@@ -368,18 +392,24 @@ func (m *Manager) SubscriptionsDeleteHandler() http.HandlerFunc {
 			writeErr(w, http.StatusBadRequest, "url 必填")
 			return
 		}
-		group := ""
-		if _, meta, err := fetchSubscriptionWithMeta(req.URL); err == nil {
-			group = m.groupNameFor(req.URL, meta)
-		}
-		// 统计该分组使用中实例数（订阅缓存节点名 → 实例 Node 匹配）
+		group := m.subscriptionGroupFor(req.URL)
+		// 统计该分组使用中实例数（订阅缓存节点名 → 实例 Node 匹配）——须在清理缓存前统计
 		running, stopped := m.countInstancesForGroup(group)
 		removed, err := m.RemoveSubscription(req.URL)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, map[string]any{"status": "ok", "removed": removed, "group": group, "running": running, "stopped": stopped})
+		// P4：删除源后同步清理订阅缓存中该分组节点（节点池页不再残留）
+		removedNodes := 0
+		if group != "" {
+			removedNodes, err = m.RemoveSubscriptionGroupNodes(group)
+			if err != nil {
+				writeErr(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
+		writeJSON(w, map[string]any{"status": "ok", "removed": removed, "group": group, "running": running, "stopped": stopped, "removed_nodes": removedNodes})
 	}
 }
 
@@ -407,7 +437,7 @@ func (m *Manager) countInstancesForGroup(group string) (running, stopped int) {
 	return running, stopped
 }
 
-// SubscriptionsImportHandler POST {url} → 立即拉取该订阅源（按源目标导入）。
+// SubscriptionsImportHandler POST {url} → 立即拉取该订阅源（一律只进节点池）。
 func (m *Manager) SubscriptionsImportHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !requireMethodOK(w, r, http.MethodPost) {
