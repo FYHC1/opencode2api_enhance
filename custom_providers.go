@@ -1,0 +1,415 @@
+// 自定义模型源：管理 API（列表/保存/连通测试）+ 厂商热重建。
+// 保存流程：写核心配置 → applyConfig（内存生效）→ 重建厂商集合（非 custom 实例复用）
+// → 刷新模型目录 → 同步 manager 配置透传（供后续生成的实例/网关子进程继承）。
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"net/url"
+	"regexp"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/6Kmfi6HP/opencode2api/core/contract"
+	"github.com/6Kmfi6HP/opencode2api/core/manager"
+	"github.com/6Kmfi6HP/opencode2api/vendors/custom"
+)
+
+// ---------------------------------------------------------------------------
+// 厂商热重建
+// ---------------------------------------------------------------------------
+
+var (
+	vendorsSigMu   sync.Mutex
+	lastVendorsSig string
+)
+
+// providersSignature providers 配置签名（变化才重建）。
+func providersSignature() string {
+	configMu.RLock()
+	cfgs := append([]ProviderCfg(nil), providersCfg...)
+	configMu.RUnlock()
+	b, err := json.Marshal(cfgs)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// initVendorsSignature 启动装配完成后记录初始签名（避免首次无关配置变更触发重建）。
+func initVendorsSignature() {
+	vendorsSigMu.Lock()
+	lastVendorsSig = providersSignature()
+	vendorsSigMu.Unlock()
+}
+
+// maybeRebuildVendors providers 配置变化时重建厂商集合。
+func maybeRebuildVendors() {
+	sig := providersSignature()
+	vendorsSigMu.Lock()
+	same := sig == lastVendorsSig
+	vendorsSigMu.Unlock()
+	if same {
+		return
+	}
+	rebuildVendors()
+}
+
+// rebuildVendors 按 providersCfg 重建聚合器内的厂商集合（原聚合器实例不动，全局指针稳定）：
+// 非 custom 旧实例按 ID 复用（保住 opencode 会话缓存 / windsurf 账号池状态），
+// custom 恒重建（无状态，参数可能已变），随后刷新模型目录。
+func rebuildVendors() {
+	if globalAgg == nil {
+		return
+	}
+	configMu.RLock()
+	cfgs := append([]ProviderCfg(nil), providersCfg...)
+	configMu.RUnlock()
+
+	old := map[string]contract.Vendor{}
+	for _, v := range globalAgg.Vendors() {
+		old[v.ID()] = v
+	}
+	create := func(pc ProviderCfg) (contract.Vendor, bool) {
+		name := pc.Name
+		if name == "" {
+			name = pc.ID
+		}
+		v, err := contract.Create(pc.Type, contract.ProviderSpec{
+			Type:   pc.Type,
+			ID:     pc.ID,
+			Name:   name,
+			Params: mergeVendorParams(pc.Type, pc.Params),
+		})
+		if err != nil {
+			slog.Warn("vendor create failed during rebuild, skipped", "type", pc.Type, "id", pc.ID, "error", err)
+			return nil, false
+		}
+		return v, true
+	}
+
+	var list []contract.Vendor
+	if len(cfgs) > 0 {
+		for _, pc := range cfgs {
+			if pc.ID == "" || (pc.Enabled != nil && !*pc.Enabled) {
+				continue
+			}
+			// 非 custom：同 ID 旧实例直接复用。
+			if pc.Type != "custom" {
+				if v, ok := old[pc.ID]; ok {
+					list = append(list, v)
+					continue
+				}
+			}
+			if v, ok := create(pc); ok {
+				list = append(list, v)
+			}
+		}
+	} else {
+		// 未配置 providers：自动注册全部内建类型（custom 除外，见 newAggregator 同款语义）。
+		for _, t := range contract.RegisteredTypes() {
+			if t == "custom" {
+				continue
+			}
+			if v, ok := old[t]; ok {
+				list = append(list, v)
+				continue
+			}
+			if v, ok := create(ProviderCfg{ID: t, Type: t}); ok {
+				list = append(list, v)
+			}
+		}
+	}
+
+	globalAgg.ReplaceAll(list)
+	vendorsSigMu.Lock()
+	lastVendorsSig = providersSignature()
+	vendorsSigMu.Unlock()
+	slog.Info("vendors rebuilt", "count", len(list))
+	refreshModelCatalog()
+}
+
+// ---------------------------------------------------------------------------
+// 视图与请求类型
+// ---------------------------------------------------------------------------
+
+// customProviderView 列表项（key 不回传明文）。
+type customProviderView struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Protocol  string `json:"protocol"`
+	BaseURL   string `json:"base_url"`
+	APIKeySet bool   `json:"api_key_set"`
+	ViaProxy  bool   `json:"via_proxy"`
+	Enabled   bool   `json:"enabled"`
+	Models    int    `json:"models"` // 聚合目录中该源模型数（实时）
+	LastError string `json:"last_error,omitempty"`
+}
+
+// customProviderInput 保存请求中的单个源定义。
+type customProviderInput struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Protocol string `json:"protocol"`
+	BaseURL  string `json:"base_url"`
+	APIKey   string `json:"api_key"`
+	ViaProxy bool   `json:"via_proxy"`
+	Enabled  *bool  `json:"enabled"`
+}
+
+// customProvidersView 聚合目录中该源模型数。
+func customModelCounts() map[string]int {
+	counts := map[string]int{}
+	if globalAgg == nil {
+		return counts
+	}
+	for _, m := range globalAgg.Catalog() {
+		counts[m.Provider]++
+	}
+	return counts
+}
+
+// vendorLastErr 查该源 Health().LastError（无实例返回空）。
+func vendorLastErr(id string) string {
+	if globalAgg == nil {
+		return ""
+	}
+	for _, v := range globalAgg.Vendors() {
+		if v.ID() == id {
+			return v.Health().LastError
+		}
+	}
+	return ""
+}
+
+// customProviderViews 读核心配置中的 custom 条目并装配视图。
+func customProviderViews() []customProviderView {
+	cfg := loadConfig(configPath)
+	counts := customModelCounts()
+	views := make([]customProviderView, 0, 4)
+	for _, pc := range cfg.Providers {
+		if pc.Type != "custom" {
+			continue
+		}
+		enabled := pc.Enabled == nil || *pc.Enabled
+		p := pc.Params
+		if p == nil {
+			p = map[string]any{}
+		}
+		key, _ := p[custom.ParamAPIKey].(string)
+		via, _ := p[custom.ParamViaProxy].(bool)
+		proto, _ := p[custom.ParamProtocol].(string)
+		if proto == "" {
+			proto = custom.ProtoOpenAI
+		}
+		baseURL, _ := p[custom.ParamBaseURL].(string)
+		views = append(views, customProviderView{
+			ID: pc.ID, Name: pc.Name, Protocol: proto, BaseURL: baseURL,
+			APIKeySet: key != "", ViaProxy: via, Enabled: enabled,
+			Models: counts[pc.ID], LastError: vendorLastErr(pc.ID),
+		})
+	}
+	return views
+}
+
+// ---------------------------------------------------------------------------
+// Handlers
+// ---------------------------------------------------------------------------
+
+// customProvidersHandler GET：当前自定义源列表。
+func customProvidersHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		writeAdminJSON(w, map[string]any{"providers": customProviderViews()})
+	}
+}
+
+var customIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,31}$`)
+
+// customProvidersSaveHandler POST：整表保存自定义源集合（增/改/删一次到位）。
+func customProvidersSaveHandler(m *manager.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			Providers []customProviderInput `json:"providers"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeAdminErr(w, http.StatusBadRequest, "请求体需为 {\"providers\":[...]}")
+			return
+		}
+		cfg := loadConfig(configPath)
+
+		// 保留非 custom 条目；providers 原本为空（隐式全注册）→ 物化内建条目，
+		// 防显式列表只含 custom 导致内建源全部失效。
+		var kept []ProviderCfg
+		for _, pc := range cfg.Providers {
+			if pc.Type != "custom" {
+				kept = append(kept, pc)
+			}
+		}
+		if len(cfg.Providers) == 0 {
+			for _, t := range []string{"opencode", "windsurf"} {
+				enabled := true
+				kept = append(kept, ProviderCfg{ID: t, Type: t, Enabled: &enabled})
+			}
+		}
+
+		seen := map[string]bool{}
+		for _, in := range req.Providers {
+			in.ID = strings.TrimSpace(in.ID)
+			if !customIDPattern.MatchString(in.ID) {
+				writeAdminErr(w, http.StatusBadRequest, fmt.Sprintf("无效 id %q：需字母数字开头，可含 - _，≤32 字符", in.ID))
+				return
+			}
+			if in.ID == "opencode" || in.ID == "windsurf" {
+				writeAdminErr(w, http.StatusBadRequest, fmt.Sprintf("id %q 与内建厂商冲突", in.ID))
+				return
+			}
+			if seen[in.ID] {
+				writeAdminErr(w, http.StatusBadRequest, fmt.Sprintf("重复 id %q", in.ID))
+				return
+			}
+			seen[in.ID] = true
+			in.BaseURL = strings.TrimRight(strings.TrimSpace(in.BaseURL), "/")
+			u, err := url.Parse(in.BaseURL)
+			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+				writeAdminErr(w, http.StatusBadRequest, fmt.Sprintf("源 %s：base_url 需为 http(s) 地址", in.ID))
+				return
+			}
+			switch in.Protocol {
+			case "":
+				in.Protocol = custom.ProtoOpenAI
+			case custom.ProtoOpenAI, custom.ProtoAnthropic, custom.ProtoGemini:
+			default:
+				writeAdminErr(w, http.StatusBadRequest, fmt.Sprintf("源 %s：协议需为 openai|anthropic|gemini", in.ID))
+				return
+			}
+			enabled := in.Enabled == nil || *in.Enabled
+			params := map[string]any{
+				custom.ParamBaseURL:  in.BaseURL,
+				custom.ParamProtocol: in.Protocol,
+				custom.ParamViaProxy: in.ViaProxy,
+			}
+			if strings.TrimSpace(in.APIKey) != "" {
+				params[custom.ParamAPIKey] = strings.TrimSpace(in.APIKey)
+			}
+			pc := ProviderCfg{
+				ID: in.ID, Type: "custom", Name: strings.TrimSpace(in.Name),
+				Enabled: &enabled, Params: params,
+			}
+			kept = append(kept, pc)
+		}
+
+		cfg.Providers = kept
+		if err := saveConfig(configPath, cfg); err != nil {
+			writeAdminErr(w, http.StatusInternalServerError, "配置写入失败: "+err.Error())
+			return
+		}
+		applyConfig(cfg)
+		rebuildVendors()
+
+		// manager 配置透传：后续生成的实例/网关子进程配置继承自定义源（尽力而为）。
+		if m != nil {
+			if err := m.SyncCustomProviders(configPath, customEntriesForManager(kept)); err != nil {
+				slog.Warn("sync custom providers to manager config failed", "error", err)
+			}
+		}
+
+		writeAdminJSON(w, map[string]any{"status": "ok", "providers": customProviderViews()})
+	}
+}
+
+// customEntriesForManager 把 ProviderCfg 集合转为 manager 透传的 map 形态（custom 部分）。
+func customEntriesForManager(cfgs []ProviderCfg) []map[string]any {
+	var out []map[string]any
+	for _, pc := range cfgs {
+		if pc.Type != "custom" {
+			continue
+		}
+		m := map[string]any{"id": pc.ID, "type": "custom"}
+		if pc.Name != "" {
+			m["name"] = pc.Name
+		}
+		if pc.Enabled != nil {
+			m["enabled"] = *pc.Enabled
+		}
+		if len(pc.Params) > 0 {
+			m["params"] = pc.Params
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// customProvidersTestHandler POST：连通测试（不落盘）——构造临时实例拉取模型目录。
+func customProvidersTestHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var in customProviderInput
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			writeAdminErr(w, http.StatusBadRequest, "请求体需为 {id?,name?,protocol,base_url,api_key}")
+			return
+		}
+		in.BaseURL = strings.TrimRight(strings.TrimSpace(in.BaseURL), "/")
+		if in.Protocol == "" {
+			in.Protocol = custom.ProtoOpenAI
+		}
+		if in.ID == "" {
+			in.ID = "_test"
+		}
+		v, err := custom.New(custom.Config{
+			ID: in.ID, Name: in.Name, BaseURL: in.BaseURL,
+			APIKey: strings.TrimSpace(in.APIKey), Protocol: in.Protocol,
+			ViaProxy: in.ViaProxy,
+		})
+		if err != nil {
+			writeAdminJSON(w, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+		start := time.Now()
+		models, err := v.ListModels(ctx)
+		latency := time.Since(start).Milliseconds()
+		if err != nil {
+			writeAdminJSON(w, map[string]any{"ok": false, "latency_ms": latency, "error": err.Error()})
+			return
+		}
+		ids := make([]string, 0, len(models))
+		for _, m := range models {
+			ids = append(ids, strings.TrimPrefix(m.ID, in.ID+"/"))
+		}
+		writeAdminJSON(w, map[string]any{
+			"ok": true, "latency_ms": latency, "count": len(ids), "models": ids,
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 输出小工具（与 manager.writeJSON 同语义，main 侧独立实现避免依赖导出）
+// ---------------------------------------------------------------------------
+
+func writeAdminJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func writeAdminErr(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{"error": msg})
+}

@@ -126,6 +126,7 @@ func main() {
 	slog.Info("config loaded", "path", configPath)
 	globalAgg = newAggregator()
 	chatRouterVar = newChatRouter(globalAgg)
+	initVendorsSignature()
 	refreshModelCatalog()
 	modelMu.RLock()
 	nLoaded := len(modelsCache)
@@ -254,6 +255,10 @@ func registerHTTPRoutes(mux *http.ServeMux, managerInst *manager.Manager) {
 	mux.HandleFunc("/api/admin/subscribe/preview", loggingMiddleware(requireAuth(managerInst.SubscribePreviewHandler())))
 	mux.HandleFunc("/api/admin/subscribe/import", loggingMiddleware(requireAuth(managerInst.SubscribeImportHandler())))
 	mux.HandleFunc("/api/admin/subscribe/import-pool", loggingMiddleware(requireAuth(managerInst.SubscribeImportPoolHandler())))
+	// 自定义模型源（第七页「自定义模型」）：列表 / 整表保存 / 连通测试。
+	mux.HandleFunc("/api/admin/custom-providers", loggingMiddleware(requireAuth(customProvidersHandler())))
+	mux.HandleFunc("/api/admin/custom-providers/save", loggingMiddleware(requireAuth(customProvidersSaveHandler(managerInst))))
+	mux.HandleFunc("/api/admin/custom-providers/test", loggingMiddleware(requireAuth(customProvidersTestHandler())))
 	// T3: 订阅源列表管理（新增/删除/立即拉取）+ 列表查看。
 	mux.HandleFunc("/api/admin/subscriptions", loggingMiddleware(requireAuth(managerInst.SubscriptionsListHandler())))
 	mux.HandleFunc("/api/admin/subscriptions/count", loggingMiddleware(requireAuth(managerInst.SubscriptionsCountHandler())))

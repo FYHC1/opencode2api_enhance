@@ -196,14 +196,7 @@ func listModelsHandler(w http.ResponseWriter, r *http.Request) {
 		loaded, models = modelsLoaded, modelsCache
 		modelMu.RUnlock()
 	}
-	if len(models) == 0 {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusServiceUnavailable)
-		json.NewEncoder(w).Encode(map[string]string{
-			"error": "无法获取模型列表，请检查上游服务是否可用",
-		})
-		return
-	}
+	_ = loaded
 	// 保存别名快照；目录权限仍按真实上游模型判断，最后再替换为客户端可见名称。
 	configMu.RLock()
 	aliases := make(map[string]string, len(modelAlias))
@@ -231,6 +224,16 @@ func listModelsHandler(w http.ResponseWriter, r *http.Request) {
 	allModels := replaceModelIDsWithAliases(combinedModels, aliases)
 	// 多厂商聚合：把其它厂商（非 opencode）的免费模型并入列表（同名加厂商前缀）。
 	allModels = appendOtherFreeModels(allModels, globalAgg)
+
+	// 空判定放在合并自定义源之后：仅有自定义源（基础目录为空）时也应正常返回。
+	if len(allModels) == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error": "无法获取模型列表，请检查上游服务是否可用",
+		})
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{

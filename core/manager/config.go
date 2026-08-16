@@ -131,6 +131,33 @@ func (m *Manager) saveConfig(cfg Config) error {
 	return os.WriteFile(m.configPath(), data, 0o644)
 }
 
+// SyncCustomProviders 把自定义模型源条目同步进本配置的 providers 透传
+// （后续生成的实例/网关子进程配置经 opencodecfg 继承这些源）。
+// 仅替换其中 type=custom 的条目，其余原样保留；providers 原本为空时先物化内建条目
+// （显式列表语义下防只写 custom 丢掉 opencode/windsurf）。
+// coreConfigPath 与本配置文件相同（同一物理文件）时跳过——核心配置已是唯一事实，避免互覆。
+func (m *Manager) SyncCustomProviders(coreConfigPath string, customs []map[string]any) error {
+	mp, err1 := filepath.Abs(m.configPath())
+	cp, err2 := filepath.Abs(coreConfigPath)
+	if err1 == nil && err2 == nil && strings.EqualFold(mp, cp) {
+		return nil
+	}
+	cfg := m.loadConfig()
+	kept := make([]map[string]any, 0, len(cfg.Providers)+len(customs))
+	for _, p := range cfg.Providers {
+		if t, _ := p["type"].(string); t != "custom" {
+			kept = append(kept, p)
+		}
+	}
+	if len(cfg.Providers) == 0 && len(customs) > 0 {
+		for _, t := range []string{"opencode", "windsurf"} {
+			kept = append(kept, map[string]any{"id": t, "type": t, "enabled": true})
+		}
+	}
+	cfg.Providers = append(kept, customs...)
+	return m.saveConfig(cfg)
+}
+
 // effectiveDefaultPassword 生效默认密码：未设置 → "123456"。
 func (m *Manager) effectiveDefaultPassword() string {
 	pw := m.loadConfig().DefaultPassword
@@ -588,35 +615,35 @@ func (m *Manager) ConfigSet(key, value string) error {
 
 // ConfigView 是前端 /api/admin/config 的响应形态（密码脱敏）。
 type ConfigView struct {
-	BaseURL                 string `json:"base_url"`
-	DefaultPassword         string `json:"default_password"`
-	HasPassword             bool   `json:"has_password"`
-	ClashExternalURL        string `json:"clash_external_url"`
-	HasClashToken           bool   `json:"has_clash_token"`
-	TimeoutTTFTMinMS        int64  `json:"timeout_ttft_min_ms"`
-	TimeoutTTFTMaxMS        int64  `json:"timeout_ttft_max_ms"`
-	TimeoutSilenceMinMS     int64  `json:"timeout_silence_min_ms"`
-	TimeoutSilenceMaxMS     int64  `json:"timeout_silence_max_ms"`
-	FailoverProbeMin        int64  `json:"failover_probe_min"`
-	FailoverProbeMax        int64  `json:"failover_probe_max"`
-	CallLogMax              int64  `json:"call_log_max"`
-	ShowNodePrefix          bool   `json:"show_node_prefix"`
-	UiPollIntervalSec       int    `json:"ui_poll_interval_sec"`
-	UpstreamProxy           string `json:"upstream_proxy"`
-	SubscribeURL            string `json:"subscribe_url"`
-	SubscribeIntervalMin    int    `json:"subscribe_interval_min"`
-	HealthCheckIntervalSec  int    `json:"health_check_interval_sec"`
-	HealthRestartThreshold  int    `json:"health_restart_threshold"`
-	PoolProbeIntervalSec    int    `json:"pool_probe_interval_sec"`
-	PoolProbeTimeoutSec     int    `json:"pool_probe_timeout_sec"`
-	PoolProbeTarget         string `json:"pool_probe_target"`
-	PoolQualityWindowMin    int    `json:"pool_quality_window_min"`
-	PoolProbeEnabled        bool   `json:"pool_probe_enabled"`
-	ProbeSoloEnabled        bool   `json:"probe_solo_enabled"`
-	PoolBreakerThreshold    int    `json:"pool_breaker_threshold"`
-	PoolHalfOpenIntervalSec int    `json:"pool_halfopen_interval_sec"`
-	BadPoolResetSec         int    `json:"bad_pool_reset_sec"`
-	PoolPerformanceMode     bool   `json:"pool_performance_mode"`
+	BaseURL                 string  `json:"base_url"`
+	DefaultPassword         string  `json:"default_password"`
+	HasPassword             bool    `json:"has_password"`
+	ClashExternalURL        string  `json:"clash_external_url"`
+	HasClashToken           bool    `json:"has_clash_token"`
+	TimeoutTTFTMinMS        int64   `json:"timeout_ttft_min_ms"`
+	TimeoutTTFTMaxMS        int64   `json:"timeout_ttft_max_ms"`
+	TimeoutSilenceMinMS     int64   `json:"timeout_silence_min_ms"`
+	TimeoutSilenceMaxMS     int64   `json:"timeout_silence_max_ms"`
+	FailoverProbeMin        int64   `json:"failover_probe_min"`
+	FailoverProbeMax        int64   `json:"failover_probe_max"`
+	CallLogMax              int64   `json:"call_log_max"`
+	ShowNodePrefix          bool    `json:"show_node_prefix"`
+	UiPollIntervalSec       int     `json:"ui_poll_interval_sec"`
+	UpstreamProxy           string  `json:"upstream_proxy"`
+	SubscribeURL            string  `json:"subscribe_url"`
+	SubscribeIntervalMin    int     `json:"subscribe_interval_min"`
+	HealthCheckIntervalSec  int     `json:"health_check_interval_sec"`
+	HealthRestartThreshold  int     `json:"health_restart_threshold"`
+	PoolProbeIntervalSec    int     `json:"pool_probe_interval_sec"`
+	PoolProbeTimeoutSec     int     `json:"pool_probe_timeout_sec"`
+	PoolProbeTarget         string  `json:"pool_probe_target"`
+	PoolQualityWindowMin    int     `json:"pool_quality_window_min"`
+	PoolProbeEnabled        bool    `json:"pool_probe_enabled"`
+	ProbeSoloEnabled        bool    `json:"probe_solo_enabled"`
+	PoolBreakerThreshold    int     `json:"pool_breaker_threshold"`
+	PoolHalfOpenIntervalSec int     `json:"pool_halfopen_interval_sec"`
+	BadPoolResetSec         int     `json:"bad_pool_reset_sec"`
+	PoolPerformanceMode     bool    `json:"pool_performance_mode"`
 	PoolRaceCopies          int     `json:"pool_race_copies"`
 	RaceBudgetMS            int     `json:"race_budget_ms"`
 	PoolRacePressureLow     float64 `json:"pool_race_pressure_low"`
@@ -624,13 +651,13 @@ type ConfigView struct {
 	RateLimitCooldownSec    int     `json:"rate_limit_cooldown_sec"`
 	RateLimitBackoffBaseMS  int     `json:"rate_limit_backoff_base_ms"`
 	RateLimitBackoffCapMS   int     `json:"rate_limit_backoff_cap_ms"`
-	ScanConcurrency         int    `json:"scan_concurrency"`
-	StopScanConcurrency     int    `json:"stop_scan_concurrency"`
-	BatchConcurrency        int    `json:"batch_concurrency"`
-	TestConcurrency         int    `json:"test_concurrency"`
-	PoolProbeConcurrency    int    `json:"pool_probe_concurrency"`
-	HasGatewayKey           bool   `json:"has_gateway_key"`
-	GatewayKey              string `json:"gateway_key"`
+	ScanConcurrency         int     `json:"scan_concurrency"`
+	StopScanConcurrency     int     `json:"stop_scan_concurrency"`
+	BatchConcurrency        int     `json:"batch_concurrency"`
+	TestConcurrency         int     `json:"test_concurrency"`
+	PoolProbeConcurrency    int     `json:"pool_probe_concurrency"`
+	HasGatewayKey           bool    `json:"has_gateway_key"`
+	GatewayKey              string  `json:"gateway_key"`
 }
 
 // ConfigViewOf 生成前端视图（密码与 clash token 脱敏为掩码）。
