@@ -395,6 +395,8 @@ func (m *Manager) SubscriptionsDeleteHandler() http.HandlerFunc {
 		group := m.subscriptionGroupFor(req.URL)
 		// 统计该分组使用中实例数（订阅缓存节点名 → 实例 Node 匹配）——须在清理缓存前统计
 		running, stopped := m.countInstancesForGroup(group)
+		// 受影响实例名快照——清缓存后前端无法再按 listNodes 反查分组，须随响应一并返回
+		instances := m.instanceNamesForGroup(group)
 		removed, err := m.RemoveSubscription(req.URL)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
@@ -409,7 +411,7 @@ func (m *Manager) SubscriptionsDeleteHandler() http.HandlerFunc {
 				return
 			}
 		}
-		writeJSON(w, map[string]any{"status": "ok", "removed": removed, "group": group, "running": running, "stopped": stopped, "removed_nodes": removedNodes})
+		writeJSON(w, map[string]any{"status": "ok", "removed": removed, "group": group, "running": running, "stopped": stopped, "removed_nodes": removedNodes, "instances": instances})
 	}
 }
 
@@ -435,6 +437,27 @@ func (m *Manager) countInstancesForGroup(group string) (running, stopped int) {
 		}
 	}
 	return running, stopped
+}
+
+// instanceNamesForGroup 返回某订阅分组名下已创建的实例名（删除订阅时前端按此释放）。
+// 须在清理缓存前调用（依赖订阅缓存节点名 → 实例 Node 匹配）。
+func (m *Manager) instanceNamesForGroup(group string) []string {
+	if group == "" {
+		return nil
+	}
+	nodeNames := map[string]bool{}
+	for _, n := range m.loadSubscriptionCache() {
+		if n.Group == group {
+			nodeNames[n.Name] = true
+		}
+	}
+	var names []string
+	for _, inst := range m.ListInstances() {
+		if nodeNames[inst.Node] {
+			names = append(names, inst.Name)
+		}
+	}
+	return names
 }
 
 // SubscriptionsImportHandler POST {url} → 立即拉取该订阅源（一律只进节点池）。

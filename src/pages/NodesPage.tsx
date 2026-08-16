@@ -153,9 +153,10 @@ export default function NodesPage({
         setDeletingUrl(null)
         return
       }
-      // 3) 按分组名定位实例并停止（运行中的先停，再全部释放）
-      let names: string[] = []
-      if (r.group) {
+      // 3) 按后端返回的受影响实例名停止并释放（P-2：后端删除时已同步清理分组节点缓存，
+      //    前端不再依赖 listNodes 反查分组；旧后端无 instances 时退回旧逻辑）
+      let names: string[] = r.instances ?? []
+      if (names.length === 0 && r.group) {
         const insts = await api.listInstances()
         const nodes = await api.listNodes()
         const subNodes = nodes.filter((n) => n.group === r.group)
