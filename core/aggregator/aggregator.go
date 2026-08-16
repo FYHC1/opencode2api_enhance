@@ -13,9 +13,9 @@ import (
 
 // Aggregator 聚合多个厂商的模型目录。
 type Aggregator struct {
-	mu              sync.RWMutex
-	vendors         []contract.Vendor
-	catalog         []contract.Model   // 最近一次 Refresh 的合并结果
+	mu               sync.RWMutex
+	vendors          []contract.Vendor
+	catalog          []contract.Model    // 最近一次 Refresh 的合并结果
 	providersByModel map[string][]string // 倒排索引：modelID → 提供它的厂商 ID 列表（Refresh 时重建）
 }
 
@@ -27,6 +27,17 @@ func (a *Aggregator) Register(v contract.Vendor) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.vendors = append(a.vendors, v)
+}
+
+// ReplaceAll 原地替换全部厂商（运行时热重建用：配置 providers 变化后不换聚合器实例，
+// 全局指针不动、读侧零改动）。同时清空合并目录与倒排索引——替换后到下次 Refresh
+// 之前不保留任何旧厂商的模型路由（避免已删除源继续命中）。调用方需随后 Refresh。
+func (a *Aggregator) ReplaceAll(vendors []contract.Vendor) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.vendors = append([]contract.Vendor(nil), vendors...)
+	a.catalog = nil
+	a.providersByModel = nil
 }
 
 // Vendors 返回已注册厂商快照。
