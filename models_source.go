@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/6Kmfi6HP/opencode2api/core/aggregator"
@@ -255,11 +256,42 @@ func appendOtherFreeModels(base []ModelInfo, agg *aggregator.Aggregator) []Model
 	return out
 }
 
-// refreshModelCatalog 拉取各厂商目录并写入既有缓存（同步，启动与定时共用）。
+// 目录刷新防惊群：上游故障时 /v1/models（目录未就绪路径）每个请求都会触发一轮
+// 外部拉取，放大成请求风暴。refreshModelCatalogIfDue 以 10s 最小间隔收敛；
+// 刷新本身经 catalogRefreshMu 串行化，并发调用排队而非并发打上游。
+var (
+	catalogRefreshMu     sync.Mutex
+	catalogLastRefresh   time.Time
+	catalogRefreshMinGap = 10 * time.Second
+)
+
+// refreshModelCatalog 拉取各厂商目录并写入既有缓存（同步，启动/厂商重建/定时共用）。
+// 无条件刷新：调用方语义是"现在就要最新目录"（如自定义源增删改后的重建）。
 func refreshModelCatalog() {
 	if globalAgg == nil {
 		return
 	}
+	catalogRefreshMu.Lock()
+	defer catalogRefreshMu.Unlock()
+	refreshModelCatalogLocked()
+}
+
+// refreshModelCatalogIfDue 带最小间隔的刷新：距上次完成不足 10s 时直接跳过。
+// 供 /v1/models 冷启动路径防惊群（失败上游至多每 10s 被打一轮，而不是每请求）。
+func refreshModelCatalogIfDue() {
+	if globalAgg == nil {
+		return
+	}
+	catalogRefreshMu.Lock()
+	defer catalogRefreshMu.Unlock()
+	if time.Since(catalogLastRefresh) < catalogRefreshMinGap {
+		return
+	}
+	refreshModelCatalogLocked()
+}
+
+// refreshModelCatalogLocked 执行刷新（调用方已持 catalogRefreshMu）。
+func refreshModelCatalogLocked() {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	if err := globalAgg.Refresh(ctx); err != nil {
@@ -268,6 +300,8 @@ func refreshModelCatalog() {
 	syncModelsFromAggregator(globalAgg)
 	// 目录代际+1：请求侧 syncVendorState/seedVendorCatalog 检测到变化才重新 SetCatalog。
 	catalogGen.Add(1)
+	// 刷新失败也计时：配合 IfDue 的最小间隔，故障上游不会被连续重打。
+	catalogLastRefresh = time.Now()
 }
 
 // syncModelsFromAggregator 把聚合目录中 opencode 厂商的模型写入 modelsCache / goModelsCache

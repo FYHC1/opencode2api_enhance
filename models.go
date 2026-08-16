@@ -97,7 +97,8 @@ func startModelRefresh() {
 		ticker := time.NewTicker(10 * time.Minute)
 		defer ticker.Stop()
 		for range ticker.C {
-			refreshModelCatalog()
+			// 节流版：厂商重建刚刷新过时跳过本轮，避免重复拉取。
+			refreshModelCatalogIfDue()
 			modelMu.RLock()
 			n := len(modelsCache)
 			ng := len(goModelsCache)
