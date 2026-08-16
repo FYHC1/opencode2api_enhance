@@ -23,6 +23,11 @@
   连通测试逐 key 验证；列表页展示 key 健康计数（可用/冷却/禁用，状态非用量）。
 - 架构配套：`providers[].params` 条目级参数真正接线（此前文档承诺未实现）、`Aggregator.ReplaceAll`
   热替换、`/v1/models` 空判定后移（仅有自定义源也可正常返回）。
+- **暴露白名单**：每源可勾选只暴露部分模型（`allowed_models`，未勾选不进 /v1/models 也不可调用），
+  全量清单走缓存、热生效；编辑弹层多选清单随「测试并获取模型」刷新。
+- **活性探测**：源卡片活性徽标（活跃/异常 + 上次成功时间）可点击手动探测；后台每 5 分钟自动探测
+  已启用源刷新健康（`/api/admin/custom-providers/probe`）。
+- 编辑弹层宽度对齐实例池设置弹窗（max-w-[722px]）。
 - 文档：新增 [docs/CUSTOM-MODELS.md](docs/CUSTOM-MODELS.md) 自定义模型源完整指南（快速开始/协议/多 Key/
   生效机制/配置参考/管理 API/二次开发/FAQ）；README 与部署文档同步七页 UI。
 

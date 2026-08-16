@@ -92,8 +92,14 @@ export type CustomProviderView = {
   key_strategy: CustomKeyStrategy
   via_proxy: boolean
   enabled: boolean
-  /** 聚合目录中该源模型数（实时） */
+  /** 聚合目录中该源模型数（实时，经白名单过滤） */
   models: number
+  /** 全量模型清单（上游 ID，编辑勾选用） */
+  models_all: string[]
+  /** 暴露白名单（空 = 全部暴露） */
+  allowed_models: string[]
+  /** 最近一次成功（探测/请求，RFC3339） */
+  last_success?: string
   /** key 健康计数（运行时快照；无活实例时全 0） */
   keys_total: number
   keys_available: number
@@ -109,6 +115,8 @@ export type CustomProviderInput = {
   base_url: string
   /** 多 key（一行一个）；编辑时整体留空 = 保留原 keys */
   api_keys?: string[]
+  /** 暴露白名单（空 = 全部暴露） */
+  allowed_models?: string[]
   /** 单 key 兼容输入 */
   api_key?: string
   key_strategy?: CustomKeyStrategy
@@ -128,9 +136,19 @@ export type CustomProviderTestResult = {
   ok: boolean
   /** 逐 key 结果（多 key 一键全验） */
   results?: CustomKeyTestResult[]
+  /** 首个成功 key 的模型清单（勾选界面刷新全量用） */
+  models?: string[]
   count?: number
   latency_ms?: number
   error?: string
+}
+
+export type CustomProbeResult = {
+  id: string
+  ok: boolean
+  latency_ms: number
+  error?: string
+  last_success?: string
 }
 
 export type ScanStatus = 'idle' | 'running' | 'stopping' | 'done' | 'error'
@@ -553,6 +571,9 @@ export const api = {
   /** 连通测试（不落盘）：拉取模型目录，返回模型列表与延迟 */
   customProvidersTest: (input: CustomProviderInput) =>
     req<CustomProviderTestResult>('POST', '/custom-providers/test', input),
+  /** 活性探测：真实拉一次上游目录，刷新健康并返回结果 */
+  customProvidersProbe: (id: string) =>
+    req<CustomProbeResult>('POST', '/custom-providers/probe', { id }),
 
   // 订阅（main 功能 M1）：preview 拉取解析、import 建实例、import-pool 仅入缓存
   subscribePreview: (url: string) => req<SubscribeResult>('POST', '/subscribe/preview', { url }),

@@ -45,7 +45,8 @@
 | --- | --- | --- |
 | `/api/admin/custom-providers` | `GET` | 自定义源列表（key 不回显，含模型数与最近错误） |
 | `/api/admin/custom-providers/save` | `POST` | 整表保存（增/改/删一次到位），保存即热生效 |
-| `/api/admin/custom-providers/test` | `POST` | 连通测试（不落盘）：拉取上游模型目录返回清单与延迟 |
+| `/api/admin/custom-providers/test` | `POST` | 连通测试（不落盘）：逐 key 拉取上游模型目录返回结果与延迟 |
+| `/api/admin/custom-providers/probe` | `POST` | 活性探测：真实拉一次目录刷新健康，返回 ok/延迟/上次成功 |
 
 ## Chat Completions
 
