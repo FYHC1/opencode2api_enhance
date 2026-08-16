@@ -192,9 +192,10 @@ async function run(kind) {
       case 'stats': {
         const r = await j('GET', '/stats');
         const d = parse(r);
-        const okArr = Array.isArray(d);
-        setOut('stats', verdict(okArr, r.ms) + ' JSON 数组=' + okArr + ' · ' + r.ms + 'ms<br>' + esc(r.text.slice(0, 300)));
-        w('C3-1 stats: ' + (okArr ? 'PASS' : 'FAIL') + ' ' + r.ms + 'ms');
+        const okObj = typeof d === 'object' && d !== null && !Array.isArray(d) && d.instances && Array.isArray(d.instances);
+        const n = okObj ? d.instances.length : 0;
+        setOut('stats', verdict(okObj, r.ms) + ' 可解析对象=' + okObj + ' · 实例条目=' + n + ' · 总请求=' + (okObj ? d.total_requests : '?') + ' · ' + r.ms + 'ms<br>' + esc(r.text.slice(0, 300)));
+        w('C3-1 stats: ' + (okObj ? 'PASS' : 'FAIL') + ' 实例=' + n + ' 请求=' + (okObj ? d.total_requests : '?') + ' ' + r.ms + 'ms');
         break;
       }
       case 'statsX3': {
