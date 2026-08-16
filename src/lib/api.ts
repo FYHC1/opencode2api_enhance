@@ -80,7 +80,9 @@ export type CustomProviderView = {
   name: string
   protocol: CustomProtocol
   base_url: string
-  /** 是否已配置 key（明文不回传） */
+  /** key 明文回传（面板已鉴权；key 本就明文存于本机配置）：编辑表单回填用 */
+  api_key: string
+  /** 是否已配置 key */
   api_key_set: boolean
   via_proxy: boolean
   enabled: boolean

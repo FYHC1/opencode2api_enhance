@@ -133,8 +133,8 @@ func TestCustomProvidersSaveListRebuildE2E(t *testing.T) {
 	if p0["id"] != "src1" || p0["protocol"] != "openai" || p0["models"].(float64) != 2 {
 		t.Fatalf("view = %v", p0)
 	}
-	if _, leaked := p0["api_key"]; leaked {
-		t.Fatal("api key must not be echoed")
+	if p0["api_key"] != "sk-1" {
+		t.Fatalf("api key must be echoed for edit backfill, got %v", p0["api_key"])
 	}
 	if p0["api_key_set"] != true {
 		t.Fatalf("api_key_set = %v", p0["api_key_set"])
