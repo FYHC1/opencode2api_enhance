@@ -19,10 +19,10 @@ import (
 
 type geminiProto struct{}
 
-func (geminiProto) headers(v *Vendor, stream bool) map[string]string {
+func (geminiProto) headers(key string, stream bool) map[string]string {
 	h := map[string]string{
 		"Content-Type":   "application/json",
-		"x-goog-api-key": v.cfg.APIKey,
+		"x-goog-api-key": key,
 	}
 	if stream {
 		h["Accept"] = "text/event-stream"
@@ -31,16 +31,16 @@ func (geminiProto) headers(v *Vendor, stream bool) map[string]string {
 }
 
 // geminiModelsPath 模型目录端点。
-func (geminiProto) listModels(ctx context.Context, v *Vendor) ([]string, error) {
+func (geminiProto) listModels(ctx context.Context, v *Vendor, key string) ([]string, error) {
 	resp, _, err := v.do(ctx, http.MethodGet, v.cfg.BaseURL+"/models?pageSize=1000",
-		map[string]string{"x-goog-api-key": v.cfg.APIKey}, nil, false)
+		map[string]string{"x-goog-api-key": key}, nil, false)
 	if err != nil {
 		return nil, err
 	}
 	body := readBody(resp)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		v.markErr(fmt.Sprintf("list models: HTTP %d: %s", resp.StatusCode, truncateErr(body)))
-		return nil, fmt.Errorf("custom %s: list models HTTP %d", v.cfg.ID, resp.StatusCode)
+		return nil, &keyStatusError{status: resp.StatusCode, retryAfter: parseRetryAfter(resp.Header.Get("Retry-After"))}
 	}
 	var out struct {
 		Models []struct {
@@ -358,20 +358,20 @@ func randomID() string {
 // Chat / ChatStream
 // ---------------------------------------------------------------------------
 
-func (p geminiProto) chat(ctx context.Context, v *Vendor, model string, rawBody []byte) (*contract.Reply, error) {
+func (p geminiProto) chat(ctx context.Context, v *Vendor, model, key string, rawBody []byte) (*contract.Reply, error) {
 	gemBody, err := openAIToGeminiRequest(rawBody)
 	if err != nil {
 		return nil, fmt.Errorf("custom %s: %w", v.cfg.ID, err)
 	}
 	url := v.cfg.BaseURL + "/models/" + model + ":generateContent"
-	resp, addr, err := v.do(ctx, http.MethodPost, url, p.headers(v, false), gemBody, false)
+	resp, addr, err := v.do(ctx, http.MethodPost, url, p.headers(key, false), gemBody, false)
 	if err != nil {
 		return nil, err
 	}
 	body := readBody(resp)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		v.markErr(fmt.Sprintf("chat: HTTP %d: %s", resp.StatusCode, truncateErr(body)))
-		return &contract.Reply{Body: body, Status: resp.StatusCode, NodeAddr: addr}, nil
+		return &contract.Reply{Body: body, Status: resp.StatusCode, NodeAddr: addr, Headers: resp.Header}, nil
 	}
 	converted := geminiToOpenAIResponse(body)
 	if converted == nil {
@@ -382,13 +382,13 @@ func (p geminiProto) chat(ctx context.Context, v *Vendor, model string, rawBody 
 	return &contract.Reply{Body: converted, Status: resp.StatusCode, NodeAddr: addr}, nil
 }
 
-func (p geminiProto) chatStream(ctx context.Context, v *Vendor, model string, rawBody []byte) (*contract.Stream, error) {
+func (p geminiProto) chatStream(ctx context.Context, v *Vendor, model, key string, rawBody []byte) (*contract.Stream, error) {
 	gemBody, err := openAIToGeminiRequest(rawBody)
 	if err != nil {
 		return nil, fmt.Errorf("custom %s: %w", v.cfg.ID, err)
 	}
 	url := v.cfg.BaseURL + "/models/" + model + ":streamGenerateContent?alt=sse"
-	resp, addr, err := v.do(ctx, http.MethodPost, url, p.headers(v, true), gemBody, true)
+	resp, addr, err := v.do(ctx, http.MethodPost, url, p.headers(key, true), gemBody, true)
 	if err != nil {
 		return nil, err
 	}

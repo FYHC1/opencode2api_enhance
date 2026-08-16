@@ -141,27 +141,36 @@ func rebuildVendors() {
 // customProviderView 列表项。key 明文回传给已鉴权的面板（单用户/内网定位，
 // key 本就明文存于本机 config.json）：编辑表单直接回填，免得每次测试连通重新粘贴。
 type customProviderView struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Protocol  string `json:"protocol"`
-	BaseURL   string `json:"base_url"`
-	APIKey    string `json:"api_key"`
-	APIKeySet bool   `json:"api_key_set"`
-	ViaProxy  bool   `json:"via_proxy"`
-	Enabled   bool   `json:"enabled"`
-	Models    int    `json:"models"` // 聚合目录中该源模型数（实时）
-	LastError string `json:"last_error,omitempty"`
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Protocol    string   `json:"protocol"`
+	BaseURL     string   `json:"base_url"`
+	APIKeys     []string `json:"api_keys"` // 全部 key（明文回填编辑表单）
+	APIKey      string   `json:"api_key"`  // 首 key（旧 UI 兼容）
+	APIKeySet   bool     `json:"api_key_set"`
+	KeyStrategy string   `json:"key_strategy"` // round_robin | failover
+	ViaProxy    bool     `json:"via_proxy"`
+	Enabled     bool     `json:"enabled"`
+	Models      int      `json:"models"` // 聚合目录中该源模型数（实时）
+	// key 健康计数（运行时快照；无活实例时全 0）
+	KeysTotal     int    `json:"keys_total"`
+	KeysAvailable int    `json:"keys_available"`
+	KeysCooling   int    `json:"keys_cooling"`
+	KeysDisabled  int    `json:"keys_disabled"`
+	LastError     string `json:"last_error,omitempty"`
 }
 
 // customProviderInput 保存请求中的单个源定义。
 type customProviderInput struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Protocol string `json:"protocol"`
-	BaseURL  string `json:"base_url"`
-	APIKey   string `json:"api_key"`
-	ViaProxy bool   `json:"via_proxy"`
-	Enabled  *bool  `json:"enabled"`
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Protocol    string   `json:"protocol"`
+	BaseURL     string   `json:"base_url"`
+	APIKey      string   `json:"api_key"`      // 单 key 兼容输入
+	APIKeys     []string `json:"api_keys"`     // 多 key（优先于 api_key）
+	KeyStrategy string   `json:"key_strategy"` // round_robin（默认）| failover
+	ViaProxy    bool     `json:"via_proxy"`
+	Enabled     *bool    `json:"enabled"`
 }
 
 // customProvidersView 聚合目录中该源模型数。
@@ -203,17 +212,29 @@ func customProviderViews() []customProviderView {
 		if p == nil {
 			p = map[string]any{}
 		}
-		key, _ := p[custom.ParamAPIKey].(string)
 		via, _ := p[custom.ParamViaProxy].(bool)
 		proto, _ := p[custom.ParamProtocol].(string)
 		if proto == "" {
 			proto = custom.ProtoOpenAI
 		}
 		baseURL, _ := p[custom.ParamBaseURL].(string)
+		keys := customKeyListFromParams(p)
+		firstKey := ""
+		if len(keys) > 0 {
+			firstKey = keys[0]
+		}
+		strategy, _ := p[custom.ParamKeyStrategy].(string)
+		if strategy != custom.StrategyFailover {
+			strategy = custom.StrategyRoundRobin
+		}
+		kh := vendorKeyHealth(pc.ID)
 		views = append(views, customProviderView{
 			ID: pc.ID, Name: pc.Name, Protocol: proto, BaseURL: baseURL,
-			APIKey: key, APIKeySet: key != "", ViaProxy: via, Enabled: enabled,
+			APIKeys: keys, APIKey: firstKey, APIKeySet: len(keys) > 0,
+			KeyStrategy: strategy,
+			ViaProxy:    via, Enabled: enabled,
 			Models: counts[pc.ID], LastError: vendorLastErr(pc.ID),
+			KeysTotal: kh.Total, KeysAvailable: kh.Available, KeysCooling: kh.Cooling, KeysDisabled: kh.Disabled,
 		})
 	}
 	return views
@@ -268,12 +289,12 @@ func customProvidersSaveHandler(m *manager.Manager) http.HandlerFunc {
 		}
 
 		seen := map[string]bool{}
-		// 旧 custom 条目的 key（按 id）：编辑时 key 留空 → 保留旧 key（「留空则不修改」）。
-		oldKeys := map[string]string{}
+		// 旧 custom 条目的 key 列表（按 id）：编辑时 keys 全留空 → 保留旧 keys（「留空则不修改」）。
+		oldKeys := map[string][]string{}
 		for _, pc := range cfg.Providers {
-			if pc.Type == "custom" && pc.Params != nil {
-				if k, _ := pc.Params[custom.ParamAPIKey].(string); k != "" {
-					oldKeys[pc.ID] = k
+			if pc.Type == "custom" {
+				if ks := customKeyListFromParams(pc.Params); len(ks) > 0 {
+					oldKeys[pc.ID] = ks
 				}
 			}
 		}
@@ -306,16 +327,27 @@ func customProvidersSaveHandler(m *manager.Manager) http.HandlerFunc {
 				writeAdminErr(w, http.StatusBadRequest, fmt.Sprintf("源 %s：协议需为 openai|anthropic|gemini|responses", in.ID))
 				return
 			}
+			strategy := in.KeyStrategy
+			if strategy == "" {
+				strategy = custom.StrategyRoundRobin
+			}
+			if strategy != custom.StrategyRoundRobin && strategy != custom.StrategyFailover {
+				writeAdminErr(w, http.StatusBadRequest, fmt.Sprintf("源 %s：key 策略需为 round_robin|failover", in.ID))
+				return
+			}
+			keys := inputKeyList(in)
+			if len(keys) == 0 {
+				keys = oldKeys[in.ID] // 编辑时全留空 = 保留旧 keys
+			}
 			enabled := in.Enabled == nil || *in.Enabled
 			params := map[string]any{
-				custom.ParamBaseURL:  in.BaseURL,
-				custom.ParamProtocol: in.Protocol,
-				custom.ParamViaProxy: in.ViaProxy,
+				custom.ParamBaseURL:     in.BaseURL,
+				custom.ParamProtocol:    in.Protocol,
+				custom.ParamKeyStrategy: strategy,
+				custom.ParamViaProxy:    in.ViaProxy,
 			}
-			if strings.TrimSpace(in.APIKey) != "" {
-				params[custom.ParamAPIKey] = strings.TrimSpace(in.APIKey)
-			} else if k, ok := oldKeys[in.ID]; ok {
-				params[custom.ParamAPIKey] = k
+			if len(keys) > 0 {
+				params[custom.ParamAPIKeys] = keys
 			}
 			pc := ProviderCfg{
 				ID: in.ID, Type: "custom", Name: strings.TrimSpace(in.Name),
@@ -370,7 +402,8 @@ func customEntriesForManager(cfgs []ProviderCfg) []map[string]any {
 	return out
 }
 
-// customProvidersTestHandler POST：连通测试（不落盘）——构造临时实例拉取模型目录。
+// customProvidersTestHandler POST：连通测试（不落盘）——逐 key 构造临时实例拉取模型目录，
+// 返回每个 key 的结果（多 key 一键全验）。
 func customProvidersTestHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -379,7 +412,7 @@ func customProvidersTestHandler() http.HandlerFunc {
 		}
 		var in customProviderInput
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-			writeAdminErr(w, http.StatusBadRequest, "请求体需为 {id?,name?,protocol,base_url,api_key}")
+			writeAdminErr(w, http.StatusBadRequest, "请求体需为 {id?,name?,protocol,base_url,api_keys|api_key}")
 			return
 		}
 		in.BaseURL = strings.TrimRight(strings.TrimSpace(in.BaseURL), "/")
@@ -389,34 +422,59 @@ func customProvidersTestHandler() http.HandlerFunc {
 		if in.ID == "" {
 			in.ID = "_test"
 		}
-		v, err := custom.New(custom.Config{
-			ID: in.ID, Name: in.Name, BaseURL: in.BaseURL,
-			APIKey: strings.TrimSpace(in.APIKey), Protocol: in.Protocol,
-			ViaProxy: in.ViaProxy,
-			// 连通测试必须真实触达上游：禁用目录缓存（防不可达时拿旧缓存误报成功）。
-			NoModelCache: true,
-		})
-		if err != nil {
-			writeAdminJSON(w, map[string]any{"ok": false, "error": err.Error()})
-			return
+		keys := inputKeyList(in)
+		if len(keys) == 0 {
+			keys = []string{""} // 无 key（本地网关）也测
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-		defer cancel()
-		start := time.Now()
-		models, err := v.ListModels(ctx)
-		latency := time.Since(start).Milliseconds()
-		if err != nil {
-			writeAdminJSON(w, map[string]any{"ok": false, "latency_ms": latency, "error": err.Error()})
-			return
+		type keyResult struct {
+			KeyTail   string `json:"key_tail"` // 末 4 位（明文不整段回显）
+			OK        bool   `json:"ok"`
+			Count     int    `json:"count,omitempty"`
+			LatencyMS int64  `json:"latency_ms"`
+			Error     string `json:"error,omitempty"`
 		}
-		ids := make([]string, 0, len(models))
-		for _, m := range models {
-			ids = append(ids, strings.TrimPrefix(m.ID, in.ID+"/"))
+		results := make([]keyResult, 0, len(keys))
+		allOK := true
+		for _, key := range keys {
+			v, err := custom.New(custom.Config{
+				ID: in.ID, Name: in.Name, BaseURL: in.BaseURL,
+				APIKey: key, Protocol: in.Protocol, ViaProxy: in.ViaProxy,
+				// 连通测试必须真实触达上游：禁用目录缓存（防不可达时拿旧缓存误报成功）。
+				NoModelCache: true,
+			})
+			if err != nil {
+				allOK = false
+				results = append(results, keyResult{KeyTail: keyTail(key), Error: err.Error()})
+				continue
+			}
+			ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+			start := time.Now()
+			models, err := v.ListModels(ctx)
+			latency := time.Since(start).Milliseconds()
+			cancel()
+			if err != nil {
+				allOK = false
+				results = append(results, keyResult{KeyTail: keyTail(key), LatencyMS: latency, Error: err.Error()})
+				continue
+			}
+			ids := make([]string, 0, len(models))
+			for _, m := range models {
+				ids = append(ids, strings.TrimPrefix(m.ID, in.ID+"/"))
+			}
+			results = append(results, keyResult{KeyTail: keyTail(key), OK: true, Count: len(ids), LatencyMS: latency})
 		}
 		writeAdminJSON(w, map[string]any{
-			"ok": true, "latency_ms": latency, "count": len(ids), "models": ids,
+			"ok": allOK, "results": results, "count": len(results),
 		})
 	}
+}
+
+// keyTail key 末 4 位（结果展示用，不整段回显）。
+func keyTail(key string) string {
+	if len(key) <= 4 {
+		return strings.Repeat("*", len(key))
+	}
+	return "****" + key[len(key)-4:]
 }
 
 // ---------------------------------------------------------------------------
@@ -432,4 +490,61 @@ func writeAdminErr(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]any{"error": msg})
+}
+
+// customKeyListFromParams 合并条目 params 里的 api_keys + api_key（去空去重）。
+func customKeyListFromParams(p map[string]any) []string {
+	var out []string
+	seen := map[string]bool{}
+	add := func(k string) {
+		k = strings.TrimSpace(k)
+		if k == "" || seen[k] {
+			return
+		}
+		seen[k] = true
+		out = append(out, k)
+	}
+	if arr, ok := p[custom.ParamAPIKeys].([]any); ok {
+		for _, v := range arr {
+			if s, ok := v.(string); ok {
+				add(s)
+			}
+		}
+	}
+	if s, ok := p[custom.ParamAPIKey].(string); ok {
+		add(s)
+	}
+	return out
+}
+
+// inputKeyList 取输入里的 key 列表（api_keys 优先，兼容单 api_key；去空去重）。
+func inputKeyList(in customProviderInput) []string {
+	var out []string
+	seen := map[string]bool{}
+	add := func(k string) {
+		k = strings.TrimSpace(k)
+		if k == "" || seen[k] {
+			return
+		}
+		seen[k] = true
+		out = append(out, k)
+	}
+	for _, k := range in.APIKeys {
+		add(k)
+	}
+	add(in.APIKey)
+	return out
+}
+
+// vendorKeyHealth 活实例的 key 健康计数（无实例返回零值）。
+func vendorKeyHealth(id string) custom.KeyPoolStatus {
+	if globalAgg == nil {
+		return custom.KeyPoolStatus{}
+	}
+	for _, v := range globalAgg.Vendors() {
+		if cv, ok := v.(*custom.Vendor); ok && cv.ID() == id {
+			return cv.PoolStatus()
+		}
+	}
+	return custom.KeyPoolStatus{}
 }

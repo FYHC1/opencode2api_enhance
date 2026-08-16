@@ -18,6 +18,9 @@
   **已存在的实例/网关 runtime 配置同步补写——运行中的子进程经 1s 配置监视热重建厂商，
   不重启即在其 /v1/models 出现自定义模型**。
 - **出站协议四种**：OpenAI 兼容 / Anthropic / **OpenAI Responses** / Google Gemini。
+- **多 key 池**：一源多 key（`api_keys`，一行一个），可选**轮询（round_robin）/ 错误转移（failover）**
+  两种调度——仅作用于自定义源、与实例池路由模式互不影响；429 冷却（Retry-After）、401/403 禁用自动换 key；
+  连通测试逐 key 验证；列表页展示 key 健康计数（可用/冷却/禁用，状态非用量）。
 - 架构配套：`providers[].params` 条目级参数真正接线（此前文档承诺未实现）、`Aggregator.ReplaceAll`
   热替换、`/v1/models` 空判定后移（仅有自定义源也可正常返回）。
 

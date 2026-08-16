@@ -278,19 +278,19 @@ func responsesToOpenAIResponse(body []byte) []byte {
 // Chat / ChatStream
 // ---------------------------------------------------------------------------
 
-func (p responsesProto) chat(ctx context.Context, v *Vendor, model string, rawBody []byte) (*contract.Reply, error) {
+func (p responsesProto) chat(ctx context.Context, v *Vendor, model, key string, rawBody []byte) (*contract.Reply, error) {
 	rsBody, err := openAIToResponsesRequest(rawBody)
 	if err != nil {
 		return nil, fmt.Errorf("custom %s: %w", v.cfg.ID, err)
 	}
-	resp, addr, err := v.do(ctx, http.MethodPost, v.cfg.BaseURL+"/responses", p.headers(v, false), rsBody, false)
+	resp, addr, err := v.do(ctx, http.MethodPost, v.cfg.BaseURL+"/responses", p.headers(key, false), rsBody, false)
 	if err != nil {
 		return nil, err
 	}
 	body := readBody(resp)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		v.markErr(fmt.Sprintf("chat: HTTP %d: %s", resp.StatusCode, truncateErr(body)))
-		return &contract.Reply{Body: body, Status: resp.StatusCode, NodeAddr: addr}, nil
+		return &contract.Reply{Body: body, Status: resp.StatusCode, NodeAddr: addr, Headers: resp.Header}, nil
 	}
 	converted := responsesToOpenAIResponse(body)
 	if converted == nil {
@@ -301,12 +301,12 @@ func (p responsesProto) chat(ctx context.Context, v *Vendor, model string, rawBo
 	return &contract.Reply{Body: converted, Status: resp.StatusCode, NodeAddr: addr}, nil
 }
 
-func (p responsesProto) chatStream(ctx context.Context, v *Vendor, model string, rawBody []byte) (*contract.Stream, error) {
+func (p responsesProto) chatStream(ctx context.Context, v *Vendor, model, key string, rawBody []byte) (*contract.Stream, error) {
 	rsBody, err := openAIToResponsesRequest(rawBody)
 	if err != nil {
 		return nil, fmt.Errorf("custom %s: %w", v.cfg.ID, err)
 	}
-	resp, addr, err := v.do(ctx, http.MethodPost, v.cfg.BaseURL+"/responses", p.headers(v, true), rsBody, true)
+	resp, addr, err := v.do(ctx, http.MethodPost, v.cfg.BaseURL+"/responses", p.headers(key, true), rsBody, true)
 	if err != nil {
 		return nil, err
 	}

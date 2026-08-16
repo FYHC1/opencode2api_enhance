@@ -23,10 +23,10 @@ const defaultAnthropicMaxTokens = 8192
 
 type anthropicProto struct{}
 
-func (anthropicProto) headers(v *Vendor, stream bool) map[string]string {
+func (anthropicProto) headers(key string, stream bool) map[string]string {
 	h := map[string]string{
 		"Content-Type":      "application/json",
-		"x-api-key":         v.cfg.APIKey,
+		"x-api-key":         key,
 		"anthropic-version": anthropicVersion,
 	}
 	if stream {
@@ -35,16 +35,16 @@ func (anthropicProto) headers(v *Vendor, stream bool) map[string]string {
 	return h
 }
 
-func (anthropicProto) listModels(ctx context.Context, v *Vendor) ([]string, error) {
+func (anthropicProto) listModels(ctx context.Context, v *Vendor, key string) ([]string, error) {
 	resp, _, err := v.do(ctx, http.MethodGet, v.cfg.BaseURL+"/models",
-		map[string]string{"x-api-key": v.cfg.APIKey, "anthropic-version": anthropicVersion}, nil, false)
+		map[string]string{"x-api-key": key, "anthropic-version": anthropicVersion}, nil, false)
 	if err != nil {
 		return nil, err
 	}
 	body := readBody(resp)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		v.markErr(fmt.Sprintf("list models: HTTP %d: %s", resp.StatusCode, truncateErr(body)))
-		return nil, fmt.Errorf("custom %s: list models HTTP %d", v.cfg.ID, resp.StatusCode)
+		return nil, &keyStatusError{status: resp.StatusCode, retryAfter: parseRetryAfter(resp.Header.Get("Retry-After"))}
 	}
 	var out struct {
 		Data []struct {
@@ -383,19 +383,19 @@ func anthropicFinishReason(r string) string {
 // Chat / ChatStream
 // ---------------------------------------------------------------------------
 
-func (p anthropicProto) chat(ctx context.Context, v *Vendor, model string, rawBody []byte) (*contract.Reply, error) {
+func (p anthropicProto) chat(ctx context.Context, v *Vendor, model, key string, rawBody []byte) (*contract.Reply, error) {
 	anthBody, err := openAIToAnthropicRequest(rawBody)
 	if err != nil {
 		return nil, fmt.Errorf("custom %s: %w", v.cfg.ID, err)
 	}
-	resp, addr, err := v.do(ctx, http.MethodPost, v.cfg.BaseURL+"/messages", p.headers(v, false), anthBody, false)
+	resp, addr, err := v.do(ctx, http.MethodPost, v.cfg.BaseURL+"/messages", p.headers(key, false), anthBody, false)
 	if err != nil {
 		return nil, err
 	}
 	body := readBody(resp)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		v.markErr(fmt.Sprintf("chat: HTTP %d: %s", resp.StatusCode, truncateErr(body)))
-		return &contract.Reply{Body: body, Status: resp.StatusCode, NodeAddr: addr}, nil
+		return &contract.Reply{Body: body, Status: resp.StatusCode, NodeAddr: addr, Headers: resp.Header}, nil
 	}
 	converted := anthropicToOpenAIResponse(body)
 	if converted == nil {
@@ -406,12 +406,12 @@ func (p anthropicProto) chat(ctx context.Context, v *Vendor, model string, rawBo
 	return &contract.Reply{Body: converted, Status: resp.StatusCode, NodeAddr: addr}, nil
 }
 
-func (p anthropicProto) chatStream(ctx context.Context, v *Vendor, model string, rawBody []byte) (*contract.Stream, error) {
+func (p anthropicProto) chatStream(ctx context.Context, v *Vendor, model, key string, rawBody []byte) (*contract.Stream, error) {
 	anthBody, err := openAIToAnthropicRequest(rawBody)
 	if err != nil {
 		return nil, fmt.Errorf("custom %s: %w", v.cfg.ID, err)
 	}
-	resp, addr, err := v.do(ctx, http.MethodPost, v.cfg.BaseURL+"/messages", p.headers(v, true), anthBody, true)
+	resp, addr, err := v.do(ctx, http.MethodPost, v.cfg.BaseURL+"/messages", p.headers(key, true), anthBody, true)
 	if err != nil {
 		return nil, err
 	}

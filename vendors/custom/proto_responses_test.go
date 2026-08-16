@@ -167,7 +167,7 @@ func TestResponsesChatRoundTrip(t *testing.T) {
 	v := newTestVendor(t, ProtoResponses, srv.URL)
 
 	// listModels 继承自 openai 协议。
-	ids, err := v.proto.listModels(context.Background(), v)
+	ids, err := v.proto.listModels(context.Background(), v, "sk-test")
 	if err != nil || len(ids) != 1 || ids[0] != "gpt-x" {
 		t.Fatalf("listModels = %v, err = %v", ids, err)
 	}
