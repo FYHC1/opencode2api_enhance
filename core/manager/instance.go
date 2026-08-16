@@ -53,6 +53,10 @@ func (m *Manager) StartInstance(runner Runner, name string) error {
 		}
 		list[i].PID, list[i].SingboxPID = inst.PID, inst.SingboxPID
 		if runErr != nil {
+			// 失败路径进程已 kill / 未启动——不持久化死 PID：Stop 对 Error 态实例
+			// 按快照 PID 直接 taskkill，PID 被系统复用后会误杀无关进程。
+			// 万一 Kill 失败留下活进程，交由孤儿清理（KillOrphans）兜底。
+			list[i].PID, list[i].SingboxPID = nil, nil
 			list[i].Status = StatusError(runErr.Error())
 		} else {
 			list[i].Status = StatusRunning()
