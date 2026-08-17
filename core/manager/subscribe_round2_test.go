@@ -136,9 +136,37 @@ func TestGroupNameFor(t *testing.T) {
 	if g := m.groupNameFor("https://example.com/sub/speedtest.yaml", SubscriptionMeta{}); g != "speedtest" {
 		t.Fatalf("url segment group = %q", g)
 	}
-	// 响应头订阅名优先
+	// 响应头订阅名优先于 URL 末段
 	if g := m.groupNameFor("https://example.com/x", SubscriptionMeta{Name: "My Sub"}); g != "My Sub" {
 		t.Fatalf("meta name group = %q", g)
+	}
+	// 内容配置名优先于响应头订阅名
+	if g := m.groupNameFor("https://example.com/x", SubscriptionMeta{Name: "My Sub", Profile: "内容配置名"}); g != "内容配置名" {
+		t.Fatalf("profile group = %q", g)
+	}
+}
+
+func TestExtractProfileName(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"注释Profile", "# Profile: 我的机场\nproxies:\n- name: a\n  type: trojan", "我的机场"},
+		{"##变体", "## Profile: 二级注释\nproxies:\n- name: a", "二级注释"},
+		{"大小写", "# PROFILE: UPPER\nproxies:\n- name: a", "UPPER"},
+		{"值带尾注", "# Profile: 名字 # 尾注\nproxies:\n- name: a", "名字"},
+		{"顶层块", "profile:\n  name: 顶层配置名\nproxies:\n- name: a", "顶层配置名"},
+		{"顶层块缩进", "profile:\n    name: 缩进配置名\nproxies:\n- name: a", "缩进配置名"},
+		{"单行变体", "profile-name: 单行名\nproxies:\n- name: a", "单行名"},
+		{"URL式变体", "profile_name=等号名\nproxies:\n- name: a", "等号名"},
+		{"无配置名", "proxies:\n- name: a\n  type: trojan\n  server: 1.2.3.4", ""},
+		{"注释但那不是Profile", "# subscribe: x\nproxies:\n- name: a", ""},
+	}
+	for _, c := range cases {
+		if got := extractProfileName(c.body); got != c.want {
+			t.Errorf("%s: extractProfileName = %q, want %q", c.name, got, c.want)
+		}
 	}
 }
 

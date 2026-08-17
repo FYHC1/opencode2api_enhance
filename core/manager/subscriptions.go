@@ -38,7 +38,8 @@ type SubscriptionSource struct {
 	URL         string             `json:"url"`
 	IntervalMin int                `json:"interval_min"` // <=0 = 不自动拉取
 	Target      SubscriptionTarget `json:"target"`
-	Group       string             `json:"group,omitempty"` // 订阅分组名（导入时解析写入；删除订阅/统计直接读取）
+	Group       string             `json:"group,omitempty"`       // 订阅分组名（导入时解析写入；删除订阅/统计直接读取）
+	NamePinned  bool               `json:"name_pinned,omitempty"` // true=用户手动指定分组名（固定，自动拉取不覆盖）
 }
 
 // subscriptionsPath 订阅源列表文件路径。
@@ -79,7 +80,8 @@ func (m *Manager) loadSubscriptions() []SubscriptionSource {
 }
 
 // AddSubscription 新增订阅源；重复 URL 报错。
-func (m *Manager) AddSubscription(url string, intervalMin int, target SubscriptionTarget) error {
+// names 为可选参数：首个非空值作为用户手动指定的分组名（NamePinned=true 固定）。
+func (m *Manager) AddSubscription(url string, intervalMin int, target SubscriptionTarget, names ...string) error {
 	url = strings.TrimSpace(url)
 	if url == "" {
 		return errors.New("订阅 URL 不能为空")
@@ -96,7 +98,14 @@ func (m *Manager) AddSubscription(url string, intervalMin int, target Subscripti
 			return errors.New("该订阅已存在")
 		}
 	}
-	list = append(list, SubscriptionSource{URL: url, IntervalMin: intervalMin, Target: target})
+	src := SubscriptionSource{URL: url, IntervalMin: intervalMin, Target: target}
+	if len(names) > 0 {
+		if name := strings.TrimSpace(names[0]); name != "" {
+			src.Group = name
+			src.NamePinned = true
+		}
+	}
+	list = append(list, src)
 	return m.saveSubscriptions(list)
 }
 
@@ -294,6 +303,7 @@ func (m *Manager) importSubscriptionForSource(s SubscriptionSource) (int, error)
 
 // persistSourceGroup 把当次解析出的订阅分组名写回源记录（导入成功后调用）。
 // 删除订阅/统计直接读持久化 Group，URL 失效后仍能准确对分组。
+// 手动固定名（NamePinned）不受自动推导结果覆盖。
 func (m *Manager) persistSourceGroup(url, group string) {
 	if group == "" {
 		return
@@ -301,8 +311,34 @@ func (m *Manager) persistSourceGroup(url, group string) {
 	list := m.loadSubscriptions()
 	changed := false
 	for i := range list {
-		if list[i].URL == url && list[i].Group != group {
+		if list[i].URL == url {
+			if list[i].NamePinned {
+				return
+			}
+			if list[i].Group != group {
+				list[i].Group = group
+				changed = true
+			}
+		}
+	}
+	if changed {
+		_ = m.saveSubscriptions(list)
+	}
+}
+
+// pinSourceGroup 手动固定某订阅源的分组名（NamePinned=true，自动拉取不覆盖）。
+// 源记录不存在时为空操作（仅保存改名，不创建源）。
+func (m *Manager) pinSourceGroup(url, group string) {
+	url = strings.TrimSpace(url)
+	if url == "" || group == "" {
+		return
+	}
+	list := m.loadSubscriptions()
+	changed := false
+	for i := range list {
+		if list[i].URL == url && (list[i].Group != group || !list[i].NamePinned) {
 			list[i].Group = group
+			list[i].NamePinned = true
 			changed = true
 		}
 	}
@@ -349,12 +385,13 @@ func (m *Manager) SubscriptionsAddHandler() http.HandlerFunc {
 			URL         string             `json:"url"`
 			IntervalMin int                `json:"interval_min"`
 			Target      SubscriptionTarget `json:"target"`
+			Name        string             `json:"name"` // 可选：手动指定分组名
 		}
 		if json.NewDecoder(r.Body).Decode(&req) != nil {
 			writeErr(w, http.StatusBadRequest, "请求体解析失败")
 			return
 		}
-		if err := m.AddSubscription(req.URL, req.IntervalMin, req.Target); err != nil {
+		if err := m.AddSubscription(req.URL, req.IntervalMin, req.Target, req.Name); err != nil {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -490,18 +527,23 @@ func (m *Manager) instanceNamesForGroup(group string) []string {
 	return names
 }
 
-// SubscriptionsImportHandler POST {url} → 立即拉取该订阅源（一律只进节点池）。
+// SubscriptionsImportHandler POST {url, name?} → 立即拉取该订阅源（一律只进节点池）。
+// name 可选：非空时先固定该源的分组名（NamePinned=true），导入节点即归入此组。
 func (m *Manager) SubscriptionsImportHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !requireMethodOK(w, r, http.MethodPost) {
 			return
 		}
 		var req struct {
-			URL string `json:"url"`
+			URL  string `json:"url"`
+			Name string `json:"name"`
 		}
 		if json.NewDecoder(r.Body).Decode(&req) != nil || req.URL == "" {
 			writeErr(w, http.StatusBadRequest, "url 必填")
 			return
+		}
+		if name := strings.TrimSpace(req.Name); name != "" {
+			m.pinSourceGroup(req.URL, name)
 		}
 		n, targetLabel, err := m.ImportSubscriptionNow(req.URL)
 		if err != nil {
