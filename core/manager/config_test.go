@@ -2,6 +2,7 @@ package manager
 
 import (
 	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,8 +12,23 @@ import (
 func newTestManager(t *testing.T) *Manager {
 	t.Helper()
 	dir := t.TempDir()
+	// 网关端口固定到测试专用端口：重置统计按 managerGatewayPort 探测/复位，
+	// 避免测试探测到本机真实生产网关（40080 等槽位）而误发 DELETE——环境隔离纪律。
+	t.Setenv("OPCODE2API_GATEWAY_PORT", itoa(freePort(t)))
 	m := New(dir)
 	return m
+}
+
+// freePort 取一个当前可用的本机端口（bind :0 后立即释放）。
+func freePort(t *testing.T) uint16 {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("bind free port: %v", err)
+	}
+	port := uint16(ln.Addr().(*net.TCPAddr).Port)
+	_ = ln.Close()
+	return port
 }
 
 func TestConfigSetGetAllKeys(t *testing.T) {

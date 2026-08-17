@@ -88,6 +88,19 @@ const statsReadConcurrency = 8
 // statsResetConcurrency 统计重置并发 HTTP DELETE 上限（避免瞬间打爆实例 HTTP）。
 const statsResetConcurrency = 4
 
+// statsResetProbeTimeout 重置统计前的端口存活探测超时：状态可能陈旧（运行中实例
+// 被记为非 Running），探测到端口存活即按运行中处理走 HTTP 复位——绝不直写疑似
+// 存活进程的统计文件（Windows 下会与子进程后台原子写撞出「文件被占用」）。
+const statsResetProbeTimeout = 300 * time.Millisecond
+
+// statsWriteRetryAttempts / statsWriteRetryDelay 统计文件直写对瞬时跨进程占用的重试：
+// 子进程后台原子写（tmp+Rename）与本管理器直写并发时，Windows 会报
+// "being used by another process" / "Access is denied"，短暂重试即可越过。
+const (
+	statsWriteRetryAttempts = 8
+	statsWriteRetryDelay    = 25 * time.Millisecond
+)
+
 // AggregateStats 扫描 runtime 目录聚合统计（语义与 Rust aggregate_stats 一致）。
 // 各实例目录 stats.json 并发读取（semaphore ≤8），结果按下标收集后按既有目录顺序
 // 合并再按 TotalTokens 降序排序；known/portToName 仅并发只读共享。
@@ -243,14 +256,31 @@ func writeEmptyStatsFile(path string, isNodes bool) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	return writeFileRetry(path, data, 0o644)
+}
+
+// writeFileRetry 写文件并对瞬时跨进程占用重试（Windows：实例/网关子进程后台
+// 原子替换 stats.json 与本管理器直写并发 → sharing violation，短暂重试越过）。
+func writeFileRetry(path string, data []byte, perm os.FileMode) error {
+	var err error
+	for i := 0; i < statsWriteRetryAttempts; i++ {
+		if err = os.WriteFile(path, data, perm); err == nil {
+			return nil
+		}
+		if i+1 < statsWriteRetryAttempts {
+			time.Sleep(statsWriteRetryDelay)
+		}
+	}
+	return err
 }
 
 // ResetStats 重置全部实例与统一网关统计（运行中走 HTTP DELETE，其余覆写磁盘）
 // clearDeleted=是否清除已删除实例的历史统计目录。
-// 注：HTTP 复位依赖 tcp 包（P4-1 的 httpDo），运行实例复位在 P4-2 装配后完整可用。
 // 运行实例的 DELETE 并发发送（semaphore ≤4，避免瞬间打爆实例 HTTP），
 // 处理结果按下标收集后按实例列表顺序合并（Failed 顺序稳定）。
+// Windows 占用防护：端口存活（probePort）或状态 Running 一律走 HTTP 复位，
+// 磁盘覆写仅用于明确未运行（状态非 Running 且端口无监听）的实例——对疑似存活
+// 进程的 stats.json 直写会与子进程后台原子写撞出「文件被占用」。
 func (m *Manager) ResetStats(clearDeleted bool) ResetStatsResult {
 	res := ResetStatsResult{Failed: []string{}}
 	defaultPW := m.effectiveDefaultPassword()
@@ -269,7 +299,7 @@ func (m *Manager) ResetStats(clearDeleted bool) ResetStatsResult {
 		inst := instances[i]
 		known[inst.Name] = true
 		statsPath := filepath.Join(m.paths.RuntimeDir, inst.Name, "stats.json")
-		if inst.Status.State == "Running" {
+		if probePort(inst.Port, statsResetProbeTimeout) || inst.Status.State == "Running" {
 			wg.Add(1)
 			sem <- struct{}{}
 			go func() {
@@ -306,14 +336,20 @@ func (m *Manager) ResetStats(clearDeleted bool) ResetStatsResult {
 		}
 	}
 
-	// 统一网关
+	// 统一网关：端口取 managerGatewayPort（env > config > 默认；dev/便携/web-dev
+	// 槽位非 40080，硬编码会打错端口 → 回退直写运行中网关文件 → 占用）。
+	// 端口存活 → HTTP 复位（失败如实上报，不落盘覆写）；未运行 → 磁盘覆写（安全）。
+	gwPort := m.managerGatewayPort()
 	gwDir := filepath.Join(m.paths.RuntimeDir, "_unified-gateway")
-	gwOK := false
-	if status, _, err := httpDeleteJSON(unifiedGatewayPort, "/api/reset-stats", 6*time.Second, effectiveGatewayKey(m.loadConfig())); err == nil && status >= 200 && status < 300 {
-		gwOK = true
-	}
-	if gwOK {
-		res.ResetCount++
+	if probePort(gwPort, statsResetProbeTimeout) {
+		status, _, err := httpDeleteJSON(gwPort, "/api/reset-stats", 6*time.Second, effectiveGatewayKey(m.loadConfig()))
+		if err == nil && status >= 200 && status < 300 {
+			res.ResetCount++
+		} else if err != nil {
+			res.Failed = append(res.Failed, "统一网关: "+err.Error())
+		} else {
+			res.Failed = append(res.Failed, "统一网关: HTTP "+strconv.Itoa(status))
+		}
 	} else {
 		any := false
 		if data, err := os.ReadFile(filepath.Join(gwDir, "stats.json")); err == nil && len(data) > 0 {

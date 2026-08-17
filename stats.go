@@ -35,6 +35,18 @@ var (
 // statsFlushInterval 后台统计写盘周期（atomic：测试可动态注入缩短）。
 var statsFlushInterval atomic.Int64
 
+// statsWriteRetryAttempts / statsWriteRetryDelay 统计写盘对瞬时跨进程占用的重试
+//（Windows：管理器聚合读取/直写与本进程原子替换并发 → Access denied/文件被占用）。
+const (
+	statsWriteRetryAttempts = 8
+	statsWriteRetryDelay    = 25 * time.Millisecond
+)
+
+// statsWriteMu 统计落盘互斥：串行化「快照序列化 + 写盘」复合动作。重置统计与后台
+// 单写者并发 flush 时，保证最后一次落盘总是最新快照（否则旧快照晚到会把已清零
+// 的统计「复活」）。
+var statsWriteMu sync.Mutex
+
 func init() {
 	statsFlushInterval.Store(int64(5 * time.Second))
 }
@@ -73,8 +85,10 @@ func markNodeStatsDirty() {
 }
 
 // flushNodeStatsNow 同步落盘当前内存节点统计（管理端重置统计/测试用；
-// 常规写盘由后台单写者周期执行）。
-func flushNodeStatsNow() {
+// 常规写盘由后台单写者周期执行）。返回最终写盘错误（重置统计据此判定成败）。
+func flushNodeStatsNow() error {
+	statsWriteMu.Lock()
+	defer statsWriteMu.Unlock()
 	nodeStatsMu.Lock()
 	nodeStatsDirty = false
 	nodeStatsFlushCnt++
@@ -82,9 +96,16 @@ func flushNodeStatsNow() {
 	path := nodeStatsPath
 	nodeStatsMu.Unlock()
 	if err != nil {
-		return
+		return err
 	}
-	_ = writeFileAtomic(path, data, 0o644)
+	if err := writeFileAtomicRetry(path, data, 0o644); err != nil {
+		// 落盘失败（Windows 瞬时占用等）：重新置 dirty，后台单写者稍后重试，避免数据静默丢失。
+		nodeStatsMu.Lock()
+		nodeStatsDirty = true
+		nodeStatsMu.Unlock()
+		return err
+	}
+	return nil
 }
 
 func loadNodeStats() {

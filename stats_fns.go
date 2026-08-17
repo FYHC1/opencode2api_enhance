@@ -36,8 +36,10 @@ func markTokenStatsDirty() {
 }
 
 // flushTokenStatsNow 同步落盘当前内存统计（管理端重置统计/测试用；
-// 常规写盘由后台单写者周期执行）。
-func flushTokenStatsNow() {
+// 常规写盘由后台单写者周期执行）。返回最终写盘错误（重置统计据此判定成败）。
+func flushTokenStatsNow() error {
+	statsWriteMu.Lock()
+	defer statsWriteMu.Unlock()
 	tokenStatsMu.Lock()
 	tokenStatsDirty = false
 	tokenStatsFlushCnt++
@@ -45,9 +47,32 @@ func flushTokenStatsNow() {
 	path := tokenStatsPath
 	tokenStatsMu.Unlock()
 	if err != nil {
-		return
+		return err
 	}
-	_ = writeFileAtomic(path, data, 0o644)
+	if err := writeFileAtomicRetry(path, data, 0o644); err != nil {
+		// 落盘失败（Windows 瞬时占用等）：重新置 dirty，后台单写者稍后重试，避免数据静默丢失。
+		tokenStatsMu.Lock()
+		tokenStatsDirty = true
+		tokenStatsMu.Unlock()
+		return err
+	}
+	return nil
+}
+
+// writeFileAtomicRetry 原子写（tmp+Rename）并对瞬时跨进程占用重试（Windows：
+// 管理器聚合读取/直写与本进程原子替换并发时，Rename 会报 Access denied、
+// 直写方会报文件被占用——短暂重试即可越过）。
+func writeFileAtomicRetry(path string, data []byte, perm os.FileMode) error {
+	var err error
+	for i := 0; i < statsWriteRetryAttempts; i++ {
+		if err = writeFileAtomic(path, data, perm); err == nil {
+			return nil
+		}
+		if i+1 < statsWriteRetryAttempts {
+			time.Sleep(statsWriteRetryDelay)
+		}
+	}
+	return err
 }
 
 var (
