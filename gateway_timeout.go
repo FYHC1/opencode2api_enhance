@@ -666,6 +666,16 @@ func streamWithResume(w http.ResponseWriter, r *http.Request, upstreamBody []byt
 				if !strings.HasPrefix(line, "data: ") {
 					// 非 data 行原样转发（如 event:/id:）
 					sseDebugf("[%s] META>> %q", reqID, resLine.line)
+					// 诊断：首行非空且不像 SSE 格式（无 event:/id:/retry: 前缀），
+					// 可能是上游返回了 HTML/纯文本等非 SSE 内容。
+					if !gotFirst && line != "" && !strings.HasPrefix(line, "event:") && !strings.HasPrefix(line, "id:") && !strings.HasPrefix(line, "retry:") {
+						snippet := line
+						if len(snippet) > 300 {
+							snippet = snippet[:300] + "...(truncated)"
+						}
+						slog.Warn("stream first line is not SSE-like",
+							"model", model, "node", proxyAddr, "line_snippet", snippet)
+					}
 					w.Write([]byte(resLine.line))
 					if f, ok := w.(http.Flusher); ok {
 						f.Flush()

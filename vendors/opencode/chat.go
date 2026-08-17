@@ -244,6 +244,12 @@ func (v *Vendor) call(ctx context.Context, msg *contract.Message, streaming bool
 		}
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			tr.Mark(proxyAddr, resp.StatusCode, nil)
+			// 诊断：记录上游响应 Content-Type，便于排查非 JSON/SSE 响应。
+			ct := resp.Header.Get("Content-Type")
+			if !strings.HasPrefix(ct, "application/json") && !strings.HasPrefix(ct, "text/event-stream") && ct != "" {
+				slog.Warn("upstream 2xx with unexpected Content-Type",
+					"model", modelID, "status", resp.StatusCode, "content_type", ct, "node", proxyAddr)
+			}
 			if streaming {
 				return &callResult{stream: resp.Body, status: resp.StatusCode, nodeAddr: proxyAddr}, nil
 			}

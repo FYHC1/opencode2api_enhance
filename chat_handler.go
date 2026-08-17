@@ -179,6 +179,16 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 	outBody := respBody
 	// 非流式：解析一次，同时完成 usage 提取与响应转换（避免双重 JSON 解析）。
 	var usageResp map[string]any
+	if json.Unmarshal(respBody, &usageResp) != nil && len(respBody) > 0 {
+		// 上游 2xx 但响应体不是合法 JSON——记录原始内容便于诊断（如 HTML 重定向页、空 body）。
+		snippet := string(respBody)
+		if len(snippet) > 500 {
+			snippet = snippet[:500] + "...(truncated)"
+		}
+		slog.Warn("upstream 2xx but body is not valid JSON",
+			"model", req.Model, "status", status, "node", proxyAddr,
+			"body_len", len(respBody), "body_snippet", snippet)
+	}
 	if json.Unmarshal(respBody, &usageResp) == nil {
 		if u, ok := usageResp["usage"].(map[string]any); ok {
 			pt, _ := u["prompt_tokens"].(float64)

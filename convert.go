@@ -286,7 +286,7 @@ func convertStreamChunkFromObj(raw map[string]any, keepReasoning bool) (string, 
 		if err != nil {
 			return "", usage
 		}
-		return "data: " + string(converted), usage
+		return string(converted), usage
 	}
 	for i, c := range choices {
 		choice, ok := c.(map[string]any)
