@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -49,7 +50,8 @@ type SubscribeNode struct {
 	Raw               string            `json:"raw"`
 }
 
-// SubscriptionMeta 订阅元信息（来自 HTTP 响应头，clash-verge-rev 同款解析）。
+// SubscriptionMeta 订阅元信息（来自 HTTP 响应头，clash-verge-rev 同款解析；
+// Profile 额外取自订阅内容本身的配置名）。
 type SubscriptionMeta struct {
 	Name     string `json:"name,omitempty"`
 	Upload   uint64 `json:"upload,omitempty"`
@@ -57,6 +59,7 @@ type SubscriptionMeta struct {
 	Total    uint64 `json:"total,omitempty"`
 	Expire   uint64 `json:"expire,omitempty"`
 	Home     string `json:"home,omitempty"`
+	Profile  string `json:"profile,omitempty"`
 }
 
 // fetchSubscription 拉取并解析订阅 URL，返回节点列表。
@@ -82,6 +85,7 @@ func fetchSubscriptionWithMeta(url string) ([]SubscribeNode, SubscriptionMeta, e
 		return nil, SubscriptionMeta{}, fmt.Errorf("读取订阅内容失败: %v", err)
 	}
 	nodes, err := parseSubscription(string(body))
+	meta.Profile = extractProfileName(string(body))
 	return nodes, meta, err
 }
 
@@ -148,8 +152,73 @@ func parseContentDispositionName(raw string) string {
 	return ""
 }
 
-// groupNameFor 确定订阅分组名：响应头订阅名 > URL 末段（去扩展名）> "订阅N"。
+// extractProfileName 从订阅内容头部提取配置名（Clash Verge/mihomo 社区约定）。
+// 优先级：1) 注释行 `# Profile: 名称`（兼容 `##`/大小写变体）；
+// 2) 顶层 `profile:` 块内的 `name:` 字段；3) 单行 `profile-name/profile_name` 等变体。
+// 只扫头部 30 行，避免正文（大幅 proxies 配置）误匹配；找不到返回空串。
+func extractProfileName(body string) string {
+	raws := strings.SplitN(body, "\n", 31)
+	if len(raws) > 30 {
+		raws = raws[:30]
+	}
+	t := func(i int) string { return strings.TrimSpace(raws[i]) }
+	// 1) 注释行 # Profile: 名称
+	for i := range raws {
+		c := strings.TrimSpace(strings.TrimLeft(raws[i], " \t"))
+		if !strings.HasPrefix(c, "#") {
+			continue
+		}
+		c = strings.TrimSpace(strings.TrimLeft(c, "#"))
+		// 前缀大小写不敏感匹配；值从原串取，保留原始大小写
+		if strings.HasPrefix(strings.ToLower(c), "profile:") {
+			name := strings.TrimSpace(c[len("profile:"):])
+			// 去掉行内尾注（# 后内容）
+			if before, _, found := strings.Cut(name, "#"); found {
+				name = strings.TrimSpace(before)
+			}
+			if name != "" {
+				return name
+			}
+		}
+	}
+	// 2) 顶层 profile: 块（单独成行）→ 其后 name: 字段（限 10 行内）
+	for i := range raws {
+		if !strings.EqualFold(t(i), "profile:") {
+			continue
+		}
+		for j := 1; j <= 10 && i+j < len(raws); j++ {
+			sub := raws[i+j]
+			if strings.TrimSpace(sub) == "" {
+				continue
+			}
+			// 已进入下一顶层键（无缩进且非注释/列表项）则放弃本块
+			if !strings.HasPrefix(sub, " ") && !strings.HasPrefix(sub, "\t") && !strings.HasPrefix(sub, "#") && !strings.HasPrefix(sub, "-") {
+				break
+			}
+			if tsub := strings.TrimSpace(sub); strings.HasPrefix(strings.ToLower(tsub), "name:") {
+				parts := strings.SplitN(strings.TrimSpace(tsub[len("name:"):]), "#", 2)
+				if name := strings.TrimSpace(parts[0]); name != "" {
+					return name
+				}
+			}
+		}
+		return ""
+	}
+	// 3) 单行变体：profile-name / profile_name / profilename : 或 = 名称
+	re := regexp.MustCompile(`(?im)^\s*profile[_.-]?name\s*[:=]\s*([^\r\n#]+?)\s*$`)
+	if m := re.FindStringSubmatch(body); len(m) > 1 {
+		if name := strings.TrimSpace(m[1]); name != "" {
+			return name
+		}
+	}
+	return ""
+}
+
+// groupNameFor 确定订阅分组名：内容配置名 > 响应头订阅名 > URL 末段（去扩展名）> "订阅N"。
 func (m *Manager) groupNameFor(url string, meta SubscriptionMeta) string {
+	if meta.Profile != "" {
+		return meta.Profile
+	}
 	if meta.Name != "" {
 		return meta.Name
 	}
@@ -1214,8 +1283,12 @@ func (m *Manager) importSubscriptionPool(url string) (int, string, error) {
 }
 
 // applyGroup 给节点标注订阅分组名（未标注的节点），返回分组名。
+// 优先级：用户手动固定名（源记录 NamePinned）> 自动推导（groupNameFor）。
 func (m *Manager) applyGroup(nodes []SubscribeNode, url string, meta SubscriptionMeta) string {
 	group := m.groupNameFor(url, meta)
+	if s, ok := m.subscriptionSourceByURL(url); ok && s.NamePinned && s.Group != "" {
+		group = s.Group
+	}
 	for i := range nodes {
 		if nodes[i].Group == "" {
 			nodes[i].Group = group

@@ -441,6 +441,8 @@ export type SubscriptionSource = {
   url: string
   interval_min: number
   target: 'solo' | 'pool' | 'pool-only'
+  group?: string // 订阅分组名（导入时解析写入；手动指定后固定）
+  name_pinned?: boolean // true = 用户手动指定分组名（自动拉取不覆盖）
 }
 
 export type SubscriptionTargetLabel = 'solo' | 'pool' | 'pool-only'
@@ -606,11 +608,13 @@ export const api = {
     req<{ group: string; running: number; stopped: number }>('GET', `/subscriptions/count?url=${encodeURIComponent(url)}`),
   // T3/P3: 新增订阅 = 保存源 + 立即导入节点池；返回 imported/target（拉取失败时 error 非空、
   // 源已保存）。target 可选，默认 'pool-only'（2026-08-16 决策：订阅导入一律只进节点池）。
-  subscriptionsAdd: (url: string, intervalMin: number, target?: SubscriptionTargetLabel) =>
+  // name 可选：手动指定分组名（固定，自动拉取不覆盖）。
+  subscriptionsAdd: (url: string, intervalMin: number, target?: SubscriptionTargetLabel, name?: string) =>
     req<{ status: string; imported: number; target: string; error?: string }>('POST', '/subscriptions/add', {
       url,
       interval_min: intervalMin,
       target: target ?? 'pool-only',
+      name: name ?? undefined,
     }),
   subscriptionsDelete: (url: string) =>
     req<{ status: string; removed: boolean; group: string; running: number; stopped: number; released?: number; removed_nodes?: number; instances?: string[] }>(
@@ -618,8 +622,12 @@ export const api = {
       '/subscriptions/delete',
       { url },
     ),
-  subscriptionsImport: (url: string) =>
-    req<{ status: string; imported: number; target: string }>('POST', '/subscriptions/import', { url }),
+  // name 可选：非空则先固定该源分组名再立即拉取（仅导入节点池）。
+  subscriptionsImport: (url: string, name?: string) =>
+    req<{ status: string; imported: number; target: string }>('POST', '/subscriptions/import', {
+      url,
+      name: name ?? undefined,
+    }),
 
   // 开机自启：由 Go core 承载（写 Windows 注册表），经 HTTP 调用
   autostartGet: async (): Promise<boolean> => {
