@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -18,6 +19,10 @@ import (
 // TestE2EAdminHTTP 大步2 自动验收：登录会话 → 配置 → 节点 → 端口 → 实例增删 → 网关 → 统计/日志 → 清理。
 // 用 Go http.Client（cookie jar 可靠），驱动真实 registerHTTPRoutes 组装的服务。
 func TestE2EAdminHTTP(t *testing.T) {
+	// 网关端口固定到测试专用端口：ClearCallLog/ResetStats 按 managerGatewayPort
+	// 探测/复位，避免测试探测到本机真实生产网关（40080 槽位）而误发 DELETE——
+	// 环境隔离纪律（此前 ResetStats 硬编码 40080，本机跑 e2e 会误清生产网关统计）。
+	t.Setenv("OPCODE2API_GATEWAY_PORT", strconv.FormatUint(uint64(e2eFreePort(t)), 10))
 	m := manager.New(t.TempDir())
 	m.SetDeps(manager.NewRealRunner(), manager.NewGateway(m, 0), nil)
 
@@ -166,6 +171,18 @@ func TestE2EAdminHTTP(t *testing.T) {
 	if fails > 0 {
 		t.Fatalf("E2E: %d checks failed", fails)
 	}
+}
+
+// e2eFreePort 取一个当前可用的本机端口（bind :0 后立即释放）。
+func e2eFreePort(t *testing.T) uint16 {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("bind free port: %v", err)
+	}
+	port := uint16(ln.Addr().(*net.TCPAddr).Port)
+	_ = ln.Close()
+	return port
 }
 
 // 复用 strconv，避免未使用告警（实际各步均已使用）。

@@ -210,6 +210,8 @@ func registerHTTPRoutes(mux *http.ServeMux, managerInst *manager.Manager) {
 	mux.HandleFunc("/logout", loggingMiddleware(logoutHandler))
 	// /api/reset-stats 保留：实例子进程/网关子进程的复位契约（stats.go ResetStats 对运行中实例 HTTP DELETE）。
 	mux.HandleFunc("/api/reset-stats", loggingMiddleware(apiKeyAuthMiddleware(resetStatsHandler)))
+	// /api/clear-call-log：实例子进程/网关子进程的日志清空契约（ClearCallLog 对运行中进程 HTTP DELETE）。
+	mux.HandleFunc("/api/clear-call-log", loggingMiddleware(apiKeyAuthMiddleware(clearCallLogHandler)))
 	// P4: 管理域并入 core（/api/admin/*，鉴权与既有 /api/* 一致；由 core/manager 实现）
 	mux.HandleFunc("/api/admin/config", loggingMiddleware(requireAuth(managerInst.ConfigGetHandler())))
 	mux.HandleFunc("/api/admin/config/set", loggingMiddleware(requireAuth(managerInst.ConfigSetHandler())))

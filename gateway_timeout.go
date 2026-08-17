@@ -140,7 +140,10 @@ type EventLog struct {
 	dropWarned   bool
 
 	writeMu sync.Mutex // 串行化文件写（写者与 Flush 共享 fd）
-	f       *os.File   // 复用 fd；换路径/出错/轮转时重开
+	// writeGen 写批代际：Clear 清空时自增；写者持旧代际的批次在拿到写锁后
+	// 发现代际不符即丢弃——防止清空前的待写缓冲在清空落盘后仍写入文件（日志复活）。
+	writeGen uint64
+	f        *os.File // 复用 fd；换路径/出错/轮转时重开
 
 	writerOnce sync.Once
 	startCh    chan struct{} // 写者启动时关闭（Stop 判断是否需等待）
@@ -226,34 +229,69 @@ func (l *EventLog) Flush() {
 	l.flushPending()
 }
 
+// Clear 清空调用日志：内存环形、待写缓冲与磁盘文件（含轮转旧段 .1）一并清空。
+// 供管理端「清空调用日志」经 HTTP 调用——本进程持有 fd，关闭后删除自己的文件
+// 不会撞 Windows 占用；管理器跨进程直删会被「文件被占用」拦截。
+// 锁序 writeMu → mu（写者/Flush 均为取完 mu 再写，不反向持锁，无死锁）。
+func (l *EventLog) Clear() error {
+	l.writeMu.Lock()
+	defer l.writeMu.Unlock()
+	l.mu.Lock()
+	l.records = nil
+	l.pendingWrite = nil
+	l.pendingLines = 0
+	l.droppedLines = 0
+	l.dropWarned = false
+	l.writeGen++
+	path := l.path
+	l.mu.Unlock()
+	if path == "" {
+		return nil
+	}
+	if l.f != nil {
+		l.f.Close()
+		l.f = nil
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.Remove(path + ".1"); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
 // flushPending 排空待写缓冲到文件：循环直到无新 pending（写者/Flush 共用，
 // 写盘全程在 lock 外）。
 func (l *EventLog) flushPending() {
 	for {
-		data, path := l.takePending()
+		data, path, gen := l.takePending()
 		if len(data) == 0 {
 			return
 		}
-		l.writeToFile(data, path)
+		l.writeToFile(data, path, gen)
 	}
 }
 
-// takePending 锁内取走全部待写缓冲（返回目标路径供锁外写盘）。
-func (l *EventLog) takePending() ([]byte, string) {
+// takePending 锁内取走全部待写缓冲（返回目标路径与代际，供锁外写盘丢弃陈旧批次）。
+func (l *EventLog) takePending() ([]byte, string, uint64) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	data := l.pendingWrite
 	l.pendingWrite = nil
 	l.pendingLines = 0
-	return data, l.path
+	return data, l.path, l.writeGen
 }
 
 // writeToFile 把一批序列化行追加到 JSONL（fd 复用；被外部删除/写失败时重开）。
 // 写前检查文件大小，超过轮转阈值时滚动为 .1（Windows 下 os.Rename 不覆盖
 // 已存在目标，先删旧 .1 再改名）。
-func (l *EventLog) writeToFile(data []byte, path string) {
+func (l *EventLog) writeToFile(data []byte, path string, gen uint64) {
 	l.writeMu.Lock()
 	defer l.writeMu.Unlock()
+	if gen != l.writeGen {
+		return // Clear 清空前的陈旧批次：丢弃，防日志复活
+	}
 	if l.f != nil {
 		if _, err := os.Stat(path); err != nil {
 			// 文件被外部删除（如管理端清空日志）：重开重建

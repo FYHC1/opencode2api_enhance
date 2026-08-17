@@ -46,3 +46,21 @@ func writeResetStatsError(w http.ResponseWriter, msg string) {
 	w.WriteHeader(http.StatusInternalServerError)
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
+
+// clearCallLogHandler 清空本进程调用日志（内存环形 + 落盘文件，含轮转旧段 .1）。
+// 供管理端「清空日志」对运行中实例/网关子进程调用——管理器跨进程直删会被
+// Windows「文件被占用」拦截；本进程关闭自己的 fd 后删除则安全。
+func clearCallLogHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := callLog.Clear(); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": "清空调用日志失败: " + err.Error()})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}

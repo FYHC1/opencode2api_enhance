@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -262,15 +263,77 @@ func callLogTime(ts string) time.Time {
 	return t
 }
 
-// ClearCallLog 清空统一网关调用日志（删除文件；Go 网关 Append 只追加，内存环形缓冲不回写）。
-// 同时删除轮转旧段 .1：读侧合并 .1 + 主文件，只删主文件会让旧段残留并重返日志页。
+// ClearCallLog 清空全部调用日志（统一网关 + 各实例，与 ReadCallLog 聚合范围一致）。
+// 运行中进程（网关/实例）走 HTTP 清空——其进程持有日志文件 fd，管理器跨进程直删
+// 会被 Windows「文件被占用」拦截；未运行进程直删文件（带占用重试兜底）。
+// 失败按来源收集合并为单个 error（前端 toast 展示）。
 func (m *Manager) ClearCallLog() error {
-	path := m.CallLogPath()
-	for _, p := range []string{path, path + ".1"} {
-		if _, err := os.Stat(p); err == nil {
-			if err := os.Remove(p); err != nil {
-				return fmt.Errorf("删除日志文件失败: %w", err)
+	var errs []string
+	defaultPW := m.effectiveDefaultPassword()
+
+	// 统一网关
+	gwPort := m.managerGatewayPort()
+	if probePort(gwPort, statsResetProbeTimeout) {
+		if err := clearLogHTTP(gwPort, effectiveGatewayKey(m.loadConfig()), "统一网关"); err != nil {
+			errs = append(errs, err.Error())
+		}
+	} else if err := removeLogFileRetry(m.CallLogPath()); err != nil {
+		errs = append(errs, "统一网关: "+err.Error())
+	}
+
+	// 各实例（含独享实例 cwd 下的 call_log.jsonl）
+	for _, inst := range m.ListInstances() {
+		path := m.InstanceCallLogPath(inst.Name)
+		if _, err := os.Stat(path); err != nil {
+			continue // 无日志文件：无需处理
+		}
+		if probePort(inst.Port, statsResetProbeTimeout) || inst.Status.State == "Running" {
+			pw := inst.Password
+			if pw == "" {
+				pw = defaultPW
 			}
+			if err := clearLogHTTP(inst.Port, pw, inst.Name); err != nil {
+				errs = append(errs, err.Error())
+			}
+		} else if err := removeLogFileRetry(path); err != nil {
+			errs = append(errs, inst.Name+": "+err.Error())
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("清空日志失败: %s", strings.Join(errs, "；"))
+	}
+	return nil
+}
+
+// clearLogHTTP 对运行中进程发 HTTP DELETE 清空其调用日志。
+func clearLogHTTP(port uint16, auth, label string) error {
+	status, _, err := httpDeleteJSON(port, "/api/clear-call-log", 6*time.Second, auth)
+	if err == nil && status >= 200 && status < 300 {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("%s: %s", label, err.Error())
+	}
+	return fmt.Errorf("%s: HTTP %d", label, status)
+}
+
+// removeLogFileRetry 删除日志文件（含轮转旧段 .1）并对瞬时跨进程占用重试
+//（Windows：文件刚被关闭/正被短暂读取时 Remove 会撞「文件被占用」）。
+func removeLogFileRetry(path string) error {
+	for _, p := range []string{path, path + ".1"} {
+		var err error
+		for i := 0; i < statsWriteRetryAttempts; i++ {
+			err = os.Remove(p)
+			if err == nil || os.IsNotExist(err) {
+				err = nil
+				break
+			}
+			if i+1 < statsWriteRetryAttempts {
+				time.Sleep(statsWriteRetryDelay)
+			}
+		}
+		if err != nil {
+			return err
 		}
 	}
 	return nil
