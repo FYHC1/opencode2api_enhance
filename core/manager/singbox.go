@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -47,6 +48,42 @@ func buildSingboxConfig(node ClashNode, listenPort uint16) ([]byte, error) {
 // BuildSingboxConfigFor 导出包装（main 装配实例接缝用）。
 func BuildSingboxConfigFor(node ClashNode, listenPort uint16) ([]byte, error) {
 	return buildSingboxConfig(node, listenPort)
+}
+
+// parseBandwidthMbps 将 Clash hysteria2 的带宽字段解析为 Mbps 数值（Rust singbox.rs 移植）。
+// 支持纯数字（"100"）、带单位字符串（"100 Mbps"）、单位换算（"1.5 Gbps" → 1500）；
+// 无法解析时返回 nil（调用方省略该字段，sing-box 接受无带宽限速的 hy2 配置）。
+func parseBandwidthMbps(s string) any {
+	t := strings.TrimSpace(s)
+	if t == "" {
+		return nil
+	}
+	i := 0
+	for i < len(t) && (t[i] == '.' || (t[i] >= '0' && t[i] <= '9')) {
+		i++
+	}
+	num := t[:i]
+	unit := strings.ToLower(t[i:])
+	value, err := strconv.ParseFloat(num, 64)
+	if err != nil {
+		return nil
+	}
+	var mbps float64
+	switch {
+	case strings.Contains(unit, "gbps") || strings.Contains(unit, "gbit"):
+		mbps = value * 1000.0
+	case strings.Contains(unit, "mbps") || strings.Contains(unit, "mbit"):
+		mbps = value
+	case strings.Contains(unit, "kbps") || strings.Contains(unit, "kbit"):
+		mbps = value / 1000.0
+	case strings.Contains(unit, "mb") || strings.Contains(unit, "m"):
+		mbps = value
+	case strings.Contains(unit, "gb") || strings.Contains(unit, "g"):
+		mbps = value * 1000.0
+	default:
+		mbps = value
+	}
+	return uint64(mbps)
 }
 
 // buildSingboxOutbound 按类型构建 outbound。
@@ -115,7 +152,8 @@ func singboxOutbound(n ClashNode) (map[string]any, error) {
 			if fp == "" {
 				fp = "chrome"
 			}
-			out["utls"] = map[string]any{"enabled": true, "fingerprint": fp}
+			// utls 必须是 tls 的子对象（放顶层 sing-box 报 unknown field "utls" 启动即崩）。
+			tls["utls"] = map[string]any{"enabled": true, "fingerprint": fp}
 		} else {
 			tls["insecure"] = insecure(false)
 		}
@@ -189,11 +227,11 @@ func singboxOutbound(n ClashNode) (map[string]any, error) {
 			}
 			out["obfs"] = obfs
 		}
-		if n.Up != "" {
-			out["up_mbps"] = n.Up
+		if up := parseBandwidthMbps(n.Up); up != nil {
+			out["up_mbps"] = up
 		}
-		if n.Down != "" {
-			out["down_mbps"] = n.Down
+		if down := parseBandwidthMbps(n.Down); down != nil {
+			out["down_mbps"] = down
 		}
 		return out, nil
 	case "anytls":
