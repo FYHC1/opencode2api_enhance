@@ -70,6 +70,16 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	upstreamBody := buildUpstreamBody(&req)
 
+	// auto 虚拟模型：选主选 + 降级链挂 ctx（非 auto / 未启用 = 零开销原路径）。
+	callCtx := r.Context()
+	var autoDec *autoDecision
+	if isAutoModelName(req.Model) {
+		callCtx, req.Model, autoDec = prepareAuto(r.Context(), req.Model, upstreamBody)
+		if autoDec != nil {
+			callRec.Events = append(callRec.Events, autoDec.pickEvent())
+		}
+	}
+
 	if req.Stream {
 		// L6：进程级流并发上限——超限直接 503（defer 覆盖所有返回路径释放名额）。
 		if !tryAcquireStream() {
@@ -84,16 +94,21 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer releaseStream()
-		upResp, status, _, proxyAddr, err := callOpenCodeAPIStream(r.Context(), upstreamBody, req.Model, auth)
+		upResp, status, _, proxyAddr, err := callOpenCodeAPIStream(callCtx, upstreamBody, req.Model, auth)
 		callRec.Nodes = append(callRec.Nodes, proxyAddr)
 		if err != nil || status < 200 || status >= 300 {
 			callRec.Status = "fail"
 			callRec.ErrMsg = fmt.Sprintf("upstream status %d: %v", status, err)
 			callRec.Events = append(callRec.Events, CallEvent{Type: "upstream_error", Node: proxyAddr, Detail: callRec.ErrMsg, At: time.Now()})
+			if autoDec == nil {
+				recordModelFeedback(req.Model, proxyAddr, false, time.Since(startTime).Milliseconds())
+			}
 			recordCall(callRec)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(httpStatusOr(status))
 			if upResp != nil {
+				// 错误路径同样要释放上游连接（callOpenCodeAPIStream 非 2xx 时返回非 nil body）。
+				defer upResp.Close()
 				errBody, _ := io.ReadAll(upResp)
 				if len(errBody) > 0 {
 					w.Write(errBody)
@@ -112,6 +127,9 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 		// 流内超时 + 断点续写切换（阶段1验证过的核心逻辑）
 		res := streamWithResume(w, r, upstreamBody, req.Model, auth, upResp, proxyAddr, keepReasoning, &callRec)
 		callRec.DurationMS = time.Since(startTime).Milliseconds()
+		if autoDec == nil {
+			recordModelFeedback(req.Model, lastNode(callRec), res.OK, callRec.DurationMS)
+		}
 		if res.PromptTok > 0 || res.Completion > 0 {
 			callRec.PromptTok = res.PromptTok
 			callRec.CompletionTok = res.Completion
@@ -134,13 +152,20 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respBody, status, _, proxyAddr, err := callOpenCodeAPI(r.Context(), upstreamBody, req.Model, auth)
+	respBody, status, _, proxyAddr, err := callOpenCodeAPI(callCtx, upstreamBody, req.Model, auth)
 	callRec.Nodes = append(callRec.Nodes, proxyAddr)
 	if err != nil || status < 200 || status >= 300 {
 		callRec.Status = "fail"
 		callRec.ErrMsg = fmt.Sprintf("upstream status %d: %v", status, err)
 		callRec.DurationMS = time.Since(startTime).Milliseconds()
 		callRec.Events = append(callRec.Events, CallEvent{Type: "upstream_error", Node: proxyAddr, Detail: callRec.ErrMsg, At: time.Now()})
+		if autoDec != nil && len(respBody) > 0 && isContextLimitError(respBody) {
+			// 上下文护栏学习：最终尝试的模型在此估算量级下确认装不下，收紧其上限。
+			learnContextFailure(displayModelName(autoDec.FinalModel), autoDec.EstTokens)
+		}
+		if autoDec == nil {
+			recordModelFeedback(req.Model, proxyAddr, false, callRec.DurationMS)
+		}
 		recordCall(callRec)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(httpStatusOr(status))
@@ -152,11 +177,7 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	outBody := respBody
-	convertedResp, err := convertResponse(respBody, keepReasoning)
-	if err == nil {
-		outBody = convertedResp
-	}
-	// Record token usage
+	// 非流式：解析一次，同时完成 usage 提取与响应转换（避免双重 JSON 解析）。
 	var usageResp map[string]any
 	if json.Unmarshal(respBody, &usageResp) == nil {
 		if u, ok := usageResp["usage"].(map[string]any); ok {
@@ -169,9 +190,15 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 			callRec.PromptTok = int64(pt)
 			callRec.CompletionTok = int64(ct)
 		}
+		if conv, err := convertResponseFromObj(usageResp, keepReasoning); err == nil {
+			outBody = conv
+		}
 	}
 	callRec.DurationMS = time.Since(startTime).Milliseconds()
 	callRec.Events = append(callRec.Events, CallEvent{Type: "complete", Node: proxyAddr, Detail: "done", At: time.Now()})
+	if autoDec == nil {
+		recordModelFeedback(req.Model, proxyAddr, true, callRec.DurationMS)
+	}
 	recordCall(callRec)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -190,8 +217,9 @@ func listModelsHandler(w http.ResponseWriter, r *http.Request) {
 	modelMu.RUnlock()
 	// 目录未就绪（启动后首请求早于首次聚合刷新）→ 走聚合器路径同步拉取一次。
 	// 聚合器是唯一数据源：不保留直连上游的兜底（双轨已消灭）。
+	// 节流版：上游故障导致目录持续为空时，至多每 10s 重拉一轮（防每请求惊群）。
 	if !loaded || len(models) == 0 {
-		refreshModelCatalog()
+		refreshModelCatalogIfDue()
 		modelMu.RLock()
 		loaded, models = modelsLoaded, modelsCache
 		modelMu.RUnlock()
@@ -233,6 +261,16 @@ func listModelsHandler(w http.ResponseWriter, r *http.Request) {
 			"error": "无法获取模型列表，请检查上游服务是否可用",
 		})
 		return
+	}
+
+	// auto 虚拟模型置顶（仅开启后可见；关闭时不出现，避免客户端缓存无效模型名）。
+	if autoEnabled() {
+		allModels = append([]ModelInfo{{
+			ID:      "auto",
+			Object:  "model",
+			Created: time.Now().Unix(),
+			OwnedBy: "gateway",
+		}}, allModels...)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

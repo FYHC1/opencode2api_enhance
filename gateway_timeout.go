@@ -696,8 +696,21 @@ func streamWithResume(w http.ResponseWriter, r *http.Request, upstreamBody []byt
 				if !gotFirst {
 					gotFirst = true
 				}
-				// 转发：复用现有转换（清洗 delta/usage/cost 字段），保持协议兼容
-				out, chunkUsage := convertStreamChunkWithUsage(line, keepReasoning)
+				// 转发：复用现有转换（清洗 delta/usage/cost 字段），保持协议兼容。
+				// 与上方累积提取共用一次解析（避免每 chunk 双重 JSON 解析）。
+				var out string
+				var chunkUsage map[string]any
+				if obj != nil {
+					conv, u := convertStreamChunkFromObj(obj, keepReasoning)
+					if conv != "" {
+						out = "data: " + conv
+					}
+					chunkUsage = u
+				}
+				if out == "" {
+					// 解析失败或 marshal 失败：回退按原始行转换（保持历史转发行为）
+					out, chunkUsage = convertStreamChunkWithUsage(line, keepReasoning)
+				}
 				if chunkUsage != nil {
 					if tt, _ := chunkUsage["total_tokens"].(float64); tt > 0 {
 						lastUsage = chunkUsage

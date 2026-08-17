@@ -33,7 +33,7 @@ func (m *Manager) DataClean(runner Runner, gw *Gateway, level int) error {
 	if level >= 2 {
 		m.mu.Lock()
 		defer m.mu.Unlock()
-		if err := writeFileMkdir(m.Paths().Instances, []byte("[]")); err != nil {
+		if err := writeFileAtomic(m.Paths().Instances, []byte("[]")); err != nil {
 			return err
 		}
 	}
@@ -51,7 +51,7 @@ func (m *Manager) cleanDataAt(level int) error {
 
 	// 2) 清空实例记录
 	if level >= 2 {
-		if err := writeFileMkdir(p.Instances, []byte("[]")); err != nil {
+		if err := writeFileAtomic(p.Instances, []byte("[]")); err != nil {
 			return fmt.Errorf("清空实例记录失败: %w", err)
 		}
 	}

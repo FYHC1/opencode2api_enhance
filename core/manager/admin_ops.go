@@ -764,6 +764,31 @@ func (m *Manager) GatewayRouteModeHandler() http.HandlerFunc {
 	}
 }
 
+// AutoModelConfigHandler GET 返回 / POST 保存 auto 虚拟模型配置。
+// 保存即传播到全部子进程配置（运行中子进程 3s 热重载生效），无需重启实例/网关。
+func (m *Manager) AutoModelConfigHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			writeJSON(w, m.AutoModel())
+		case http.MethodPost:
+			var cfg AutoModelCfg
+			if json.NewDecoder(r.Body).Decode(&cfg) != nil {
+				writeErr(w, http.StatusBadRequest, "无效的 auto 模型配置")
+				return
+			}
+			cfg.Normalize()
+			if err := m.SetAutoModel(cfg); err != nil {
+				writeErr(w, http.StatusInternalServerError, "保存 auto 模型配置失败: "+err.Error())
+				return
+			}
+			writeJSON(w, map[string]any{"status": "ok", "config": cfg})
+		default:
+			writeErr(w, http.StatusMethodNotAllowed, "仅支持 GET / POST")
+		}
+	}
+}
+
 // GatewayStopHandler POST。
 func (m *Manager) GatewayStopHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

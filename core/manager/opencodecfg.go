@@ -93,6 +93,10 @@ func (m *Manager) buildOpenCodeCfg(singboxPort uint16) ([]byte, error) {
 	}
 	// 透传厂商注册表 + 路由：实例子进程与核心一致，能注册多厂商（如 windsurf）
 	cfg = injectVendorConfig(cfg, appCfg)
+	// auto 虚拟模型配置透传：实例子进程同样支持 model:"auto"（候选=本实例模型）。
+	if appCfg.AutoModel != nil {
+		cfg["auto_model"] = appCfg.AutoModel
+	}
 	return json.MarshalIndent(cfg, "", "  ")
 }
 
@@ -165,6 +169,10 @@ func (m *Manager) buildRouterCfg(singboxPorts []uint16, portNames map[uint16]str
 	applyIf("rate_limit_backoff_cap_ms", int64(appCfg.RateLimitBackoffCapMS))
 	// 透传厂商注册表 + 路由：网关子进程与核心一致，能注册多厂商（如 windsurf）
 	cfg = injectVendorConfig(cfg, appCfg)
+	// auto 虚拟模型配置透传：网关子进程在「实例×模型」矩阵上做加权选择。
+	if appCfg.AutoModel != nil {
+		cfg["auto_model"] = appCfg.AutoModel
+	}
 	return json.MarshalIndent(cfg, "", "  ")
 }
 

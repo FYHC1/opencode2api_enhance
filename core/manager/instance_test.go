@@ -114,6 +114,34 @@ func TestStartInstanceNodeMissing(t *testing.T) {
 	}
 }
 
+// 回归：启动失败（sing-box 等口超时，进程已 Kill）后不得把死 PID 写回注册表——
+// Stop 对 Error 态实例按快照 PID 直接 Kill，PID 被系统复用后会误杀无关进程。
+func TestStartInstanceFailureClearsPID(t *testing.T) {
+	m := newTestManager(t)
+	joinSeams(m)
+	run := &fakeRunner{}
+	_ = m.AddInstance(Instance{Name: "i9", Port: 19906, Node: "node-a", Password: "sk-1", SingboxPort: 29906})
+	// 故意不占任何端口：waitForPort 必然超时 → sing-box 被 Kill → 启动失败
+	if err := m.StartInstance(run, "i9"); err == nil {
+		t.Fatal("start should fail (sing-box port never listens)")
+	}
+	got, ok := m.FindInstance("i9")
+	if !ok || got.Status.State != "Error" {
+		t.Fatalf("status = %+v", got.Status)
+	}
+	if got.PID != nil || got.SingboxPID != nil {
+		t.Fatalf("failed start must not persist dead PIDs: pid=%v singbox=%v", got.PID, got.SingboxPID)
+	}
+	// 后续 Stop 不得对残留 PID 发起 Kill
+	before := len(run.killed)
+	if err := m.StopInstance(run, "i9"); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	if len(run.killed) != before {
+		t.Fatalf("stop must not kill stale pids, killed=%v", run.killed)
+	}
+}
+
 func TestStartSeamUnwired(t *testing.T) {
 	m := newTestManager(t)
 	_ = m.AddInstance(Instance{Name: "i3", Port: 19903, Node: "node-a", SingboxPort: 29903})

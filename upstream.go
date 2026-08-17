@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/6Kmfi6HP/opencode2api/core/contract"
 	"github.com/6Kmfi6HP/opencode2api/vendors/opencode"
@@ -261,8 +262,30 @@ func shouldSwitchVendor(v contract.Vendor, status int, _ error) bool {
 	return status >= 500 && status < 600
 }
 
-// callOpenCodeAPI 非流式上游调用（适配层；路由 + 厂商级 failover）。
+// callOpenCodeAPI 非流式上游调用（适配层；路由 + 厂商级 failover + auto 模型降级链）。
+// auto：ctx 挂有降级链时，失败（非 2xx）沿链换模型重试（有界，见 maxAutoSwitches）。
 func callOpenCodeAPI(ctx context.Context, upstreamBody []byte, modelID string, auth UpstreamAuth) ([]byte, int, http.Header, string, error) {
+	dec, _ := ctx.Value(autoCtxKey{}).(*autoDecision)
+	for switched := 0; ; switched++ {
+		if dec != nil {
+			dec.FinalModel = modelID
+		}
+		start := time.Now()
+		body, status, hdr, addr, err := callOpenCodeAPIOnce(ctx, upstreamBody, modelID, auth)
+		recordAutoAttempt(ctx, modelID, addr, status, time.Since(start).Milliseconds())
+		if err == nil && status >= 200 && status < 300 {
+			return body, status, hdr, addr, err
+		}
+		next, ok := autoNextModel(ctx, switched)
+		if !ok {
+			return body, status, hdr, addr, err
+		}
+		modelID = next
+	}
+}
+
+// callOpenCodeAPIOnce 非流式单模型尝试（原路由 + 厂商级 failover 循环）。
+func callOpenCodeAPIOnce(ctx context.Context, upstreamBody []byte, modelID string, auth UpstreamAuth) ([]byte, int, http.Header, string, error) {
 	cands := chatCandidates(modelID)
 
 	var lastReply *contract.Reply
@@ -290,8 +313,31 @@ func callOpenCodeAPI(ctx context.Context, upstreamBody []byte, modelID string, a
 	return lastReply.Body, lastReply.Status, lastReply.Headers, lastReply.NodeAddr, lastErr
 }
 
-// callOpenCodeAPIStream 流式上游调用（适配层；路由 + 厂商级 failover）。
+// callOpenCodeAPIStream 流式上游调用（适配层；路由 + 厂商级 failover + auto 模型降级链）。
+// auto 降级只发生在返回客户端之前（厂商循环层），流中续写（streamWithResume）沿用
+// 同一模型重试——流已对外吐字节后换模型会破坏对话连贯性。
 func callOpenCodeAPIStream(ctx context.Context, upstreamBody []byte, modelID string, auth UpstreamAuth) (io.ReadCloser, int, http.Header, string, error) {
+	dec, _ := ctx.Value(autoCtxKey{}).(*autoDecision)
+	for switched := 0; ; switched++ {
+		if dec != nil {
+			dec.FinalModel = modelID
+		}
+		start := time.Now()
+		stream, status, hdr, addr, err := callOpenCodeAPIStreamOnce(ctx, upstreamBody, modelID, auth)
+		recordAutoAttempt(ctx, modelID, addr, status, time.Since(start).Milliseconds())
+		if err == nil && status >= 200 && status < 300 {
+			return stream, status, hdr, addr, err
+		}
+		next, ok := autoNextModel(ctx, switched)
+		if !ok {
+			return stream, status, hdr, addr, err
+		}
+		modelID = next
+	}
+}
+
+// callOpenCodeAPIStreamOnce 流式单模型尝试（原路由 + 厂商级 failover 循环）。
+func callOpenCodeAPIStreamOnce(ctx context.Context, upstreamBody []byte, modelID string, auth UpstreamAuth) (io.ReadCloser, int, http.Header, string, error) {
 	cands := chatCandidates(modelID)
 
 	var lastStream *contract.Stream

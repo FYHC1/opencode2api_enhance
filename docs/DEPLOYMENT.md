@@ -104,50 +104,18 @@ docker compose up -d --build   # 或 docker build -t opencode2api-manager:latest
 
 ## Docker Compose
 
-项目提供三套 compose 模版：
+仓库根目录提供本项目的 `docker-compose.yml`（见上文 Docker 快速开始）。
 
-- `deploy/compose/compose.yml`：单独运行，直连上游。
-- `deploy/compose/compose.tor.yml`：通过 Tor SOCKS5 代理访问上游。
-- `deploy/compose/compose.warp.yml`：通过 Cloudflare WARP SOCKS5 代理访问上游。
-
-快速启动：
-
-```bash
-export OPENCODE2API_PASSWORD="change-me"
-docker compose -f deploy/compose/compose.yml up -d
-curl http://127.0.0.1:8000/health
-```
-
-使用 Tor：
-
-```bash
-docker compose -f deploy/compose/compose.tor.yml up -d
-```
-
-使用 WARP：
-
-```bash
-docker compose -f deploy/compose/compose.warp.yml up -d
-```
-
-默认镜像是 `ghcr.io/6kmfi6hp/opencode2api:latest`。如果使用 fork 或私有镜像，设置：
-
-```bash
-export OPENCODE2API_IMAGE="ghcr.io/OWNER/opencode2api:latest"
-```
-
-更多说明见 `deploy/compose/README.md`。
+> 历史说明：早期上游版本曾提供 `deploy/compose/`（compose.yml / tor / warp 三套模版，
+> 配 `OPENCODE2API_PASSWORD` / `OPENCODE2API_IMAGE` / `ghcr.io/6kmfi6hp/...` 镜像）。
+> 本仓库不含该目录，请勿按旧文档寻找；需要 Tor / WARP 出站时在 `socks5_proxies`
+> 配置中自行接入。
 
 ## 使用 release 二进制
 
-从 GitHub Releases 下载对应系统的包：
+从 GitHub Releases 下载对应系统的桌面安装包（Windows `*-setup.exe`、Linux `*.deb`/`*.AppImage`、macOS `*.dmg`，详见 `docs/DEPLOYMENT-MATRIX.md`）。
 
-```bash
-tar -xzf opencode2api_v0.1.0_linux_amd64.tar.gz
-cd opencode2api_v0.1.0_linux_amd64
-cp config.example.json config.json
-./opencode2api -port 8000 -config config.json -password "change-me"
-```
+服务器 / 无桌面环境请用上文「管理器（Web UI）headless 部署」方式运行同一二进制。
 
 ## systemd 示例
 
@@ -202,8 +170,8 @@ sudo systemctl status opencode2api
 ## 管理器（Web UI）headless 部署
 
 同一二进制以管理器方式运行即是完整 Web 服务：直接提供七页管理 UI
-（独享 / 实例池 / 节点池 / 统计 / 日志 / 设置）与 `/api/admin/*` API，
-无需桌面壳即可在服务器 / 内网使用（需在可执行文件旁放置 `sing-box.exe`）。
+（独享 / 实例池 / 节点池 / 自定义模型 / 统计 / 日志 / 设置）与 `/api/admin/*` API，
+无需桌面壳即可在服务器 / 内网使用（需在可执行文件旁放置对应平台的 `sing-box`，Windows 为 `sing-box.exe`）。
 
 ```bash
 ./opencode2api -port 40000 -password "" -listen 0.0.0.0

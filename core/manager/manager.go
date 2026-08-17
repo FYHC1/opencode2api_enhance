@@ -250,7 +250,7 @@ func (m *Manager) save(list []Instance) error {
 	if err != nil {
 		return err
 	}
-	return writeFileMkdir(m.paths.Instances, data)
+	return writeFileAtomic(m.paths.Instances, data)
 }
 
 // itoa 小工具。
@@ -263,11 +263,28 @@ func readFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
-func writeFileMkdir(path string, data []byte) error {
-	if dir := filepath.Dir(path); dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return err
-		}
+// writeFileAtomic 临时文件+Rename 原子落盘（目录自动创建）：读者要么看到旧文件、
+// 要么看到完整新文件，崩溃/断电不会留下半截 JSON——instances.json 等注册表
+// 半写入会被 load() 当作损坏丢弃，直接清空整个注册表。
+func writeFileAtomic(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name()) // 失败路径清理；成功 Rename 后目标已不存在，无副作用
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }

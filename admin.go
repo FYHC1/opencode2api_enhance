@@ -3,7 +3,7 @@
 //
 // 旧版内嵌 Web 管理面板（adminPageHandler 及配套 /api/config、/api/stats、
 // /api/reload、/api/node-status 等旧路由）已于 2026-08-12 移除：
-// 前端统一由 dist/ 六页 UI 提供（frontendDistDir 存在即托管 SPA）。
+// 前端统一由 dist/ 七页 UI 提供（frontendDistDir 存在即托管 SPA）。
 // 本文件仅保留 /api/reset-stats —— 它是实例子进程/网关子进程的复位契约
 // （core/manager stats.go ResetStats 对运行中实例发 HTTP DELETE /api/reset-stats）。
 package main

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sync/atomic"
 	"time"
 )
@@ -29,7 +30,33 @@ func saveConfig(path string, cfg AppConfig) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0644)
+	return writeFileAtomic(path, data, 0o644)
+}
+
+// writeFileAtomic 临时文件+Rename 原子落盘：读者要么看到旧文件、要么看到完整新文件，
+// 崩溃/断电不会留半截 JSON（loadConfig 对损坏 JSON 静默回退默认值，半写会悄悄丢配置）。
+// 与 core/manager 的同名助手同款语义（跨包各自持有，暂不为此引公共包）。
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name()) // 失败路径清理；成功 Rename 后目标已不存在，无副作用
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp.Name(), perm); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 // rateLimitCooldownSec / rateLimitBackoffBaseMS / rateLimitBackoffCapMS 429 感知（S2）：
@@ -65,6 +92,8 @@ func applyConfig(cfg AppConfig) {
 		providersCfg = append([]ProviderCfg(nil), cfg.Providers...)
 	}
 	routingCfg = cfg.Routing
+	// auto 虚拟模型配置（nil 回默认：关闭 + balanced；键被清除时热重载即时生效）。
+	setAutoConfig(cfg.AutoModel)
 
 	if cfg.RouteMode == "round_robin" || cfg.RouteMode == "failover" || cfg.RouteMode == "smart" {
 		routeMode.Store(cfg.RouteMode)
@@ -176,12 +205,10 @@ func getSocks5ProxyCount() int {
 	return len(socks5Proxies)
 }
 
-// maxRouteRetries 返回同模型路由重试上限：多代理时按代理数扩展，否则沿用上游重试上限。
+// maxRouteRetries 返回同模型路由重试上限。
+// 历史实现会随代理池规模线性放大（proxyCount>3 时返回 proxyCount），
+// 上游故障时单请求可串行打上游数十次，形成重试风暴；现收敛为固定上限。
 func maxRouteRetries() int {
-	proxyCount := getSocks5ProxyCount()
-	if proxyCount > maxUpstreamRetries {
-		return proxyCount
-	}
 	return maxUpstreamRetries
 }
 
@@ -189,7 +216,8 @@ func maxRouteRetries() int {
 // process, because restarting a live HTTP server drops active SSE streams.
 func startConfigWatcher(path string) {
 	go func() {
-		ticker := time.NewTicker(1 * time.Second)
+		// 1s→3s：配置热加载属低频运维动作，3s 内生效足够；降低每进程每秒一次的文件读。
+		ticker := time.NewTicker(3 * time.Second)
 		defer ticker.Stop()
 		lastData, _ := os.ReadFile(path)
 		for range ticker.C {

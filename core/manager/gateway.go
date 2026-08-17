@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -413,7 +414,9 @@ func fetchGatewayModels(port uint16, key string) ([]string, error) {
 	}
 	var out []string
 	for _, m := range v.Data {
-		if isFreeModelID(m.ID) {
+		// auto 虚拟模型：网关开启后出现在 /v1/models，实例池页免费模型列表随之可见。
+		// 特例放行（不进 isFreeModelID：那是探测挑模型用的，探针不应选中虚拟模型）。
+		if isFreeModelID(m.ID) || strings.EqualFold(strings.TrimSpace(m.ID), "auto") {
 			out = append(out, m.ID)
 		}
 	}
