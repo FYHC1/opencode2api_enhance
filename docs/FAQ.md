@@ -90,3 +90,23 @@ token: 输入 0 / 输出 0 · 耗时 -
 
 ---
 
+## 4. 为什么实例池/节点扫描显示「models 接口连通（无免费模型可测试）」？
+
+**这不是故障。** 实例/节点仍判定为可用（状态「健康」/「可用」），表示 `/v1/models` 接口连通（2xx）且目录非空，只是最后一步「免费模型聊天验证」被跳过了。
+
+**产生原因：**
+
+实例测试链路 `freeCompletion`（core/manager/probe_completion.go）先请求 `/v1/models`，再调用 `pickFreeModel` 从返回列表里挑一个「可识别的免费模型」做一次 `chat/completions` 小测。识别规则较窄，只认：
+
+1. id 含 `-free` 后缀；
+2. id == `big-pickle`；
+3. 6 个硬编码 id：deepseek-v4-flash / mimo-v2.5 / ling-3.0-flash / nemotron-3-ultra / north-mini-code / laguna-s-2.1。
+
+而 `/v1/models` 展示层（`listModelsHandler` → `replaceModelIDsWithAliases`）会把未配别名的 `-free` 后缀模型**去掉后缀**展示（如 `gpt-5.5-free` 显示为 `gpt-5.5`），厂商前缀 id（`windsurf/xxx`、`zen/xxx`）也不在白名单内。因此当上游免费模型目录里没有命中白名单的条目时，就会显示该提示。
+
+**影响：** 仅少一层真实 chat 往返的验证，不影响可用性判定。
+
+**已知改进方向（未实施，待评估）：** 实例自己的 `/v1/models` 服务端已过滤为仅返回免费模型，客户端 `pickFreeModel` 白名单冗余——可改为直接取 `data[0].id` 作为探测模型（保留现白名单做 fallback），使所有健康实例都能跑上聊天验证，消除该提示。
+
+---
+
