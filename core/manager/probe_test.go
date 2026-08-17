@@ -137,7 +137,7 @@ func TestAllocatePorts(t *testing.T) {
 func TestFreeCompletionAgainstServer(t *testing.T) {
 	port, stop := probeHTTPServer(t)
 	defer stop()
-	status, body, count, err := freeCompletion(port, "pw", 5*time.Second)
+	status, body, count, _, err := freeCompletion(port, "pw", 5*time.Second)
 	if err != nil || status != 200 {
 		t.Fatalf("status %d err %v", status, err)
 	}

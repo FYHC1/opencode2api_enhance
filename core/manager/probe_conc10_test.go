@@ -69,7 +69,7 @@ func TestFreeCompletionSharesBudget(t *testing.T) {
 		// GET 300ms + POST 300ms = 600ms < 800ms 预算：两请求都在共享预算内成功。
 		port, stop := slowProbeHTTPServer(t, 300*time.Millisecond, 300*time.Millisecond)
 		defer stop()
-		status, body, count, err := freeCompletion(port, "pw", 800*time.Millisecond)
+		status, body, count, _, err := freeCompletion(port, "pw", 800*time.Millisecond)
 		if err != nil || status != 200 {
 			t.Fatalf("status=%d err=%v, want 200 OK", status, err)
 		}
@@ -88,7 +88,7 @@ func TestFreeCompletionSharesBudget(t *testing.T) {
 		port, stop := slowProbeHTTPServer(t, 100*time.Millisecond, 2*time.Second)
 		defer stop()
 		start := time.Now()
-		status, _, count, err := freeCompletion(port, "pw", budget)
+		status, _, count, _, err := freeCompletion(port, "pw", budget)
 		elapsed := time.Since(start)
 		if elapsed > budget+200*time.Millisecond {
 			t.Fatalf("total elapsed = %v, want ≤ %v (+200ms margin)", elapsed, budget)

@@ -71,7 +71,10 @@ func upstreamProxyWarn(raw string) {
 
 // buildOpenCodeCfg 单实例配置：默认本地 sing-box 作为唯一 SOCKS5 出口；
 // 配置了上游代理（E1）时出口直接指向该代理（跳过 sing-box）。
-func (m *Manager) buildOpenCodeCfg(singboxPort uint16) ([]byte, error) {
+// probe=true 时为探测模式：不注入厂商 providers/routing/auto_model，
+// 避免探测子进程加载 NVIDIA 等付费厂商导致 /v1/models 返回付费模型、
+// pickFreeModel 找不到免费模型而全部判定失败（对齐 Rust build_opencode_config 精简行为）。
+func (m *Manager) buildOpenCodeCfg(singboxPort uint16, probe bool) ([]byte, error) {
 	appCfg := m.loadConfig()
 	proxyAddr := upstreamProxyAddr(appCfg.UpstreamProxy)
 	proxyName := "singbox"
@@ -91,17 +94,19 @@ func (m *Manager) buildOpenCodeCfg(singboxPort uint16) ([]byte, error) {
 		"active_socks5":    proxyAddr,
 		"show_node_prefix": appCfg.ShowNodePrefix,
 	}
-	// 透传厂商注册表 + 路由：实例子进程与核心一致，能注册多厂商（如 windsurf）
-	cfg = injectVendorConfig(cfg, appCfg)
-	// auto 虚拟模型配置透传：实例子进程同样支持 model:"auto"（候选=本实例模型）。
-	if appCfg.AutoModel != nil {
-		cfg["auto_model"] = appCfg.AutoModel
+	if !probe {
+		// 透传厂商注册表 + 路由：实例子进程与核心一致，能注册多厂商（如 windsurf）
+		cfg = injectVendorConfig(cfg, appCfg)
+		// auto 虚拟模型配置透传：实例子进程同样支持 model:"auto"（候选=本实例模型）。
+		if appCfg.AutoModel != nil {
+			cfg["auto_model"] = appCfg.AutoModel
+		}
 	}
 	return json.MarshalIndent(cfg, "", "  ")
 }
 
 // BuildOpenCodeCfgFor 导出包装（main 装配实例接缝用）。
-func (m *Manager) BuildOpenCodeCfgFor(port uint16) ([]byte, error) { return m.buildOpenCodeCfg(port) }
+func (m *Manager) BuildOpenCodeCfgFor(port uint16) ([]byte, error) { return m.buildOpenCodeCfg(port, false) }
 
 // buildRouterCfg 统一网关路由配置：多 sing-box 出口 + route_mode + 超时区间。
 func (m *Manager) buildRouterCfg(singboxPorts []uint16, portNames map[uint16]string, routeMode string) ([]byte, error) {

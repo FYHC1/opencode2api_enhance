@@ -117,7 +117,7 @@ func TestBuildOpenCodeCfgUpstreamProxy(t *testing.T) {
 // 生成的实例子进程配置与现状完全一致（E1 改造只影响配置了代理的路径）。
 func TestBuildOpenCodeCfgUnconfiguredSnapshot(t *testing.T) {
 	m := newTestManager(t)
-	got, err := m.buildOpenCodeCfg(40001)
+	got, err := m.buildOpenCodeCfg(40001, false)
 	if err != nil {
 		t.Fatalf("buildOpenCodeCfg: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestBuildOpenCodeCfgUnconfiguredSnapshot(t *testing.T) {
 
 func mustBuildOpenCodeCfg(t *testing.T, m *Manager, port uint16) map[string]any {
 	t.Helper()
-	data, err := m.buildOpenCodeCfg(port)
+	data, err := m.buildOpenCodeCfg(port, false)
 	if err != nil {
 		t.Fatalf("buildOpenCodeCfg: %v", err)
 	}

@@ -33,7 +33,7 @@ func TestVendorConfigInjected(t *testing.T) {
 	defer os.Remove(m.configPath())
 
 	// 1. 实例子进程配置
-	instanceCfg, err := m.buildOpenCodeCfg(40001)
+	instanceCfg, err := m.buildOpenCodeCfg(40001, false)
 	if err != nil {
 		t.Fatalf("buildOpenCodeCfg: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestVendorConfigInjected(t *testing.T) {
 	m2 := New(dir + "-empty")
 	_ = m2.saveConfig(Config{})
 	defer os.Remove(m2.configPath() + "-empty")
-	emptyCfg, err := m2.buildOpenCodeCfg(40001)
+	emptyCfg, err := m2.buildOpenCodeCfg(40001, false)
 	if err != nil {
 		t.Fatalf("buildOpenCodeCfg(empty): %v", err)
 	}

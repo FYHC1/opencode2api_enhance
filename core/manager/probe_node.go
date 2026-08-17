@@ -52,7 +52,7 @@ func (c *ScanController) probeNode(worker int, opts ScanOptions, node ClashNode,
 	}
 	time.Sleep(400 * time.Millisecond)
 
-	ocCfg, err := c.m.buildOpenCodeCfg(pair.socks)
+	ocCfg, err := c.m.buildOpenCodeCfg(pair.socks, true)
 	if err != nil {
 		_ = c.runner.Kill(sbPID)
 		base.Category = "config"
@@ -105,18 +105,26 @@ func (c *ScanController) probeNode(worker int, opts ScanOptions, node ClashNode,
 		base.Message = "已中止"
 		return base
 	}
-	status, body, modelCount, httpErr := freeCompletion(pair.api, password, remaining)
+	status, body, modelCount, freeTested, httpErr := freeCompletion(pair.api, password, remaining)
 	base.StatusCode = status
 	if modelCount >= 0 {
 		base.ModelCount = &modelCount
 	}
-	if probeCompletionSuccess(status, body) {
+	// 设计原则：/v1/models 返回 2xx 即视为节点可用（能连通上游）。
+	// 免费模型 chat 测试只是额外验证——成功则更确信，失败/未测也不影响可用判定。
+	if status >= 200 && status < 300 {
 		base.OK = true
 		base.Category = "ok"
-		if modelCount >= 0 {
-			base.Message = "可用，models=" + itoa(uint16(modelCount))
+		if freeTested && probeCompletionSuccess(status, body) {
+			if modelCount >= 0 {
+				base.Message = "可用，models=" + itoa(uint16(modelCount))
+			} else {
+				base.Message = "可用（免费模型最小请求成功）"
+			}
+		} else if modelCount >= 0 {
+			base.Message = "可用，models=" + itoa(uint16(modelCount)) + "（无免费模型可测试）"
 		} else {
-			base.Message = "可用（免费模型最小请求成功）"
+			base.Message = "可用（models 接口连通）"
 		}
 		return base
 	}

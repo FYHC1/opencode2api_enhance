@@ -43,17 +43,21 @@ func pickFreeModel(data []map[string]any) string {
 }
 
 // freeCompletion 免费模型测试：GET /v1/models → 挑免费模型 → POST chat。
-// 返回 (status, body, modelCount, err)；modelCount 来自 /v1/models 条目数（未知 -1）。
-// L7：GET/POST 共享同一 deadline（进入时算 now+budget）——POST 只拿 GET 后的剩余
-// 预算，两请求总耗时 ≤ 总预算（原实现 GET budget/2 + POST 整 budget 可超支 50%）。
-func freeCompletion(port uint16, password string, budget time.Duration) (int, []byte, int, error) {
+// 返回 (status, body, modelCount, freeTested, err)：
+//   - status: 最终 HTTP 状态码（models 2xx + 有免费模型时为 chat 结果；无免费模型时为 200）
+//   - modelCount: /v1/models 条目数（未知 -1）
+//   - freeTested: 是否实际执行了免费模型 chat 测试
+//
+// 设计原则：/v1/models 返回 2xx 即视为节点可用（能连通上游），
+// 免费模型 chat 测试只是额外验证，不影响节点可用性判定。
+func freeCompletion(port uint16, password string, budget time.Duration) (int, []byte, int, bool, error) {
 	deadline := time.Now().Add(budget)
 	modelStatus, body, err := httpGetJSON(port, "/v1/models", time.Until(deadline), password)
 	if err != nil || modelStatus < 200 || modelStatus >= 300 {
 		if modelStatus != 0 {
-			return modelStatus, body, -1, nil
+			return modelStatus, body, -1, false, nil
 		}
-		return 0, body, -1, err
+		return 0, body, -1, false, err
 	}
 	modelCount := -1
 	var payload struct {
@@ -69,7 +73,8 @@ func freeCompletion(port uint16, password string, budget time.Duration) (int, []
 	}
 	modelID := pickFreeModel(payload.Data)
 	if modelID == "" {
-		return 503, []byte(`{"error":"models 接口成功，但没有可测试的免费模型"}`), modelCount, nil
+		// 无免费模型：/v1/models 已返回 2xx，节点可用，只是无法做 chat 验证
+		return 200, body, modelCount, false, nil
 	}
 	chatBody, _ := json.Marshal(map[string]any{
 		"model":      modelID,
@@ -78,7 +83,7 @@ func freeCompletion(port uint16, password string, budget time.Duration) (int, []
 		"stream":     false,
 	})
 	status, chatResp, err := httpPostJSON(port, "/v1/chat/completions", time.Until(deadline), password, chatBody)
-	return status, chatResp, modelCount, err
+	return status, chatResp, modelCount, true, err
 }
 
 // probeCompletionSuccess 判定 chat 通过：2xx 且 choices 非空。

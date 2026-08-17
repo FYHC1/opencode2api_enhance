@@ -271,7 +271,7 @@ func (m *Manager) InstancesTestHandler() http.HandlerFunc {
 		}
 		start := time.Now()
 		// 对齐 Rust probe_free_completion：超时 10s，成功文案"免费模型最小请求成功"
-		status, body, modelCount, err := freeCompletion(inst.Port, inst.Password, 10*time.Second)
+		status, body, modelCount, freeTested, err := freeCompletion(inst.Port, inst.Password, 10*time.Second)
 		res := TestResult{Name: name, Port: inst.Port, LatencyMS: time.Since(start).Milliseconds()}
 		sc := status
 		res.StatusCode = &sc
@@ -280,7 +280,11 @@ func (m *Manager) InstancesTestHandler() http.HandlerFunc {
 			if modelCount >= 0 {
 				res.ModelCount = &modelCount
 			}
-			res.Message = "免费模型最小请求成功"
+			if freeTested {
+				res.Message = "免费模型最小请求成功"
+			} else {
+				res.Message = "models 接口连通（无免费模型可测试）"
+			}
 		} else if err != nil {
 			res.Message = "免费模型请求失败: " + err.Error()
 		} else {
