@@ -36,6 +36,12 @@ case "$1" in
         echo "opencode2api: 统一网关密钥默认 sk-unified-local；如需自定义请在 WebUI「统一网关」卡片设置"
       fi
     fi
+
+    # 5) 修改 manager.env 后生效提示：systemd EnvironmentFile 在服务启动时读取，
+    #    改了端口/监听地址/网关密钥等必须 daemon-reload + restart 才生效。
+    echo "opencode2api: 提示：修改 /etc/opencode2api/manager.env 后必须执行以下命令才生效："
+    echo "opencode2api:   sudo systemctl daemon-reload && sudo systemctl restart opencode2api"
+    echo "opencode2api: 当前服务状态：systemctl status opencode2api"
     ;;
 esac
 
