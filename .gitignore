@@ -55,7 +55,16 @@ docs/REVIEW-PD-DIFF.md
 docs/ROADMAP.md
 docs/SUBSCRIPTION-RESEARCH.md
 docs/AI-TESTING-GUIDE.md
-docs/images/pool_perf_sketch.png
+docs/MASTER-PLAN.md
+docs/EXECUTION-PLAN.md
+docs/ACCEPTANCE-E2E.md
+docs/REQ-*.md
+docs/REVIEW-*.md
+docs/TEMPLATE-HANDOFF-SPEAK.md
+docs/群友建议_EGRESS-PROXY-MODE.md
+docs/节点问题_修复说明.md
+docs/images/pool_perf_sketch/
 
 # Legacy source archive (kept locally as history, not shipped)
 legacy/
+.tokeny

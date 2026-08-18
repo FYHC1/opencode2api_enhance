@@ -180,7 +180,7 @@ model:"auto"（OpenAI / Claude / Responses 三入口，含流式）
   └─ ⑥ 调用日志 auto_pick 事件：选了谁 / 策略 / 估算 token / 降级链
 ```
 
-### 2. 上下文护栏（三道防线，对应 MASTER-PLAN Q1）
+### 2. 上下文护栏（三道防线）
 
 | 防线 | 机制 | 说明 |
 |---|---|---|
