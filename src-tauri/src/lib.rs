@@ -177,7 +177,10 @@ pub fn run() {
     }
     // 管理器端口：按环境槽位（40000+ 段），槽内避让扫描兜底。
     let mgr_port = manager_port(env_kind);
-    let (core_child, core_job) = match spawn_core_manager(&data_dir, mgr_port, env_kind, &core_extra) {
+    // 透传参数里的 -port 会覆盖默认槽位端口（Go flag 后者覆盖前者），
+    // core 实际监听值 = 覆盖值（若有）否则 mgr_port——健康检查与地址打印都须与之对齐。
+    let effective_port = override_port(&core_extra).unwrap_or(mgr_port);
+    let (core_child, core_job) = match spawn_core_manager(&data_dir, effective_port, env_kind, &core_extra) {
         Ok((child, job)) => (Some(child), job),
         Err(e) => {
             eprintln!("启动 core 管理器失败: {e}");
@@ -187,7 +190,7 @@ pub fn run() {
 
     // headless：不构建 Tauri 窗口，直接阻塞等待 core（退出时清理网关/实例）
     if headless {
-        run_headless(mgr_port, core_child, core_job, manager, gateway_manager);
+        run_headless(effective_port, core_child, core_job, manager, gateway_manager);
         return;
     }
 
@@ -283,7 +286,7 @@ button: tauri::tray::MouseButton::Left,
 
             // 窗口承载 core 管理器 SPA（core 已就绪；端口 = 启动时选定的 mgr_port）
             if let Some(w) = app.get_webview_window("main") {
-                let url = format!("http://127.0.0.1:{mgr_port}/");
+                let url = format!("http://127.0.0.1:{effective_port}/");
                 let _ = w.navigate(tauri::Url::parse(&url).expect("core manager url"));
             }
             Ok(())
@@ -315,6 +318,29 @@ button: tauri::tray::MouseButton::Left,
                 }
             }
         });
+}
+
+/// 从透传参数中解析用户显式指定的 -port（Go flag 后者覆盖前者，core 实际监听此值）。
+/// 支持 `-port 28080` 与 `-port=28080`（及 --port 变体）；未指定/非法时返回 None（回落槽位端口）。
+fn override_port(extra_args: &[String]) -> Option<u16> {
+    let mut it = extra_args.iter().peekable();
+    while let Some(a) = it.next() {
+        if let Some(v) = a.strip_prefix("-port=").or_else(|| a.strip_prefix("--port=")) {
+            if let Ok(p) = v.trim().parse::<u16>() {
+                return Some(p);
+            }
+            continue;
+        }
+        if a == "-port" || a == "--port" {
+            if let Some(v) = it.peek() {
+                if let Ok(p) = v.trim().parse::<u16>() {
+                    let _ = it.next();
+                    return Some(p);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// 递归复制目录树（用于把只读资源目录的 dist 复制到可写 binary_dir）。
