@@ -1,24 +1,17 @@
-# opencode2api 管理器 systemd 服务模板 —— deb 安装版（Linux headless）
+# opencode2api 管理器 systemd 服务 —— deb 安装版（Linux headless）
 #
 # 适用：Debian 13+ / Ubuntu 22.04+ 通过 .deb 安装的 opencode2api。
-# deb 包将二进制装到 /usr/bin/opencode2api。
+# deb 包将二进制装到 /usr/bin/opencode2api；本文件由 deb 安装到
+# /etc/systemd/system/opencode2api-manager-deb.service（随包自动注册）。
 #
-# ⚠️ 自 v1.5.3 起：deb 包已内置本服务并自动注册（随包装入
-#    /etc/systemd/system/opencode2api-manager-deb.service），无需手动复制本文件！
-#    安装 deb 后直接：
-#       sudo systemctl status opencode2api-manager-deb
-#    首次建议先修改 /etc/opencode2api/manager.env（默认密码 CHANGE_ME）：
-#       sudo nano /etc/opencode2api/manager.env
-#       sudo systemctl daemon-reload && sudo systemctl restart opencode2api-manager-deb
+# 端口/密码/数据目录不写死在本文件，统一从 EnvironmentFile 读取：
+#   /etc/opencode2api/manager.env   （随包提供模板，改后 daemon-reload + restart）
 #
-# 本仓库脚本源：scripts/opencode2api-manager-deb.service + scripts/manager.env
-# （tauri.conf.json bundle.linux.deb.files 负责装入 deb 包）。
-#
-# 下面是手动安装（未用 deb 自动注册时）的备用方式：
-#   sudo cp scripts/opencode2api-manager-deb.service /etc/systemd/system/
-#   sudo cp scripts/manager.env /etc/opencode2api/manager.env
+# 手动安装（未用 deb 自动注册时）：
+#   sudo cp opencode2api-manager-deb.service /etc/systemd/system/
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable --now opencode2api-manager-deb
+#   sudo systemctl status opencode2api-manager-deb
 #
 # 常用运维：
 #   journalctl -u opencode2api-manager-deb -f    # 实时日志

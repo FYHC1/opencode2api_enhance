@@ -230,14 +230,29 @@ sudo systemctl status opencode2api-manager
 
 #### deb 安装版模板（Debian 13+）
 
-用 `.deb` 包安装时二进制位于 `/usr/bin/opencode2api`，直接使用仓库内现成模板：
+用 `.deb` 包安装时二进制位于 `/usr/bin/opencode2api`。
+
+**自 v1.5.3 起 deb 包自动注册 systemd 服务**（不再需要手动复制模板）：
+安装 deb 后服务 `opencode2api-manager-deb` 已启用并尝试启动：
 
 ```bash
-sudo cp docs/systemd/opencode2api-manager-deb.service /etc/systemd/system/
+sudo systemctl status opencode2api-manager-deb
+```
+
+**首次配置**：修改环境变量文件 `/etc/opencode2api/manager.env`（端口/密码/监听地址/数据目录），然后：
+
+```bash
+sudo nano /etc/opencode2api/manager.env     # 改 MANAGER_PASSWORD（默认 CHANGE_ME）
+sudo systemctl daemon-reload && sudo systemctl restart opencode2api-manager-deb
+```
+
+**外壳备用**：若 deb 未自动注册（如旧版 deb 手动升级），可手动安装 `scripts/` 下的模板：
+
+```bash
+sudo cp scripts/opencode2api-manager-deb.service /etc/systemd/system/
+sudo cp scripts/manager.env /etc/opencode2api/manager.env
 sudo systemctl daemon-reload
 sudo systemctl enable --now opencode2api-manager-deb
 ```
 
-**统一网关端口自定义**：按优先级 `OPCODE2API_GATEWAY_PORT` 环境变量 > `config.json` 的 `gateway_port` > 默认 `40080`。
-模板内已预留 `Environment=OPCODE2API_GATEWAY_PORT=` 注释行，取消注释并 `systemctl restart` 即生效；
-重启后运行中的客户端会短暂断连，需用新端口重新配置。
+**统一网关端口自定义**：按优先级 `config.json` 的 `gateway_port` > 默认 `40080`（WebUI「统一网关」卡片可设，保存即生效；`OPCODE2API_GATEWAY_PORT` 环境变量优先级最高，可在 `manager.env` 追加）。重启后运行中的客户端会短暂断连，需用新端口重新配置。
