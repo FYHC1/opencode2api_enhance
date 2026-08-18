@@ -63,6 +63,61 @@ func TestSubscriptionsCRUD(t *testing.T) {
 	}
 }
 
+// T3: 手动指定分组名（NamePinned 固定）+ 自动推导不覆盖固定名。
+func TestSubscriptionPinnedName(t *testing.T) {
+	m := New(t.TempDir())
+	url := "http://pinned.example.com/sub.yaml"
+
+	// 带手动名的 AddSubscription：Group + NamePinned 落盘
+	if err := m.AddSubscription(url, 0, TargetPoolOnly, "固定分组"); err != nil {
+		t.Fatal(err)
+	}
+	list := m.loadSubscriptions()
+	if len(list) != 1 || list[0].Group != "固定分组" || !list[0].NamePinned {
+		t.Fatalf("pinned source = %+v", list)
+	}
+
+	// persistSourceGroup（自动推导名）不覆盖固定名
+	m.persistSourceGroup(url, "自动推导名")
+	list = m.loadSubscriptions()
+	if list[0].Group != "固定分组" || !list[0].NamePinned {
+		t.Fatalf("auto name overrode pinned: %+v", list)
+	}
+
+	// applyGroup 优先固定名（即使 meta 给出别的名字）
+	nodes := []SubscribeNode{{Name: "N1", Server: "1.1.1.1", Port: 443, NodeType: "trojan"}}
+	group := m.applyGroup(nodes, url, SubscriptionMeta{Name: "响应头名", Profile: "内容配置名"})
+	if group != "固定分组" || nodes[0].Group != "固定分组" {
+		t.Fatalf("applyGroup = %q node=%q", group, nodes[0].Group)
+	}
+
+	// import 路径手动固定：pinSourceGroup 置 Group+NamePinned，后续 persist 不覆盖
+	url2 := "http://pinned2.example.com/sub"
+	if err := m.AddSubscription(url2, 0, TargetPoolOnly); err != nil {
+		t.Fatal(err)
+	}
+	m.pinSourceGroup(url2, "二次固定")
+	m.persistSourceGroup(url2, "自动名")
+	list = m.loadSubscriptions()
+	for _, s := range list {
+		if s.URL == url2 && (s.Group != "二次固定" || !s.NamePinned) {
+			t.Fatalf("pinSourceGroup failed: %+v", s)
+		}
+	}
+
+	// 未固定源：persistSourceGroup 正常写自动名（且不置 pinned）
+	if err := m.AddSubscription("http://auto.example.com/sub", 0, TargetPoolOnly); err != nil {
+		t.Fatal(err)
+	}
+	m.persistSourceGroup("http://auto.example.com/sub", "自动名")
+	list = m.loadSubscriptions()
+	for _, s := range list {
+		if s.URL == "http://auto.example.com/sub" && (s.Group != "自动名" || s.NamePinned) {
+			t.Fatalf("auto persist broke: %+v", s)
+		}
+	}
+}
+
 // T3: 旧 config 单条订阅迁移并入列表。
 func TestSubscriptionsMigrateFromConfig(t *testing.T) {
 	m := New(t.TempDir())

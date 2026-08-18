@@ -63,6 +63,7 @@ export default function NodesPage({
   const [addOpen, setAddOpen] = useState(false)
   const [addUrl, setAddUrl] = useState('')
   const [addInterval, setAddInterval] = useState(30)
+  const [addName, setAddName] = useState('') // 可选：手动指定分组名（固定）
 
   // 首次加载订阅源列表
   useEffect(() => {
@@ -108,7 +109,7 @@ export default function NodesPage({
     }, 1000)
     const clearTicker = () => window.clearInterval(ticker)
     // 真实请求引用：看门狗超时后仍要等它完成（后台已拉取，完成后节点池自动更新）
-    const req = api.subscriptionsAdd(url, addInterval)
+    const req = api.subscriptionsAdd(url, addInterval, undefined, addName.trim() || undefined)
     try {
       // P3: 10s 看门狗——race 后端返回与 10s 延时；谁先到谁定夺；后台请求不打断
       const r = await Promise.race([
@@ -127,6 +128,7 @@ export default function NodesPage({
               toast(`已导入 ${rr.imported} 个节点到节点池`, true)
               setAddOpen(false)
               setAddUrl('')
+              setAddName('')
               setAddInterval(30)
             }
           })
@@ -142,12 +144,14 @@ export default function NodesPage({
         toast(`订阅已添加，但首次拉取失败：${r.error}`, false)
         setAddOpen(false)
         setAddUrl('')
+        setAddName('')
         setAddInterval(30)
         await loadSubs()
       } else {
         toast(`已导入 ${r.imported} 个节点到节点池`, true)
         setAddOpen(false)
         setAddUrl('')
+        setAddName('')
         setAddInterval(30)
         await loadSubs()
         await loadNodes()
@@ -864,6 +868,21 @@ export default function NodesPage({
                     className="w-28 shrink-0 px-3 py-2 border rounded-lg text-[13px]"
                   />
                 </div>
+                <div className="flex items-center gap-3">
+                  <label
+                    className="text-[13px] text-zinc-700 flex-1 min-w-0 whitespace-nowrap"
+                    title="可选：留空则自动用订阅内容配置名 / 文件名 / URL 末段命名分组"
+                  >
+                    分组名（可选）
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="留空自动命名"
+                    value={addName}
+                    onChange={(e) => setAddName(e.target.value)}
+                    className="flex-1 min-w-0 px-3 py-2 border rounded-lg text-[13px]"
+                  />
+                </div>
                 <div className="flex items-center gap-3 pt-1">
                   <button
                     type="button"
@@ -911,6 +930,12 @@ export default function NodesPage({
                       <div className="flex-1 min-w-0">
                         <div className="text-[13px] text-zinc-800 truncate">{s.url}</div>
                         <div className="text-[11px] text-zinc-400 mt-0.5">
+                          {s.group ? (
+                            <span className={s.name_pinned ? 'text-zinc-600' : 'text-zinc-400'}>
+                              分组：{s.group}
+                              {s.name_pinned ? '（固定）' : ''} ·{' '}
+                            </span>
+                          ) : null}
                           每{s.interval_min > 0 ? `${s.interval_min} 分钟` : '不自动拉取'} · 节点池
                         </div>
                       </div>
