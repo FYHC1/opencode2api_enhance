@@ -52,8 +52,9 @@ UI 参照 Windsurf Account Manager 的浅色官网风格：无边框窗口 + 自
 
 ## Linux / Headless 部署
 
-- **Headless（无图形界面 / 服务器）**：同一 Go core 二进制以管理器方式运行即完整 Web 服务（`./opencode2api -port 40000 -password "change-me" -config config.json`），默认监听 `:<port>` 全接口、托管前端 `dist/`，纯浏览器完成全部管理；仅本机访问可加 `-listen 127.0.0.1`（管理 API 含启停实例等高权限操作，公网部署务必配合反向代理限制来源），见 [部署文档](docs/DEPLOYMENT.md)。
-- **Headless（桌面壳无头模式）**：安装桌面版后也可用 `opencode2api --headless [-port 40000] [-listen 127.0.0.1]` 启动——Rust 壳释放内嵌组件并拉起 core，无窗口运行，适合 SSH / 无图形会话；退出时自动清理网关与实例进程，详见 [Linux 开发与构建指南](docx/LINUX-DEVELOPMENT.md)。
+- **无头模式（Headless）**：同一 Go core 二进制以管理器方式运行即完整 Web 服务（默认监听 `:<port>` 全接口、托管前端 `dist/`、纯浏览器管理），两种启动途径：
+  - **裸 core**：直接运行 `./opencode2api -port 40000 -password "change-me" -config config.json`（服务器 / Docker 场景；管理 API 含启停实例等高权限操作，仅本机访问加 `-listen 127.0.0.1`，公网部署务必配合反向代理限制来源），见 [部署文档](docs/DEPLOYMENT.md)。
+  - **桌面壳**：安装桌面版后 `opencode2api --headless [-port 40000] [-listen 127.0.0.1]`——壳释放内嵌组件并拉起 core，无窗口运行，适合 SSH / 无图形会话；退出自动清理网关与实例，见 [Linux 开发与构建指南](docx/LINUX-DEVELOPMENT.md)。
 - **桌面（Linux）**：安装 .deb / AppImage 即可；桌面模式内置本地 HTTP 服务，前端经它取数，行为与 Windows 版一致。
 - **Docker（服务器）**：仓库根目录 `docker compose up -d --build` 即起完整管理器（含七页前端与 sing-box 出口），管理面板 `http://127.0.0.1:40000`，见 [部署文档](docs/DEPLOYMENT.md)。
 - 数据目录与配置：`OPCODE2API_DATA_DIR` 隔离数据；`OPCODE2API_MANAGER_PORT` 覆盖管理端口；`config.json` 支持网关端口/密钥、订阅、日志过滤等配置项。
