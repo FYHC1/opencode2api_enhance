@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.5.2（2026-08-18）
+
+### 🔧 修复
+
+- **调用日志「清空日志」修复**：运行中的实例/统一网关进程不再直写其日志文件，一律走 HTTP 清空——修复 Windows 下「文件被占用」导致清空失败
+
+### 🧹 仓库整理
+
+- 研发过程文档（MASTER-PLAN / REQ-\* / REVIEW-\* 等）移出仓库：本地保留、gitignore 忽略；仓库内文档聚焦产品契约（API / CONFIGURATION / ROUTING / CUSTOM-MODELS / DEPLOYMENT / FAQ 等）
+
 ## v1.5.1（2026-08-17）
 
 ### 🔧 重要修复
