@@ -680,6 +680,19 @@ func (m *Manager) ConfigSet(key, value string) error {
 			return fmt.Errorf("密钥已保存，但网关热重启失败: %w", err)
 		}
 	}
+	// T5: 网关端口立即生效——更新内存端口并热重启网关进程（若正在运行）。
+	// 端口 = 0（恢复默认/未设置）时按 managerGatewayPort 的 env > config > 默认
+	// 优先级解析生效端口（注意：此处显式把 cfg.GatewayPort 传给 ApplyPort，
+	// 与 ConfigSet 保存后的落盘值一致，避免被已注入的 OPCODE2API_GATEWAY_PORT env 压过）。
+	if key == "gateway_port" {
+		eff := cfg.GatewayPort
+		if eff == 0 {
+			eff = m.managerGatewayPort()
+		}
+		if err := m.Gateway().ApplyPort(eff, m.Run()); err != nil {
+			return fmt.Errorf("端口已保存，但网关热重启失败: %w", err)
+		}
+	}
 	return nil
 }
 
