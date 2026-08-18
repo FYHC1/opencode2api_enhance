@@ -499,7 +499,7 @@ export default memo(function PoolPage({
     setPortBusy(true)
     try {
       await api.configSet('gateway_port', v === '' ? '0' : v)
-      toast(v === '' ? '网关端口已恢复默认，重启网关后生效' : `网关端口已设为 ${v}，重启网关后生效`, true)
+      toast(v === '' ? '网关端口已恢复默认并立即生效' : `网关端口已设为 ${v} 并立即生效`, true)
       setPortOpen(false)
       setPortValue('')
       await load()
