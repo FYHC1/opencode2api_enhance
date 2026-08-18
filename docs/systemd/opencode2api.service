@@ -7,9 +7,10 @@
 #    /etc/systemd/system/opencode2api.service），无需手动复制本文件！
 #    安装 deb 后直接：
 #       sudo systemctl status opencode2api
-#    首次建议先修改 /etc/opencode2api/manager.env（统一网关密钥默认 CHANGE_ME；
-#    管理 WebUI 鉴权默认关闭——core 默认空密码，不在 env 管理；如需开启
-#    在服务 ExecStart 显式追加 -password <密码>）：
+#    首次建议先修改 /etc/opencode2api/manager.env（端口/监听地址/数据目录；
+#    统一网关密钥默认 sk-unified-local 无需修改，如需自定义在 WebUI「统一网关」
+#    卡片设置；管理 WebUI 鉴权默认关闭——core 默认空密码，不在 env 管理；
+#    如需开启在服务 ExecStart 显式追加 -password <密码>）：
 #       sudo nano /etc/opencode2api/manager.env
 #       sudo systemctl daemon-reload && sudo systemctl restart opencode2api
 #
@@ -30,8 +31,11 @@
 #
 # 统一网关端口（自定义网关 API 监听端口，非本服务端口）：
 #   优先级：OPCODE2API_GATEWAY_PORT env > config.json 的 gateway_port > 默认 40080
-#   （WebUI「统一网关」卡片可设，保存即生效）。
-# 统一网关密钥：OPCODE2API_GATEWAY_KEY env > config.json 的 gateway_key > 默认 sk-unified-local。
+#   （WebUI「统一网关」卡片可设，保存即生效，建议用 WebUI 设置）。
+#   ⚠️ 若在 manager.env 取消注释设置该 env，env 优先级最高，WebUI 改的端口
+#      会在重启后被压回 env 值。
+# 统一网关密钥：默认 sk-unified-local；OPCODE2API_GATEWAY_KEY env > config.json 的
+#   gateway_key > 默认 sk-unified-local（自定义建议在 WebUI「统一网关」卡片设置）。
 
 [Unit]
 Description=opencode2api Manager (headless Web UI, deb install)

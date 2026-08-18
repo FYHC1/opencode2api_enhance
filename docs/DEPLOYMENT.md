@@ -138,7 +138,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/opencode2api
-ExecStart=/opt/opencode2api/opencode2api -port 8000 -config /opt/opencode2api/config.json -password CHANGE_ME
+ExecStart=/opt/opencode2api/opencode2api -port 8000 -config /opt/opencode2api/config.json -password <管理密码>
+# 注：-password 用于开启管理鉴权（可选；不传则默认关闭）。
 Restart=on-failure
 RestartSec=3
 User=nobody
@@ -211,7 +212,8 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=/opt/opencode2api
 # headless 默认全接口监听；内网/公网部署显式 -listen 0.0.0.0 并配合防火墙/反代
-ExecStart=/opt/opencode2api/opencode2api -port 40000 -password CHANGE_ME -config /opt/opencode2api/config.json -listen 127.0.0.1
+ExecStart=/opt/opencode2api/opencode2api -port 40000 -password <管理密码> -config /opt/opencode2api/config.json -listen 127.0.0.1
+# 注：-password 用于开启管理鉴权（可选；不传则默认关闭）。
 Environment=OPCODE2API_DATA_DIR=/var/lib/opencode2api
 Restart=on-failure
 RestartSec=5
@@ -239,10 +241,10 @@ sudo systemctl status opencode2api
 sudo systemctl status opencode2api
 ```
 
-**首次配置**：修改环境变量文件 `/etc/opencode2api/manager.env`（端口/监听地址/数据目录/统一网关密钥），然后：
+**首次配置**：修改环境变量文件 `/etc/opencode2api/manager.env`（端口/监听地址/数据目录；统一网关密钥默认 `sk-unified-local` 无需修改，需要自定义时在 WebUI「统一网关」卡片设置），然后：
 
 ```bash
-sudo nano /etc/opencode2api/manager.env     # 改 OPCODE2API_GATEWAY_KEY（默认 CHANGE_ME）
+sudo nano /etc/opencode2api/manager.env     # 端口/监听地址/数据目录（密钥默认无需修改）
 sudo systemctl daemon-reload && sudo systemctl restart opencode2api
 ```
 
@@ -259,6 +261,6 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now opencode2api
 ```
 
-**统一网关端口自定义**：按优先级 `OPCODE2API_GATEWAY_PORT` 环境变量 > `config.json` 的 `gateway_port` > 默认 `40080`（WebUI「统一网关」卡片可设，保存即生效；`OPCODE2API_GATEWAY_PORT` 可在 `manager.env` 追加）。重启后运行中的客户端会短暂断连，需用新端口重新配置。
+**统一网关端口自定义**：按优先级 `config.json` 的 `gateway_port` > 默认 `40080`。在 WebUI「统一网关」卡片设置即可，保存即生效并持久化。`manager.env` 中 `OPCODE2API_GATEWAY_PORT` 默认注释——**不要**取消注释（env 优先级最高，一旦设置会压过 WebUI 的修改，出现「WebUI 改了端口，重启后又变回去」）。重启后运行中的客户端会短暂断连，需用新端口重新配置。
 
-**统一网关密钥自定义**：按优先级 `OPCODE2API_GATEWAY_KEY` 环境变量（在 `manager.env` 设置，默认 `CHANGE_ME`）> `config.json` 的 `gateway_key` > 默认 `sk-unified-local`。客户端调用统一网关 API 时以该密钥作为 Bearer 鉴权；也可在 WebUI「统一网关」卡片设置，保存即生效。
+**统一网关密钥自定义**：默认 `sk-unified-local`，无需修改。如需自定义：在 WebUI「统一网关」卡片设置（写入 `config.json`，保存即生效）即可。`manager.env` 中 `OPCODE2API_GATEWAY_KEY` 默认注释——如需用 env 固定密钥可取消注释，但注意 env 优先级高于 WebUI 修改（`OPCODE2API_GATEWAY_KEY` env > `config.json` 的 `gateway_key` > 默认 `sk-unified-local`）。客户端调用统一网关 API 时以该密钥作为 Bearer 鉴权。

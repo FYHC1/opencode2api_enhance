@@ -25,8 +25,11 @@
 #
 # 统一网关端口（自定义网关 API 监听端口，非本服务端口）：
 #   优先级：OPCODE2API_GATEWAY_PORT env > config.json 的 gateway_port > 默认 40080
-#   （WebUI「统一网关」卡片可设，保存即生效）。
-# 统一网关密钥：OPCODE2API_GATEWAY_KEY env > config.json 的 gateway_key > 默认 sk-unified-local。
+#   （WebUI「统一网关」卡片可设，保存即生效，建议用 WebUI 设置）。
+#   ⚠️ 若在 manager.env 取消注释设置该 env，env 优先级最高，WebUI 改的端口
+#      会在重启后被压回 env 值。
+# 统一网关密钥：默认 sk-unified-local；OPCODE2API_GATEWAY_KEY env > config.json 的
+#   gateway_key > 默认 sk-unified-local（自定义建议在 WebUI「统一网关」卡片设置）。
 
 [Unit]
 Description=opencode2api Manager (headless Web UI, deb install)
