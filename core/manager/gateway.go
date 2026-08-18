@@ -106,6 +106,10 @@ func (g *Gateway) ApplyKey(pwd string, runner Runner) error {
 // ApplyPort 更新网关监听端口并立即生效：更新内存端口，若网关子进程正在运行则热重启
 //（stopChild + startChild 以新端口拉起；不触碰任何实例）。
 func (g *Gateway) ApplyPort(port uint16, runner Runner) error {
+	// 防御：0 = 未设置/非法，不应用（调用方应先经 managerGatewayPort 解析出有效端口）。
+	if port == 0 {
+		return nil
+	}
 	if runner == nil {
 		runner = &realRunner{}
 	}

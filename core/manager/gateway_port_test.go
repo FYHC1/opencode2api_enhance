@@ -2,7 +2,9 @@ package manager
 
 import (
 	"net/http/httptest"
+	"os"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -67,6 +69,102 @@ func TestApplyPortUpdatesMemoryPort(t *testing.T) {
 	if cfg := m.loadConfig(); cfg.GatewayPort != 50123 {
 		t.Fatalf("persisted port = %d", cfg.GatewayPort)
 	}
+}
+
+// T5: 网关运行中 ApplyPort 必须热重启子进程：旧进程被停、新进程带新端口参数。
+// （portRunner 的 Start 返回测试进程自身 pid，pidAlive 恒真 → 可模拟运行中状态。）
+func TestApplyPortHotRestartsRunningGateway(t *testing.T) {
+	m := newTestManager(t)
+	run := &fakeRunner{}
+	ln1, ln2 := occupyPort(t, 29901), occupyPort(t, 29901+singboxPortOffset)
+	defer ln1.Close()
+	defer ln2.Close()
+	runningInstanceHeld(t, m, run, "p1", 29901, true, ln1, ln2)
+
+	gw := NewGateway(m, 40080)
+	rec := &portRunner{}
+
+	// 网关先进入运行中（Status 自动拉起 = 第 1 次 spawn）
+	gw.Status(rec)
+	rec.mu.Lock()
+	pre := rec.gateway
+	rec.mu.Unlock()
+	if pre != 1 {
+		t.Fatalf("initial gateway spawns = %d, want 1", pre)
+	}
+
+	// 运行中改端口 → 必须 stop 旧进程 + 以新端口重启
+	if err := gw.ApplyPort(50234, rec); err != nil {
+		t.Fatalf("ApplyPort: %v", err)
+	}
+
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if rec.gateway != pre+1 {
+		t.Fatalf("gateway spawns = %d, want %d (热重启 1 次)", rec.gateway, pre+1)
+	}
+	if len(rec.kills) != 1 {
+		t.Fatalf("kills = %v, want exactly 1 (替换的旧子进程)", rec.kills)
+	}
+	for _, k := range rec.kills {
+		if k != os.Getpid() {
+			t.Fatalf("killed unexpected pid %d", k)
+		}
+	}
+	if gw.Port() != 50234 {
+		t.Fatalf("port = %d, want 50234", gw.Port())
+	}
+	// 最后一次网关 spawn 的 -port 参数必须是新端口
+	if last, ok := rec.lastGatewaySpec(); !ok || !specPortIs(last, 50234) {
+		t.Fatalf("last gateway spawn lacks -port 50234: %+v", rec.specs)
+	}
+}
+
+// portRunner 记录网关 Start/Kill 及 ExecSpec；Start 返回自身 pid（pidAlive 恒真）。
+type portRunner struct {
+	mu      sync.Mutex
+	starts  int
+	gateway int
+	kills   []int
+	specs   []ExecSpec
+}
+
+func (r *portRunner) Start(spec ExecSpec) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.starts++
+	if hasGatewayStart([]ExecSpec{spec}) {
+		r.gateway++
+	}
+	r.specs = append(r.specs, spec)
+	return os.Getpid(), nil
+}
+
+func (r *portRunner) Kill(pid int) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.kills = append(r.kills, pid)
+	return nil
+}
+
+// lastGatewaySpec 返回最近一次网关 spawn 的 ExecSpec。
+func (r *portRunner) lastGatewaySpec() (ExecSpec, bool) {
+	for i := len(r.specs) - 1; i >= 0; i-- {
+		if hasGatewayStart([]ExecSpec{r.specs[i]}) {
+			return r.specs[i], true
+		}
+	}
+	return ExecSpec{}, false
+}
+
+// specPortIs 检查 ExecSpec 是否带指定 -port 参数。
+func specPortIs(spec ExecSpec, want uint16) bool {
+	for i, a := range spec.Args {
+		if a == "-port" && i+1 < len(spec.Args) && spec.Args[i+1] == itoa(want) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestGatewayPortHandlerHTTP(t *testing.T) {

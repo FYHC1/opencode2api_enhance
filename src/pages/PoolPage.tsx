@@ -759,7 +759,7 @@ export default memo(function PoolPage({
               <button
                 onClick={() => { setPortValue(gwPortCfg > 0 ? String(gwPortCfg) : ''); setPortOpen(true) }}
                 className="flex items-center gap-1 text-[11px] text-teal-700 hover:underline"
-                title="设置自定义端口（重启网关后生效）/ 恢复默认"
+                title="设置自定义端口（立即生效）/ 恢复默认"
               >
                 <Pencil size={11} /> 自定义端口
               </button>
@@ -1580,7 +1580,7 @@ export default memo(function PoolPage({
                 onChange={(e) => setPortValue(e.target.value)}
                 className="w-full px-3 py-2 border rounded-lg"
               />
-              <p className="text-zinc-500 text-xs">保存后需重启网关生效；运行中的客户端将暂时无法连接</p>
+              <p className="text-zinc-500 text-xs">保存后立即生效（网关会自动重启）；运行中的客户端将暂时无法连接</p>
             </div>
 
             <div className="flex gap-2">
