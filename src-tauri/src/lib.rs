@@ -461,11 +461,21 @@ fn spawn_core_manager(
     }
     let cfg_path = data_dir.join("config.json");
     // 网关/实例/探针端口按环境槽位注入（槽位表：base+偏移）；用户显式环境变量优先。
+    // 统一网关端口额外支持 config.gateway_port：config 设置了有效端口时优先于槽位，
+    // 实例池页「自定义端口」即写入该键（仅 env 未设且 config 未设置时才落槽位）。
     let base = slot_base(env_kind);
     let slot = |off: u16| (base + off).to_string();
     if std::env::var_os("OPCODE2API_GATEWAY_PORT").is_none() {
+        let from_config = crate::config::Config::load()
+            .ok()
+            .and_then(|c| c.gateway_port)
+            .filter(|p| *p != 0);
+        let gw_port = match from_config {
+            Some(p) => p.to_string(),
+            None => slot(OFF_GATEWAY),
+        };
         unsafe {
-            std::env::set_var("OPCODE2API_GATEWAY_PORT", slot(OFF_GATEWAY));
+            std::env::set_var("OPCODE2API_GATEWAY_PORT", gw_port);
         }
     }
     if std::env::var_os("OPCODE2API_INSTANCE_BASE_PORT").is_none() {

@@ -728,6 +728,8 @@ type ConfigView struct {
 	PoolProbeConcurrency    int     `json:"pool_probe_concurrency"`
 	HasGatewayKey           bool    `json:"has_gateway_key"`
 	GatewayKey              string  `json:"gateway_key"`
+	// 统一网关监听端口（0 = 未设置，用环境槽位/默认 40080）
+	GatewayPort             uint16  `json:"gateway_port"`
 }
 
 // ConfigViewOf 生成前端视图（密码与 clash token 脱敏为掩码）。
@@ -785,6 +787,7 @@ func (m *Manager) ConfigViewOf() ConfigView {
 		PoolProbeConcurrency:    poolProbeConcurrencyOf(cfg),
 		HasGatewayKey:           cfg.GatewayKey != "",
 		GatewayKey:              maskSecret(cfg.GatewayKey),
+		GatewayPort:             cfg.GatewayPort,
 	}
 }
 
