@@ -1,0 +1,48 @@
+# opencode2api 管理器 systemd 服务模板 —— deb 安装版（Linux headless）
+#
+# 适用：Debian 13+ / Ubuntu 22.04+ 通过 .deb 安装的 opencode2api。
+# deb 包将二进制装到 /usr/bin/opencode2api，数据目录默认放 /var/lib/opencode2api。
+#
+# 安装：
+#   sudo cp opencode2api-manager-deb.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now opencode2api-manager-deb
+#   sudo systemctl status opencode2api-manager-deb
+#
+# 常用运维：
+#   journalctl -u opencode2api-manager-deb -f    # 实时日志
+#   sudo systemctl restart opencode2api-manager-deb
+#
+# 端口说明：
+#   -port 28080            管理器 HTTP 监听端口（-listen 127.0.0.1 = 仅本机；公网部署务必配合防火墙/反代）
+#   -password CHANGE_ME    管理鉴权密码（勿留空）
+#   -config /etc/opencode2api/config.json   显式指定配置文件（可省略，默认在数据目录）
+#
+# 统一网关端口（自定义网关 API 监听端口）：
+#   优先级：环境变量 OPCODE2API_GATEWAY_PORT > config.json 的 gateway_port > 默认 40080。
+#   在下方 [Service] 按需取消注释 Environment 行（亦可改 /etc/opencode2api/config.json 的 gateway_port）。
+#   改动后需 restart 本服务才生效，运行中的客户端会短暂断连。
+
+[Unit]
+Description=opencode2api Manager (headless Web UI, deb install)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=opencode2api
+Group=opencode2api
+# deb 安装的二进制路径为 /usr/bin/opencode2api
+ExecStart=/usr/bin/opencode2api -port 28080 -password CHANGE_ME -config /etc/opencode2api/config.json -listen 127.0.0.1
+Restart=on-failure
+RestartSec=5
+# 数据目录（实例配置、运行态、统一网关端口配置等均在此）
+Environment=OPCODE2API_DATA_DIR=/var/lib/opencode2api
+# 自定义统一网关端口（可选，1-65535；注释掉则用 config.json gateway_port / 默认 40080）
+# Environment=OPCODE2API_GATEWAY_PORT=40080
+# 日志
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

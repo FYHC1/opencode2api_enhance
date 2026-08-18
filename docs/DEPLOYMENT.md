@@ -227,3 +227,17 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now opencode2api-manager
 sudo systemctl status opencode2api-manager
 ```
+
+#### deb 安装版模板（Debian 13+）
+
+用 `.deb` 包安装时二进制位于 `/usr/bin/opencode2api`，直接使用仓库内现成模板：
+
+```bash
+sudo cp docs/systemd/opencode2api-manager-deb.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now opencode2api-manager-deb
+```
+
+**统一网关端口自定义**：按优先级 `OPCODE2API_GATEWAY_PORT` 环境变量 > `config.json` 的 `gateway_port` > 默认 `40080`。
+模板内已预留 `Environment=OPCODE2API_GATEWAY_PORT=` 注释行，取消注释并 `systemctl restart` 即生效；
+重启后运行中的客户端会短暂断连，需用新端口重新配置。
