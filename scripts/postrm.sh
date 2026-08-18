@@ -6,7 +6,7 @@ set -e
 
 case "$1" in
   purge)
-    rm -f /etc/systemd/system/opencode2api-manager-deb.service
+    rm -f /etc/systemd/system/opencode2api.service
     rm -f /etc/opencode2api/manager.env
     if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
       systemctl daemon-reload >/dev/null 2>&1 || true

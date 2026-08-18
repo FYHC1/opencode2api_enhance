@@ -21,15 +21,16 @@ case "$1" in
     #    不因端口冲突导致 dpkg 安装失败回滚）
     if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
       systemctl daemon-reload
-      systemctl enable opencode2api-manager-deb >/dev/null 2>&1 || true
-      systemctl start opencode2api-manager-deb >/dev/null 2>&1 || true
-      echo "opencode2api: 服务已注册并尝试启动（systemctl status opencode2api-manager-deb 查看状态）"
+      systemctl enable opencode2api >/dev/null 2>&1 || true
+      systemctl start opencode2api >/dev/null 2>&1 || true
+      echo "opencode2api: 服务已注册并尝试启动（systemctl status opencode2api 查看状态）"
     fi
 
-    # 4) 首次安装提示（默认密码/端口可改 /etc/opencode2api/manager.env）
+    # 4) 首次安装提示（统一网关密钥默认 CHANGE_ME，可改 /etc/opencode2api/manager.env；
+    #    管理 WebUI 登录密码不在 env 管理，未指定时用 core 默认 123456）
     if [ -f /etc/opencode2api/manager.env ] && grep -q CHANGE_ME /etc/opencode2api/manager.env; then
-      echo "opencode2api: 请修改 /etc/opencode2api/manager.env 中的 MANAGER_PASSWORD（默认密码 CHANGE_ME）"
-      echo "opencode2api: 改后执行: sudo systemctl daemon-reload && sudo systemctl restart opencode2api-manager-deb"
+      echo "opencode2api: 请修改 /etc/opencode2api/manager.env 中的 OPCODE2API_GATEWAY_KEY（默认 CHANGE_ME）"
+      echo "opencode2api: 改后执行: sudo systemctl daemon-reload && sudo systemctl restart opencode2api"
     fi
     ;;
 esac

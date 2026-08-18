@@ -675,8 +675,15 @@ func (m *Manager) ConfigSet(key, value string) error {
 	}
 	// T4: 网关密钥立即生效——更新内存密码并热重启网关进程（若正在运行）；
 	// 不触碰任何实例，也不等待下次网关自然重启。
+	// 显式把刚保存的 cfg.GatewayKey 传给 ApplyKey（与落盘值一致），避免被环境变量
+	// OPCODE2API_GATEWAY_KEY 压过（env 固化教训，同 gateway_port 处理）；
+	// 仅重置（空串 = 回退默认）时经 effectiveGatewayKey 解析 env > config > 默认。
 	if key == "gateway_key" {
-		if err := m.Gateway().ApplyKey(effectiveGatewayKey(cfg), m.Run()); err != nil {
+		eff := cfg.GatewayKey
+		if eff == "" {
+			eff = effectiveGatewayKey(cfg)
+		}
+		if err := m.Gateway().ApplyKey(eff, m.Run()); err != nil {
 			return fmt.Errorf("密钥已保存，但网关热重启失败: %w", err)
 		}
 	}
@@ -819,8 +826,13 @@ func uiPollIntervalSecOf(cfg Config) int {
 	return *cfg.UiPollIntervalSec
 }
 
-// effectiveGatewayKey 生效的统一网关密钥：配置未设置/为空时回退默认 "sk-unified-local"。
+// effectiveGatewayKey 生效的统一网关密钥：优先环境变量 OPCODE2API_GATEWAY_KEY
+//（systemd EnvironmentFile / 自定义部署注入，与 OPCODE2API_GATEWAY_PORT 同级），
+// 其次 config.gateway_key，否则回退默认 unifiedGatewayKey（"sk-unified-local"）。
 func effectiveGatewayKey(cfg Config) string {
+	if s := strings.TrimSpace(os.Getenv("OPCODE2API_GATEWAY_KEY")); s != "" {
+		return s
+	}
 	if cfg.GatewayKey != "" {
 		return cfg.GatewayKey
 	}

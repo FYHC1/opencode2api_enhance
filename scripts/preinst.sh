@@ -8,8 +8,8 @@ set -e
 case "$1" in
   install|upgrade)
     if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
-      systemctl stop opencode2api-manager-deb >/dev/null 2>&1 || true
-      systemctl disable opencode2api-manager-deb >/dev/null 2>&1 || true
+      systemctl stop opencode2api >/dev/null 2>&1 || true
+      systemctl disable opencode2api >/dev/null 2>&1 || true
     fi
     ;;
 esac

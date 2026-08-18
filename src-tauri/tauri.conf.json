@@ -61,7 +61,7 @@
           "librsvg2-2"
         ],
         "files": {
-          "/etc/systemd/system/opencode2api-manager-deb.service": "../scripts/opencode2api-manager-deb.service",
+          "/etc/systemd/system/opencode2api.service": "../scripts/opencode2api.service",
           "/etc/opencode2api/manager.env": "../scripts/manager.env"
         },
         "preInstallScript": "../scripts/preinst.sh",

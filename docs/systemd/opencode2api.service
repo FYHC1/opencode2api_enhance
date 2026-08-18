@@ -4,30 +4,33 @@
 # deb 包将二进制装到 /usr/bin/opencode2api。
 #
 # ⚠️ 自 v1.5.3 起：deb 包已内置本服务并自动注册（随包装入
-#    /etc/systemd/system/opencode2api-manager-deb.service），无需手动复制本文件！
+#    /etc/systemd/system/opencode2api.service），无需手动复制本文件！
 #    安装 deb 后直接：
-#       sudo systemctl status opencode2api-manager-deb
-#    首次建议先修改 /etc/opencode2api/manager.env（默认密码 CHANGE_ME）：
+#       sudo systemctl status opencode2api
+#    首次建议先修改 /etc/opencode2api/manager.env（统一网关密钥默认 CHANGE_ME；
+#    管理 WebUI 登录密码不在 env 管理，未指定时用 core 默认 123456）：
 #       sudo nano /etc/opencode2api/manager.env
-#       sudo systemctl daemon-reload && sudo systemctl restart opencode2api-manager-deb
+#       sudo systemctl daemon-reload && sudo systemctl restart opencode2api
 #
-# 本仓库脚本源：scripts/opencode2api-manager-deb.service + scripts/manager.env
+# 本仓库脚本源：scripts/opencode2api.service + scripts/manager.env
 # （tauri.conf.json bundle.linux.deb.files 负责装入 deb 包）。
 #
 # 下面是手动安装（未用 deb 自动注册时）的备用方式：
-#   sudo cp scripts/opencode2api-manager-deb.service /etc/systemd/system/
+#   sudo cp scripts/opencode2api.service /etc/systemd/system/
 #   sudo cp scripts/manager.env /etc/opencode2api/manager.env
 #   sudo systemctl daemon-reload
-#   sudo systemctl enable --now opencode2api-manager-deb
+#   sudo systemctl enable --now opencode2api
 #
 # 常用运维：
-#   journalctl -u opencode2api-manager-deb -f    # 实时日志
-#   sudo systemctl restart opencode2api-manager-deb
-#   sudo nano /etc/opencode2api/manager.env      # 改端口/密码/监听地址后：
-#   sudo systemctl daemon-reload && sudo systemctl restart opencode2api-manager-deb
+#   journalctl -u opencode2api -f            # 实时日志
+#   sudo systemctl restart opencode2api
+#   sudo nano /etc/opencode2api/manager.env  # 改端口/监听地址/网关密钥后：
+#   sudo systemctl daemon-reload && sudo systemctl restart opencode2api
 #
 # 统一网关端口（自定义网关 API 监听端口，非本服务端口）：
-#   优先级：config.json 的 gateway_port > 默认 40080（WebUI「统一网关」卡片可设，保存即生效）。
+#   优先级：OPCODE2API_GATEWAY_PORT env > config.json 的 gateway_port > 默认 40080
+#   （WebUI「统一网关」卡片可设，保存即生效）。
+# 统一网关密钥：OPCODE2API_GATEWAY_KEY env > config.json 的 gateway_key > 默认 sk-unified-local。
 
 [Unit]
 Description=opencode2api Manager (headless Web UI, deb install)
@@ -41,7 +44,7 @@ Group=opencode2api
 # deb 安装的二进制路径为 /usr/bin/opencode2api
 # -config 无需指定：壳自动使用数据目录下的 config.json（data_dir 见 manager.env）
 EnvironmentFile=-/etc/opencode2api/manager.env
-ExecStart=/usr/bin/opencode2api --headless -port ${MANAGER_PORT} -password ${MANAGER_PASSWORD} -listen ${MANAGER_LISTEN}
+ExecStart=/usr/bin/opencode2api --headless -port ${MANAGER_PORT} -listen ${MANAGER_LISTEN}
 Restart=on-failure
 RestartSec=5
 # 日志

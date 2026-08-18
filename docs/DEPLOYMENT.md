@@ -233,26 +233,31 @@ sudo systemctl status opencode2api-manager
 用 `.deb` 包安装时二进制位于 `/usr/bin/opencode2api`。
 
 **自 v1.5.3 起 deb 包自动注册 systemd 服务**（不再需要手动复制模板）：
-安装 deb 后服务 `opencode2api-manager-deb` 已启用并尝试启动：
+安装 deb 后服务 `opencode2api` 已启用并尝试启动：
 
 ```bash
-sudo systemctl status opencode2api-manager-deb
+sudo systemctl status opencode2api
 ```
 
-**首次配置**：修改环境变量文件 `/etc/opencode2api/manager.env`（端口/密码/监听地址/数据目录），然后：
+**首次配置**：修改环境变量文件 `/etc/opencode2api/manager.env`（端口/监听地址/数据目录/统一网关密钥），然后：
 
 ```bash
-sudo nano /etc/opencode2api/manager.env     # 改 MANAGER_PASSWORD（默认 CHANGE_ME）
-sudo systemctl daemon-reload && sudo systemctl restart opencode2api-manager-deb
+sudo nano /etc/opencode2api/manager.env     # 改 OPCODE2API_GATEWAY_KEY（默认 CHANGE_ME）
+sudo systemctl daemon-reload && sudo systemctl restart opencode2api
 ```
+
+> 管理 WebUI 登录密码不在 env 文件管理（避免明文密码落盘）：未指定 `-password` 时
+> core 使用默认 `123456`。
 
 **外壳备用**：若 deb 未自动注册（如旧版 deb 手动升级），可手动安装 `scripts/` 下的模板：
 
 ```bash
-sudo cp scripts/opencode2api-manager-deb.service /etc/systemd/system/
+sudo cp scripts/opencode2api.service /etc/systemd/system/
 sudo cp scripts/manager.env /etc/opencode2api/manager.env
 sudo systemctl daemon-reload
-sudo systemctl enable --now opencode2api-manager-deb
+sudo systemctl enable --now opencode2api
 ```
 
-**统一网关端口自定义**：按优先级 `config.json` 的 `gateway_port` > 默认 `40080`（WebUI「统一网关」卡片可设，保存即生效；`OPCODE2API_GATEWAY_PORT` 环境变量优先级最高，可在 `manager.env` 追加）。重启后运行中的客户端会短暂断连，需用新端口重新配置。
+**统一网关端口自定义**：按优先级 `OPCODE2API_GATEWAY_PORT` 环境变量 > `config.json` 的 `gateway_port` > 默认 `40080`（WebUI「统一网关」卡片可设，保存即生效；`OPCODE2API_GATEWAY_PORT` 可在 `manager.env` 追加）。重启后运行中的客户端会短暂断连，需用新端口重新配置。
+
+**统一网关密钥自定义**：按优先级 `OPCODE2API_GATEWAY_KEY` 环境变量（在 `manager.env` 设置，默认 `CHANGE_ME`）> `config.json` 的 `gateway_key` > 默认 `sk-unified-local`。客户端调用统一网关 API 时以该密钥作为 Bearer 鉴权；也可在 WebUI「统一网关」卡片设置，保存即生效。
