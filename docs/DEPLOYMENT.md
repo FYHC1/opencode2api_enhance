@@ -24,10 +24,10 @@ sudo chown -R opencode2api:opencode2api /var/lib/opencode2api
 3. 安装 systemd 服务：
 
 ```bash
-sudo install -m 0644 docs/systemd/opencode2api-manager.service /etc/systemd/system/
+sudo install -m 0644 docs/systemd/opencode2api.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now opencode2api-manager
-sudo systemctl status opencode2api-manager
+sudo systemctl enable --now opencode2api
+sudo systemctl status opencode2api
 ```
 
 4. 浏览器访问管理端口（headless 模式托管打包好的前端 `dist/`，纯浏览器完成全部管理）。
@@ -77,10 +77,10 @@ sudo systemctl status opencode2api-manager
 ### 5. systemd 运维
 
 ```bash
-sudo systemctl enable opencode2api-manager   # 开机自启
-sudo systemctl start opencode2api-manager
-sudo systemctl status opencode2api-manager
-journalctl -u opencode2api-manager -f        # 查看日志
+sudo systemctl enable opencode2api   # 开机自启
+sudo systemctl start opencode2api
+sudo systemctl status opencode2api
+journalctl -u opencode2api -f        # 查看日志
 ```
 
 ---
@@ -93,8 +93,8 @@ journalctl -u opencode2api-manager -f        # 查看日志
 docker compose up -d --build   # 或 docker build -t opencode2api-manager:latest .
 ```
 
-- 管理面板：浏览器访问 `http://127.0.0.1:40000`（默认密码 `123456`，生产务必改——
-  在 `docker-compose.yml` 取消 `command` 注释换成你自己的密钥）
+- 管理面板：浏览器访问 `http://127.0.0.1:40000`（默认**无鉴权**——compose 显式 `-password ""`；
+  如需开启管理鉴权，在 `docker-compose.yml` 取消 `command` 注释换成你自己的密钥）
 - 统一网关：`http://127.0.0.1:40080/v1`
 - 数据持久化：卷 `manager-data` 挂载到 `/data`（`OPCODE2API_DATA_DIR`），升级容器不丢实例/配置/日志
 - 端口三件套：`OPCODE2API_DATA_DIR` / `OPCODE2API_GATEWAY_PORT` / `OPCODE2API_INSTANCE_BASE_PORT` 均可环境变量覆盖
@@ -199,7 +199,7 @@ sudo install -m 0644 config.example.json /opt/opencode2api/config.json
 sudo install -d -m 0755 /var/lib/opencode2api
 ```
 
-创建 `/etc/systemd/system/opencode2api-manager.service`：
+创建 `/etc/systemd/system/opencode2api.service`：
 
 ```ini
 [Unit]
@@ -224,8 +224,8 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable --now opencode2api-manager
-sudo systemctl status opencode2api-manager
+sudo systemctl enable --now opencode2api
+sudo systemctl status opencode2api
 ```
 
 #### deb 安装版模板（Debian 13+）
@@ -246,8 +246,9 @@ sudo nano /etc/opencode2api/manager.env     # 改 OPCODE2API_GATEWAY_KEY（默�
 sudo systemctl daemon-reload && sudo systemctl restart opencode2api
 ```
 
-> 管理 WebUI 登录密码不在 env 文件管理（避免明文密码落盘）：未指定 `-password` 时
-> core 使用默认 `123456`。
+> 管理 WebUI 鉴权**默认关闭**（core 默认空密码，登录页不会拦截页面/接口，避免
+> 「设了密码但没有登录步骤导致数据无法加载」）。如需开启，在服务 `ExecStart`
+> 显式追加 `-password <密码>`（壳会透传给 core，同时作为 `/v1` API 密钥）。
 
 **外壳备用**：若 deb 未自动注册（如旧版 deb 手动升级），可手动安装 `scripts/` 下的模板：
 

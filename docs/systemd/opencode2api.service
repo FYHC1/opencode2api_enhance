@@ -8,7 +8,8 @@
 #    安装 deb 后直接：
 #       sudo systemctl status opencode2api
 #    首次建议先修改 /etc/opencode2api/manager.env（统一网关密钥默认 CHANGE_ME；
-#    管理 WebUI 登录密码不在 env 管理，未指定时用 core 默认 123456）：
+#    管理 WebUI 鉴权默认关闭——core 默认空密码，不在 env 管理；如需开启
+#    在服务 ExecStart 显式追加 -password <密码>）：
 #       sudo nano /etc/opencode2api/manager.env
 #       sudo systemctl daemon-reload && sudo systemctl restart opencode2api
 #

@@ -27,7 +27,7 @@ case "$1" in
     fi
 
     # 4) 首次安装提示（统一网关密钥默认 CHANGE_ME，可改 /etc/opencode2api/manager.env；
-    #    管理 WebUI 登录密码不在 env 管理，未指定时用 core 默认 123456）
+    #    管理 WebUI 鉴权默认关闭（core 默认空密码），需要时在服务 ExecStart 加 -password）
     if [ -f /etc/opencode2api/manager.env ] && grep -q CHANGE_ME /etc/opencode2api/manager.env; then
       echo "opencode2api: 请修改 /etc/opencode2api/manager.env 中的 OPCODE2API_GATEWAY_KEY（默认 CHANGE_ME）"
       echo "opencode2api: 改后执行: sudo systemctl daemon-reload && sudo systemctl restart opencode2api"

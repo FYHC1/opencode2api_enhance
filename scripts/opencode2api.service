@@ -7,8 +7,9 @@
 # 端口/数据目录/网关密钥不写死在本文件，统一从 EnvironmentFile 读取：
 #   /etc/opencode2api/manager.env   （随包提供模板，改后 daemon-reload + restart）
 #
-# 管理 WebUI 登录密码：不在 env 文件管理（避免明文密码落盘）；
-# 未指定 -password 时 core 使用默认 123456。
+# 管理 WebUI 鉴权：默认关闭（core 默认空密码，登录页不会拦截页面/接口）。
+# 需要开启时在下方 ExecStart 显式追加 -password <密码>（壳会透传给 core，
+# 同时作为 /v1 API 密钥；页面将 302 到 /login 登录）。
 #
 # 手动安装（未用 deb 自动注册时）：
 #   sudo cp opencode2api.service /etc/systemd/system/
