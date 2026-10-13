@@ -1,6 +1,6 @@
 # 阶段 W1：opencode 免费通道身份修复 + windsurf 厂商零残留移除
 
-> **状态：** 实施中
+> **状态：** 已完成（代码/构建/vet/全量单测全绿；验收 #10 真实对话复测待上游出口风控解除）
 > **For agentic workers:** 按 Task 顺序执行；每 Task 测完再进下一 Task。
 > **交接提示词**见文末「给接手 AI 的完整提示词」。
 > **元规范:** `docs/ai-framework/phased-plan-driven.md`
@@ -296,20 +296,37 @@
 
 ## 验收标准总表
 
-| # | 标准 | 通过条件 | 验证责任人 |
-|---|------|----------|----------|
-| 1 | `ses_` 前缀含时间语义 | 单测断言反解时间与 `now` 差 < 60s 且以 `ffe` 结尾 | 自动化（执行方） |
-| 2 | `msg_` 前缀含时间语义 | 单测断言以 `001` 结尾且反解时间接近 `now` | 自动化（执行方） |
-| 3 | 格式不变 | `^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$`、`^msg_...$/`、总长 30 | 自动化（执行方） |
-| 4 | 会话稳定性不回退 | 既有 `TestChatFreeTierSessionAutoInit` 等仍全绿 | 自动化（执行方） |
-| 5 | windsurf 零残留 | `rg --no-ignore -i windsurf` 仅剩白名单项 | 自动化（执行方） |
-| 6 | 编译 | `go build ./...` exit 0 | 自动化（执行方） |
-| 7 | 单测 | `go test -count=1 ./...` exit 0 | 自动化（执行方） |
-| 8 | 静态检查 | `go vet ./...` exit 0 | 自动化（执行方） |
-| 9 | 老配置兼容 | 文档化「告警+静默跳过+回落 opencode」，不 panic（已由代码路径核实） | 人工（执行方） |
-| 10 | 真实对话复测 | 出口 IP 恢复后，用真实客户端打 opencode 免费模型，观察 403 是否消失 | 端到端（用户） |
-| 11 | 代码审查 | 审查结论 ✅ 或 ⚠️（问题已登记） | 独立角色 |
-| 12 | 红线 | `git ls-files` 无敏感文件 | 自动化（执行方） |
+| # | 标准 | 通过条件 | 验证责任人 | 结果 |
+|---|------|----------|----------|------|
+| 1 | `ses_` 前缀含时间语义 | 单测断言反解时间与 `now` 差 < 60s 且以 `ffe` 结尾 | 自动化（执行方） | ✅ `TestSessionIDStringCarriesFreshTimestamp` / `TestEncodeIDPrefixFingerprint` PASS |
+| 2 | `msg_` 前缀含时间语义 | 单测断言以 `001` 结尾且反解时间接近 `now` | 自动化（执行方） | ✅ `TestRequestIDStringCarriesFreshTimestamp` PASS |
+| 3 | 格式不变 | `^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$`、`^msg_...$/`、总长 30 | 自动化（执行方） | ✅ `TestCanonicalIDFormat`（500 轮）PASS |
+| 4 | 会话稳定性不回退 | 既有 `TestChatFreeTierSessionAutoInit` 等仍全绿 | 自动化（执行方） | ✅ `ok vendors/opencode 4.045s` |
+| 5 | windsurf 零残留 | `rg --no-ignore -i windsurf` 仅剩白名单项 | 自动化（执行方） | ✅ 代码层 0 命中；仅剩归档/本地笔记/生成物/UI 风格注释（见下「白名单」） |
+| 6 | 编译 | `go build ./...` exit 0 | 自动化（执行方） | ✅ exit 0 |
+| 7 | 单测 | `go test -count=1 ./...` exit 0 | 自动化（执行方） | ✅ 10 个包全 ok，exit 0 |
+| 8 | 静态检查 | `go vet ./...` exit 0 | 自动化（执行方） | ✅ exit 0 |
+| 9 | 老配置兼容 | 文档化「告警+静默跳过+回落 opencode」，不 panic（已由代码路径核实） | 人工（执行方） | ✅ 已核实代码路径并写入 issue-log |
+| 10 | 真实对话复测 | 出口 IP 恢复后，用真实客户端打 opencode 免费模型，观察 403 是否消失 | 端到端（用户） | ⬜ **未做**（出口被上游风控，见「跳过项」） |
+| 11 | 代码审查 | 审查结论 ✅ 或 ⚠️（问题已登记） | 独立角色 | ⬜ 进行中（只读子代理） |
+| 12 | 红线 | `git ls-files` 无敏感文件 | 自动化（执行方） | ✅ 无敏感文件；`git diff main..HEAD` 无密钥字面量 |
+
+### 额外达成的强证据（计划外，价值最高）
+
+| 项 | 内容 | 证据 |
+|----|------|------|
+| 黄金向量 | `encodeIDPrefix(1791863795593, 1, true) == "ecc985076ffe"`，与官方 CLI 真实会话 `ses_ecc985076ffe3FWJqsz05vQbUW` **逐位一致**；该前缀反解为 `2026-10-13T03:56:35Z`（= 会话创建时刻） | `TestEncodeIDPrefixMatchesOfficialCLI` PASS；PowerShell 独立复算一致 |
+| 5 个真实样本交叉验证 | 对官方 CLI 日志/会话 API 里的 5 个真实标识符反解，秒级吻合：`msg_133b6a43c001…`→05:22:50（日志 05:22:50.268 **0s**）、`msg_13372d58c001…`→04:08:46（日志 04:08:47）、`ses_ecc8d2af1ffe…`→04:08:46（日志 04:08:47）、`ses_ecc4d1c39ffe…`→05:18:44（日志 05:18:52）、`ses_ecc985076ffe…`→03:56:35 | PowerShell 独立复算（低 48 位 795 天回绕，按 2026-10 选 k） |
+| 官方 CLI 对照 | 本机 `opencode serve` 日志证明：12:08 它经我们的网关（`oc-local-40080`）携带**合法原生会话**仍 403 —— 即我们的网关**丢弃**了客户端会话，正是 PR #4787 场景 | `~/.local/share/opencode/log/opencode.log` 04:08:47Z / 05:22:51Z |
+
+### 白名单（有意保留，非残留）
+
+| 类别 | 条目 | 理由 |
+|------|------|------|
+| 历史归档 | `CHANGELOG.md`、`docs/issue-log/2026-08~10-08*.md`、`docs/EXECUTION-PLAN.md`、`docs/REVIEW-CONCURRENCY.md`、`docs/ACCEPTANCE-E2E.md`、`architecture.md.bak`、`docs/ai-framework/plans/2026-08-31-*.md` | 历史记录，改了反而失真 |
+| 生成物 | `config_history.jsonl`（只追加的配置审计流水，`config_trace.go` 只写不读）、`postmortem/*.json(.tmp)` | 删=删审计历史 |
+| UI 风格致敬 | `src/index.css:4`、`src/components/TitleBar.tsx:8`、`src-tauri/src/lib.rs:16`、`README.md:14,22` | 指「Windsurf Account Manager 的视觉风格」，前端无任何内建厂商列表（已核实） |
+| 本阶段文档 | 本计划文件、`docs/issue-log/2026-10-13.md` | 描述「移除 windsurf」这件事本身 |
 
 ---
 
