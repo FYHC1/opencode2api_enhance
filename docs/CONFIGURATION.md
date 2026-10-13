@@ -84,18 +84,6 @@ SOCKS5 代理列表。
       "enabled": true
     },
     {
-      "id": "windsurf",
-      "type": "windsurf",
-      "name": "Devin/Windsurf",
-      "enabled": true,
-      "params": {
-        "min_available": 3,
-        "quota_threshold": 20,
-        "cooldown_seconds": 86400,
-        "store_file": ""
-      }
-    },
-    {
       "id": "myglm",
       "type": "custom",
       "name": "智谱 GLM",
@@ -110,15 +98,6 @@ SOCKS5 代理列表。
   ]
 }
 ```
-
-#### windsurf 池型厂商参数（`params`）
-
-| 参数 | 默认 | 说明 |
-|---|---|---|
-| `min_available` | **3** | 账号池保持的最小可用号数。**不足时由后台并行补齐（不阻塞用户请求）**：请求前快速检查，可用 ≥1 立即放行，差额由一个后台注册 goroutine 补齐（single-flight 防并发风暴）。配高一些（如 5-10）可支撑更大并发/更多无感换号余量 |
-| `quota_threshold` | 20 | 全池最低剩余额度（%）≤ 此值时触发后台预注册新号 |
-| `cooldown_seconds` | 86400（24h） | 换号/耗尽后的账号冷却时长，到期自动回池复用 |
-| `store_file` | 数据目录下 `windsurf_accounts.json` | 账号库持久化路径（跨重启复用账号，不重复注册） |
 
 #### custom 自定义模型源参数（`params`）
 
@@ -143,16 +122,12 @@ SOCKS5 代理列表。
 >
 > 注意：以 `_` 开头的 params 键保留给 core 运行时注入（Transport 等），配置中的同名键会被忽略。
 
-**账号池行为**：请求 swe 时——有可用号立即用（绝不等待注册）；池空时同步注册 1 个恢复服务，其余后台补齐；流中报错自动无感换号（需要备用号，由 `min_available` 保证）；失败账号标记 Dry+冷却，冷却结束自动回池。
-
 ### `routing`（模型路由）
 
 ```json
 {
   "routing": {
-    "model_provider_map": {
-      "swe-1-6-slow": "windsurf"
-    },
+    "model_provider_map": {},
     "default_provider": "opencode"
   }
 }

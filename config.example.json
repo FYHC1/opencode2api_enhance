@@ -26,9 +26,7 @@
     }
   ],
   "routing": {
-    "model_provider_map": {
-      "swe-1-6-slow": "windsurf"
-    },
+    "model_provider_map": {},
     "default_provider": "opencode"
   },
   "reasoning_effort_map": {

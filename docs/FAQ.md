@@ -102,7 +102,7 @@ token: 输入 0 / 输出 0 · 耗时 -
 2. id == `big-pickle`；
 3. 6 个硬编码 id：deepseek-v4-flash / mimo-v2.5 / ling-3.0-flash / nemotron-3-ultra / north-mini-code / laguna-s-2.1。
 
-而 `/v1/models` 展示层（`listModelsHandler` → `replaceModelIDsWithAliases`）会把未配别名的 `-free` 后缀模型**去掉后缀**展示（如 `gpt-5.5-free` 显示为 `gpt-5.5`），厂商前缀 id（`windsurf/xxx`、`zen/xxx`）也不在白名单内。因此当上游免费模型目录里没有命中白名单的条目时，就会显示该提示。
+而 `/v1/models` 展示层（`listModelsHandler` → `replaceModelIDsWithAliases`）会把未配别名的 `-free` 后缀模型**去掉后缀**展示（如 `gpt-5.5-free` 显示为 `gpt-5.5`），厂商前缀 id（`src1/xxx`、`zen/xxx`）也不在白名单内。因此当上游免费模型目录里没有命中白名单的条目时，就会显示该提示。
 
 **影响：** 仅少一层真实 chat 往返的验证，不影响可用性判定。
 

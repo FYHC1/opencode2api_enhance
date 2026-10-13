@@ -95,7 +95,7 @@ func (m *Manager) buildOpenCodeCfg(singboxPort uint16, probe bool) ([]byte, erro
 		"show_node_prefix": appCfg.ShowNodePrefix,
 	}
 	if !probe {
-		// 透传厂商注册表 + 路由：实例子进程与核心一致，能注册多厂商（如 windsurf）
+		// 透传厂商注册表 + 路由：实例子进程与核心一致，能注册多厂商（如 custom）
 		cfg = injectVendorConfig(cfg, appCfg)
 		// auto 虚拟模型配置透传：实例子进程同样支持 model:"auto"（候选=本实例模型）。
 		if appCfg.AutoModel != nil {
@@ -174,7 +174,7 @@ func (m *Manager) buildRouterCfg(singboxPorts []uint16, portNames map[uint16]str
 	applyIf("rate_limit_cooldown_sec", int64(appCfg.RateLimitCooldownSec))
 	applyIf("rate_limit_backoff_base_ms", int64(appCfg.RateLimitBackoffBaseMS))
 	applyIf("rate_limit_backoff_cap_ms", int64(appCfg.RateLimitBackoffCapMS))
-	// 透传厂商注册表 + 路由：网关子进程与核心一致，能注册多厂商（如 windsurf）
+	// 透传厂商注册表 + 路由：网关子进程与核心一致，能注册多厂商（如 custom）
 	cfg = injectVendorConfig(cfg, appCfg)
 	// auto 虚拟模型配置透传：网关子进程在「实例×模型」矩阵上做加权选择。
 	if appCfg.AutoModel != nil {
@@ -185,7 +185,7 @@ func (m *Manager) buildRouterCfg(singboxPorts []uint16, portNames map[uint16]str
 
 // injectVendorConfig 把管理器配置里的厂商注册表与路由写入子进程配置。
 // 子进程（实例子进程 / 网关子进程）与核心同二进制，读同一格式的 opencode2api.json，
-// 不带 providers 则只认 opencode —— 多厂商（windsurf 等）在 exe 实例/网关形态下不可用。
+// 不带 providers 则只认 opencode —— 多厂商在 exe 实例/网关形态下不可用。
 func injectVendorConfig(cfg map[string]any, appCfg Config) map[string]any {
 	if len(appCfg.Providers) > 0 {
 		cfg["providers"] = appCfg.Providers

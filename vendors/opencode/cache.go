@@ -17,7 +17,7 @@ import (
 )
 
 // cacheDir 返回缓存目录：优先 OPCODE2API_DATA_DIR（壳按环境注入，实例子进程继承），
-// 否则用户配置目录下 opencode2api-manager（与 custom / windsurf 同规则）。
+// 否则用户配置目录下 opencode2api-manager（与 custom 同规则）。
 func cacheDir() string {
 	dir := os.Getenv("OPCODE2API_DATA_DIR")
 	if dir == "" {

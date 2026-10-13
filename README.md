@@ -159,7 +159,7 @@ npm run tauri:dev
 ┌──────────────────▼───────────────────────────────┐
 │  Go core 管理器（core/manager + main 包）          │
 │  实例/网关/节点/扫描/统计/日志/配置 + 协议转换       │
-│  vendors/opencode · windsurf · custom（多厂商）    │
+│  vendors/opencode · custom · remote（多厂商）      │
 └──────────────────┬───────────────────────────────┘
                    │ 子进程管理
 ┌──────────────────▼──────────────────────────┐
@@ -170,7 +170,7 @@ npm run tauri:dev
 
 - **Tauri 壳**：只做窗口/托盘/内嵌二进制释放/拉起 core 管理器（`src-tauri/src/lib.rs`），管理职责全部在 Go core；headless 端（Docker/Web）不依赖壳，同一 core 直接监听 HTTP 提供完整管理 UI
 - **Go core**：一份实现服务所有端（桌面 exe / Web 浏览器 / Docker），经 `/api/admin/*` HTTP 暴露；协议转换（OpenAI/Anthropic/Responses）与厂商契约在 main 包 + `core/contract`
-- **多厂商**：`vendors/opencode`（第一厂商）、`vendors/windsurf`（账号池型：无号自动注册/额度预注册/24h 冷却/无感换号）、`vendors/custom`（自定义模型源：自带 Key 接入第三方供应商，四协议 + 多 Key 池）
+- **多厂商**：`vendors/opencode`（第一厂商，免费源）、`vendors/custom`（自定义模型源：自带 Key 接入第三方供应商，四协议 + 多 Key 池）、`vendors/remote`（插件商子进程厂商）
 - **环境隔离**：正式版 / dev（tauri dev）/ 便携测试（portable.txt）/ Docker 各自独立数据目录与**端口槽位**
   （40000 起每环境一段；sing-box = 实例端口 +2000 紧挨），互不干扰，新开环境无需手动配端口
 - **端口配置化**：来源优先级 环境变量 > config.json（gateway_port/instance_base_port/probe_*_port）> 编译默认
@@ -191,7 +191,6 @@ core/                     # Go 核心层
   manager/                # 管理域（实例/网关/节点/扫描/统计/日志/配置）
 vendors/                  # 厂商层（一厂商 = 一文件夹，新增供应商零 core 改动）
   opencode/               # 第一厂商（免费源）
-  windsurf/               # 第二厂商（账号池型免费源）
   custom/                 # 自定义模型源（四协议 + 多 Key 池 + 目录缓存）
 bin/                      # 内嵌子程序源（opencode2api.exe / sing-box.exe）
 docs/                     # 部署/自定义模型/性能模式/TESTING/FAQ 等文档

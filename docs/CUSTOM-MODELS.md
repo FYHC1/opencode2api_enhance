@@ -1,6 +1,6 @@
 # 自定义模型源使用指南
 
-> 面板第七页「自定义模型」——用你自己的 API Key 接入任意第三方模型供应商，与内建的免费源（OpenCode / Devin-Windsurf）并列聚合在同一个网关下。
+> 面板第七页「自定义模型」——用你自己的 API Key 接入任意第三方模型供应商，与内建的免费源（OpenCode）并列聚合在同一个网关下。
 
 ## 这是什么
 
@@ -94,7 +94,7 @@ curl http://127.0.0.1:40080/v1/chat/completions \
 
 ## 生效机制（为什么不用重启）
 
-- **保存**：写入核心配置 → 厂商集合**原地重建**（opencode 会话、windsurf 账号池状态保留）→ 模型目录立即刷新
+- **保存**：写入核心配置 → 厂商集合**原地重建**（opencode 会话等厂商内部状态保留）→ 模型目录立即刷新
 - **子进程传播**：自定义源会同步补写进所有已存在实例与统一网关的 runtime 配置；**运行中的子进程**靠 1 秒配置监视热重载——它们的 `/v1/models` 不重启即出现自定义模型；**停着的实例**下次启动自动带上
 - **重启后**：模型清单磁盘缓存（`<数据目录>/custom_models/<源ID>.json`，原子写）保证首请求即返回，后台再向上游刷新修正
 
@@ -106,7 +106,6 @@ curl http://127.0.0.1:40080/v1/chat/completions \
 {
   "providers": [
     { "id": "opencode", "type": "opencode", "enabled": true },
-    { "id": "windsurf", "type": "windsurf", "enabled": true },
     {
       "id": "myglm",
       "type": "custom",

@@ -79,7 +79,7 @@ type AppConfig struct {
 // ProviderCfg 描述一个模型厂商（vendors/ 下的实现）。
 type ProviderCfg struct {
 	ID   string `json:"id"`   // 厂商标识，与厂商实现 ID() 一致（如 "opencode"）
-	Type string `json:"type"` // 厂商类型（"opencode" | "windsurf" | "custom" | ...），用于选择实现
+	Type string `json:"type"` // 厂商类型（"opencode" | "custom" | ...），用于选择实现
 	Name string `json:"name,omitempty"`
 	// Enabled 开关；nil 视为 true。
 	Enabled *bool `json:"enabled,omitempty"`

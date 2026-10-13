@@ -257,7 +257,6 @@ model:"auto"（OpenAI / Claude / Responses 三入口，含流式）
 | 厂商/模型 | Tier | 含义 |
 |---|---|---|
 | opencode 免费模型（内建） | **恒 TierFree** | 永远走代理池，不看任何开关 |
-| windsurf（内建账号池） | 自有直连客户端 | 不经代理池（历史行为） |
 | **自定义模型源** | `via_proxy=true` → TierFree；`false`（默认）→ TierPaid | 仅此开关控制（`vendors/custom` 的 `tier()`），与实例池 `route_mode` **互不相干** |
 
 TierFree = `Transport.Client` 返回 SOCKS 池客户端；TierPaid = 裸直连客户端（`socks.go` 的
