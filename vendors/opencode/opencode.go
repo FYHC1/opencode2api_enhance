@@ -430,10 +430,7 @@ func randomBase62(n int) string {
 // ---------------------------------------------------------------------------
 // 身份串前缀编码（2026-10-13 修复 403 FreeTierError）
 // ---------------------------------------------------------------------------
-
-// idTimeShift 是标识符时间戳的左移位数：低 12 位留给同毫秒内的自增计数器。
-const idTimeShift = 12
-
+//
 // 上游 Zen 自 opencode 1.19.0 起不再只做正则校验：它把身份串的前 12 位十六进制**解码**为
 // 标识符时间戳，语义等价于官方 Identifier：
 //
@@ -450,7 +447,10 @@ const idTimeShift = 12
 //
 // 证据：上游 issue #4780 / PR #4786；本项目取证见
 // docs/ai-framework/plans/2026-10-13-opencode-403-and-windsurf-removal.md。
-//
+
+// idTimeShift 是标识符时间戳的左移位数：低 12 位留给同毫秒内的自增计数器。
+const idTimeShift = 12
+
 // encodeIDPrefix 把毫秒时间戳编码为 12 位小写十六进制前缀（低 48 位，大端）。
 // descending=true 取反（会话/降序语义），false 保持升序（请求/升序语义）。
 func encodeIDPrefix(ms int64, counter uint64, descending bool) string {
