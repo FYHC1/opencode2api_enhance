@@ -64,6 +64,9 @@ linux-out/
 test_picture/
 
 # Plugin provider packages (local build artifacts)
+# 本地插件供应商工作副本（vibex 等）：安装方式是整目录拷进 providers/<id>，
+# 且 provider.json 用来放 Cookie/令牌，不能进 git（AGENTS 强制第 3 条）。
+plugin/
 providers/
 
 # R&D process docs (not part of the released product)
