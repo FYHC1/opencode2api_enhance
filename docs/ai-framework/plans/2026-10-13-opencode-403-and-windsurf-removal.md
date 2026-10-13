@@ -339,6 +339,34 @@
 | 会话/请求计数器独立 | `ses_ecc8d2af1ffe`（04:08:46）与 `msg_13372d58c001`（04:08:46）同毫秒且**都是 counter=1** → 官方确为两个独立生成器 | 同上反解脚本 |
 | 官方 CLI 对照 | 本机 `opencode serve` 日志证明：12:08 它经我们的网关（`oc-local-40080`）携带**合法原生会话**仍 403 —— 即我们的网关**丢弃**了客户端会话，正是 PR #4787 场景 | `~/.local/share/opencode/log/opencode.log` 04:08:47Z / 05:22:51Z |
 
+### 抓包实测结论（2026-10-13 16:00，**翻转了本阶段的一条推论**）
+
+用 `OPENCODE_CONFIG_CONTENT`（不改用户配置）把官方 CLI 原生 `opencode` provider 的 `options.baseURL` 指向本地捕获服务器，抓到官方 1.18.14 的**真实上游请求头**：
+
+```
+Authorization: Bearer public
+Content-Type: application/json
+User-Agent: opencode/1.18.14 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14
+x-opencode-client: cli
+x-opencode-project: global
+x-opencode-session: ses_ecbb5c9b3ffe…      ← 结尾 ffe（降序时间戳）✓
+x-opencode-request: msg_1344a3698001…      ← 结尾 001（升序时间戳）✓
+Connection: keep-alive
+Accept: */*
+Accept-Encoding: gzip, deflate, br, zstd
+```
+
+| 结论 | 说明 |
+|------|------|
+| ✅ 本修复的编码**被反向验证** | 官方真实串同样是 `ffe`/`001`、counter=1，与本实现逐位同构 |
+| ✅ 官方身份头与本项目**几乎逐头一致** | 我们不缺任何 `x-opencode-*` 头（`x-opencode-ticket` 只用于本地 PTY 端点、值恒 `"1"`，与 LLM 无关） |
+| ❌ **今日 403 不能用请求头解释** | 官方头 + 官方**真实会话**原样重放上游，仍 **403**；换 `Accept`、换 body、加 `max_tokens`/`temperature`/system 均 403 |
+| ❌ 官方 CLI 本体此刻**也不通** | 不经任何覆盖直连上游 → **卡住 3 分钟无响应**；Node `fetch`(undici) 同头重放 → `fetch failed`；流式请求出现连接级失败（`http=000`） |
+
+**必须记录的一处更正**：本阶段中途我曾据「官方 CLI 打印 OK」推断「官方能过门禁、我们不能，故差异在头」。该判断**错误** —— 那次 `OK` 来自官方 CLI 被我指向的**本地捕获服务器**（恒返 200），并非上游。经复核，官方 CLI 直连上游同样拿不到 200。
+
+**修正后的定位**：今日 403 的剩余可能成因是**上游侧新增的服务端门禁/配额**，或**请求体 / 客户端 TLS·HTTP2 指纹**差异 —— 二者都**不在** 4 个 PR 与本阶段修复的覆盖范围内。本阶段修复的价值在于「消除一处与官方格式的确凿偏差」，**不等于**「消除今日 403」。
+
 ### 白名单（有意保留，非残留）
 
 | 类别 | 条目 | 理由 |
