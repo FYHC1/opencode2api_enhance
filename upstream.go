@@ -166,17 +166,10 @@ func chatViaVendor(ctx context.Context, v contract.Vendor, upstreamBody []byte, 
 	} else {
 		seedVendorCatalog(v)
 	}
-	// 池型厂商（PoolVendor）：请求前保证可用账号——池空自动注册，用户无感。
-	// 等待受请求 ctx 约束（客户端断开立即中止），不自造 Background + 固定超时。
-	if pv, ok := v.(contract.PoolVendor); ok {
-		if err := pv.EnsureReady(ctx); err != nil {
-			return nil, fmt.Errorf("%s: 无可用账号且自动注册失败: %w", v.ID(), err)
-		}
-	}
 	msg := &contract.Message{
 		Model: modelID,
-		// 归一化消息：非 opencode 厂商（如 windsurf 账号池）不读 KeyRawBody，
-		// 走 Messages 字段；opencode 仍优先读 Extra[KeyRawBody]，此字段对其无副作用。
+		// 归一化消息：非 opencode 厂商不读 KeyRawBody，走 Messages 字段；
+		// opencode 仍优先读 Extra[KeyRawBody]，此字段对其无副作用。
 		Messages: rawBodyToContractMessages(upstreamBody),
 		Extra: map[string]any{
 			opencode.KeyRawBody:    upstreamBody,
@@ -200,16 +193,9 @@ func chatViaVendorStream(ctx context.Context, v contract.Vendor, upstreamBody []
 	} else {
 		seedVendorCatalog(v)
 	}
-	// 池型厂商（PoolVendor）：请求前保证可用账号——池空自动注册，用户无感。
-	// 等待受请求 ctx 约束（客户端断开立即中止），不自造 Background + 固定超时。
-	if pv, ok := v.(contract.PoolVendor); ok {
-		if err := pv.EnsureReady(ctx); err != nil {
-			return nil, fmt.Errorf("%s: 无可用账号且自动注册失败: %w", v.ID(), err)
-		}
-	}
 	msg := &contract.Message{
 		Model: modelID,
-		// 归一化厂商（windsurf 池型）读 Messages 字段；opencode 仍走 Extra[KeyRawBody]。
+		// 归一化厂商读 Messages 字段；opencode 仍走 Extra[KeyRawBody]。
 		Messages: rawBodyToContractMessages(upstreamBody),
 		Extra: map[string]any{
 			opencode.KeyRawBody:    upstreamBody,
@@ -247,7 +233,7 @@ func chatViaVendorStream(ctx context.Context, v contract.Vendor, upstreamBody []
 
 // rawBodyToContractMessages 从 OpenAI Chat 形态请求体提取归一化消息。
 // content 保持 string / 数组两种形态（与 contract.Msg.Content 语义一致），
-// 供非 opencode 厂商（windsurf 等）经 contract.Message.Messages 读取。
+// 供非 opencode 厂商（如 custom）经 contract.Message.Messages 读取。
 func rawBodyToContractMessages(body []byte) []contract.Msg {
 	var req struct {
 		Messages []json.RawMessage `json:"messages"`

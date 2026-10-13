@@ -1,7 +1,6 @@
 // Package contract 定义厂商与 core 之间的"数据线束"契约。
 //
 // 每个厂商（vendors/ 下的子文件夹）必须实现 Vendor 接口；
-// 账号池型厂商（如 windsurf）在此基础上可选实现 PoolVendor 接口。
 // core 只认本包的契约，厂商之间互不感知。
 package contract
 
@@ -25,7 +24,7 @@ type Capabilities struct {
 // Model 是厂商模型目录中的一条记录。
 type Model struct {
 	ID       string            // 厂商内部模型名（如 opencode 的 deepseek-v4-flash-free）
-	Provider string            // 厂商 ID（如 "opencode" / "windsurf"）
+	Provider string            // 厂商 ID（如 "opencode" / "custom"）
 	Free     bool              // 是否免费额度模型
 	Caps     Capabilities      // 能力元数据（可选，未知则零值）
 	Meta     map[string]string // 平台附加信息（如 opencode 的目录面 "surface":"zen"|"go"）
@@ -168,9 +167,9 @@ type VendorHealth struct {
 
 // Vendor 是每个厂商子文件夹必须实现的"数据线束"接口。
 type Vendor interface {
-	// ID 返回厂商唯一标识（如 "opencode"、"windsurf"），须与配置 providers[].id 一致。
+	// ID 返回厂商唯一标识（如 "opencode"），须与配置 providers[].id 一致。
 	ID() string
-	// Name 返回厂商展示名（如 "OpenCode"、"Devin/Windsurf"）。
+	// Name 返回厂商展示名（如 "OpenCode"）。
 	Name() string
 
 	// ListModels 拉取厂商动态模型目录；core 做聚合与缓存。
@@ -194,35 +193,4 @@ type Vendor interface {
 
 	// Health 返回厂商健康状态。
 	Health() VendorHealth
-}
-
-// PoolVendor 是账号池型厂商的可选扩展接口。
-// core 用类型断言发现并调用"账号运维"能力：
-// 请求前 EnsureReady 保证有可用账号（必要时自动注册），
-// 选取账号、额度阈值预注册、24h 冷却等都由厂商内部实现。用户全程无感。
-type PoolVendor interface {
-	Vendor
-
-	// EnsureReady 保证至少有一个可用账号；无可用账号时自动注册新号（可能阻塞，可后台）。
-	EnsureReady(ctx context.Context) error
-
-	// PoolStatus 返回账号池状态（可用数/冷却数/是否枯竭/最低额度）。
-	PoolStatus() PoolStatus
-
-	// Acquire 借出一个健康账号（受冷却与健康约束）。
-	Acquire() (AcctID, error)
-
-	// Release 归还账号（进入冷却状态）。
-	Release(id AcctID)
-}
-
-// AcctID 是池型厂商内部的账号标识（如邮箱）。
-type AcctID string
-
-// PoolStatus 描述账号池状态（供 core 分发与 UI 展示）。
-type PoolStatus struct {
-	Available int     // 可用账号数
-	Cooling   int     // 冷却中账号数
-	Drought   bool    // 全池枯竭（无可选账号）
-	QuotaMin  float64 // 全池最低剩余额度（%）
 }
