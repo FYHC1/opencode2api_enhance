@@ -427,32 +427,30 @@ func randomBase62(n int) string {
 	return string(b)
 }
 
-// ---------------------------------------------------------------------------
-// 身份串前缀编码（2026-10-13 修复 403 FreeTierError）
-// ---------------------------------------------------------------------------
-//
-// 上游 Zen 自 opencode 1.19.0 起不再只做正则校验：它把身份串的前 12 位十六进制**解码**为
-// 标识符时间戳，语义等价于官方 Identifier：
-//
-//	ses_（会话，降序）：~(BigInt(ms) * 0x1000n + counter)  取低 48 位
-//	msg_（请求，升序）： (BigInt(ms) * 0x1000n + counter)  取低 48 位
-//
-// 解码出的时间戳落在「当前时间」附近才被认定为 OpenCode 官方客户端；只满足正则但不含时间
-// 语义的前缀（历史实现是 crypto/rand 随机十六进制）被判为第三方客户端，回
-// 403 FreeTierError："can only be used from within OpenCode"。
-//
-// 可观测指纹（counter=1 时）：ses_ 前缀恒以 "ffe" 结尾、msg_ 前缀恒以 "001" 结尾。
-// 注意上游**不校验会话年龄**（合法编码的 30 天前会话仍放行），故会话保持每进程稳定即可，
-// 不可退化为每请求新建（免费档配额按会话记账，频繁新会话会打成 429）。
-//
-// 证据：上游 issue #4780 / PR #4786；本项目取证见
-// docs/ai-framework/plans/2026-10-13-opencode-403-and-windsurf-removal.md。
-
 // idTimeShift 是标识符时间戳的左移位数：低 12 位留给同毫秒内的自增计数器。
 const idTimeShift = 12
 
 // encodeIDPrefix 把毫秒时间戳编码为 12 位小写十六进制前缀（低 48 位，大端）。
 // descending=true 取反（会话/降序语义），false 保持升序（请求/升序语义）。
+//
+// 背景（2026-10-13 修复 403 FreeTierError）：9router（decolua/9router，第三方网关，
+// **不是** OpenCode 官方仓库）的 issue #4780 / PR #4786 报告，上游 Zen 自 opencode
+// 1.19.0 起不再只做正则校验，而是把身份串前 12 位十六进制**解码**为标识符时间戳，
+// 语义等价于官方 Identifier：
+//
+//	ses_（会话，降序）：~(BigInt(ms) * 0x1000n + counter)  取低 48 位
+//	msg_（请求，升序）： (BigInt(ms) * 0x1000n + counter)  取低 48 位
+//
+// 只满足正则但不含时间语义的前缀（本项目的历史实现是 crypto/rand 随机十六进制）会被判为
+// 第三方客户端并回 403 FreeTierError："can only be used from within OpenCode"。
+// 编码公式已用官方 CLI 的真实标识符 + 其日志时间戳交叉验证（见 identity_time_test.go）。
+//
+// 可观测指纹（counter=1 时）：ses_ 前缀以 "ffe" 结尾、msg_ 前缀以 "001" 结尾；counter 变化时
+// 前缀尾三位随之变化（counter=0xFFF → "fff"/"000"），故指纹只在 counter=1 时成立。
+//
+// 会话保持每进程稳定（ocOnce），不随请求重建：据 9router 报告，上游免费档配额按会话说账，
+// 频繁新建会话会打成 429。该报告同时称「会话年龄不被校验」，本仓库**未独立验证**该点，
+// 仅作为「会话可长期复用」的依据记录在此。
 func encodeIDPrefix(ms int64, counter uint64, descending bool) string {
 	v := uint64(ms)<<idTimeShift + counter
 	if descending {
@@ -463,14 +461,43 @@ func encodeIDPrefix(ms int64, counter uint64, descending bool) string {
 	return hex.EncodeToString(b[2:8]) // 仅取低 48 位（6 字节）
 }
 
+// idCounter 复刻官方「同毫秒自增计数器」语义：毫秒变化归 1，同毫秒内递增。
+// 上游用它在同一毫秒内区分标识符；若恒定取 1，同毫秒发出的多个 x-opencode-request 会共享
+// 前缀（后缀随机故不会重复，但形态与官方不一致）。会话与请求各持一个计数器，对应官方的
+// Identifier.descending("session") 与 Identifier.ascending("message") 两个独立生成器。
+type idCounter struct {
+	mu sync.Mutex
+	ms int64
+	n  uint64
+}
+
+func (c *idCounter) next(ms int64) uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if ms != c.ms {
+		c.ms = ms
+		c.n = 1
+	} else {
+		c.n++
+	}
+	return c.n
+}
+
+var (
+	sessionIDCounter idCounter
+	requestIDCounter idCounter
+)
+
 // sessionIDString 返回会话身份串主体（不含 "ses_" 前缀）。
 func sessionIDString() string {
-	return encodeIDPrefix(time.Now().UnixMilli(), 1, true) + randomBase62(14)
+	ms := time.Now().UnixMilli()
+	return encodeIDPrefix(ms, sessionIDCounter.next(ms), true) + randomBase62(14)
 }
 
 // requestIDString 返回请求身份串主体（不含 "msg_" 前缀）。
 func requestIDString() string {
-	return encodeIDPrefix(time.Now().UnixMilli(), 1, false) + randomBase62(14)
+	ms := time.Now().UnixMilli()
+	return encodeIDPrefix(ms, requestIDCounter.next(ms), false) + randomBase62(14)
 }
 
 // versionAtLeast 判断 x.y.z 版本串 a 是否 >= b（缺失段按 0，解析失败按 0）。

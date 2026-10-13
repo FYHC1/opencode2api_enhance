@@ -42,9 +42,9 @@
 同时读到的权威上游事实（issue #4780 + PR #4786 描述）：
 
 - 上游 Zen 在 opencode **1.19.0** 之后不再只做正则校验，而是把 12 位十六进制前缀**解码**为标识符时间戳：
-  - `ses_` 用 `Identifier.descending("session")` → `~(BigInt(timestamp) * 0x1000n + counter)`（因此合法 `ses_` 前缀**恒以 `ffe` 结尾**）；
-  - `msg_` 用 `Identifier.ascending("message")` → `BigInt(timestamp) * 0x1000n + 1n`（合法 `msg_` 前缀**恒以 `001` 结尾**）。
-- **会话年龄无关**：合法编码的 30 天前会话仍 200；不含时间语义的摘要/随机前缀被判为「非 OpenCode 客户端」→ `403 FreeTierError`。
+  - `ses_` 用 `Identifier.descending("session")` → `~(BigInt(timestamp) * 0x1000n + counter)`（counter=1 时合法 `ses_` 前缀以 `ffe` 结尾）；
+  - `msg_` 用 `Identifier.ascending("message")` → `BigInt(timestamp) * 0x1000n + 1n`（counter=1 时合法 `msg_` 前缀以 `001` 结尾）。
+- **会话年龄无关（9router 报告，本仓库未独立验证）**：其称合法编码的 30 天前会话仍 200；不含时间语义的摘要/随机前缀被判为「非 OpenCode 客户端」→ `403 FreeTierError`。
 - 免费档配额**按会话记账**，故会话必须**稳定**（不能每请求新造）。
 
 ### 本项目实测证据
@@ -160,7 +160,7 @@
 2. 跑：`go build ./...`
    期望：exit 0。
 3. 跑：`go test -count=1 ./vendors/opencode/`
-   期望：全绿；新增用例断言 `ses_` 前缀可反解出的毫秒与 `time.Now()` 相差 < 60s，且前缀以 `ffe` 结尾；`msg_` 前缀以 `001` 结尾。
+   期望：全绿；新增用例断言 `ses_` 前缀可反解出的毫秒与 `time.Now()` 相差 < 60s，且 counter=1 时前缀以 `ffe` 结尾；`msg_` 同理（升序，counter=1 时以 `001` 结尾）。
 4. Commit：`🐛 fix(opencode): 身份串前缀改用时间戳编码，修免费通道 403`
 
 ---
@@ -173,8 +173,8 @@
 
 1. 往返测试：`decode(encode(ms,c)) == (ms*0x1000+c) & 0xFFFFFFFFFFFF`（覆盖 0、`math.MaxInt64/0x1000`、当前时间）。
 2. 语义测试：
-   - `ses_` 前缀恒以 `ffe` 结尾（倒序 + counter=1 的必然结果）；
-   - `msg_` 前缀恒以 `001` 结尾（正序 + counter=1）；
+   - 倒序编码：counter=1 时 `ses_` 前缀以 `ffe` 结尾；
+   - 正序编码：counter=1 时 `msg_` 前缀以 `001` 结尾；
    - 反解出的时间戳与当前时间差 < 60s；
    - 正则仍满足 `^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$` / `^msg_...$/`，总长 30。
 3. 把 `free_tier_gate_test.go` 的 `TestCanonicalIDFormat` 改为对新函数的格式断言，并保留 500 次循环。
@@ -298,25 +298,45 @@
 
 | # | 标准 | 通过条件 | 验证责任人 | 结果 |
 |---|------|----------|----------|------|
-| 1 | `ses_` 前缀含时间语义 | 单测断言反解时间与 `now` 差 < 60s 且以 `ffe` 结尾 | 自动化（执行方） | ✅ `TestSessionIDStringCarriesFreshTimestamp` / `TestEncodeIDPrefixFingerprint` PASS |
-| 2 | `msg_` 前缀含时间语义 | 单测断言以 `001` 结尾且反解时间接近 `now` | 自动化（执行方） | ✅ `TestRequestIDStringCarriesFreshTimestamp` PASS |
+| 1 | `ses_` 前缀含时间语义 | 单测断言反解时间与 `now` 差 < 60s | 自动化（执行方） | ✅ `TestSessionIDStringCarriesFreshTimestamp`（200 轮 + 计数器范围）PASS |
+| 2 | `msg_` 前缀含时间语义 | 单测断言反解时间与 `now` 差 < 60s | 自动化（执行方） | ✅ `TestRequestIDStringCarriesFreshTimestamp`（200 轮）PASS |
+| 2b | **前缀时间语义有外部锚点** | 官方 CLI 真实标识符的**日志时间**与「前缀反解时间」差 ≤ 30s（双向独立数据，非自我循环） | 自动化（执行方） | ✅ `TestOfficialIDSamplesMatchLogTimestamps`（4 个真实样本，实测偏差 0~8s）PASS |
+| 2c | 同毫秒计数器语义 | 同毫秒自增、跨毫秒归 1；同毫秒内 id 不重复 | 自动化（执行方） | ✅ `TestIDCounterResetsPerMillisecond` / `TestRequestIDStringUniqueInSameMillisecond` PASS |
 | 3 | 格式不变 | `^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$`、`^msg_...$/`、总长 30 | 自动化（执行方） | ✅ `TestCanonicalIDFormat`（500 轮）PASS |
-| 4 | 会话稳定性不回退 | 既有 `TestChatFreeTierSessionAutoInit` 等仍全绿 | 自动化（执行方） | ✅ `ok vendors/opencode 4.045s` |
-| 5 | windsurf 零残留 | `rg --no-ignore -i windsurf` 仅剩白名单项 | 自动化（执行方） | ✅ 代码层 0 命中；仅剩归档/本地笔记/生成物/UI 风格注释（见下「白名单」） |
+| 4 | 会话稳定性不回退 | 既有 `TestChatFreeTierSessionAutoInit` 等仍全绿 | 自动化（执行方） | ✅ `ok vendors/opencode`（含 `-race`）PASS |
+| 4b | 真实铸造路径带时间语义 | 实际发往上游的头（chat / responses 两路）前缀可反解为当前时间 | 自动化（执行方） | ✅ `assertIdentityFresh` 接入两条铸铁路径 |
+| 5 | windsurf 无功能性残留 | `rg --no-ignore -i windsurf` 在**源码**中无功能性引用 | 自动化（执行方） | ✅ 无功能性引用（仅注释提及「已移除」、归档、本地笔记、生成物、UI 风格注释，见下「白名单」） |
 | 6 | 编译 | `go build ./...` exit 0 | 自动化（执行方） | ✅ exit 0 |
 | 7 | 单测 | `go test -count=1 ./...` exit 0 | 自动化（执行方） | ✅ 10 个包全 ok，exit 0 |
 | 8 | 静态检查 | `go vet ./...` exit 0 | 自动化（执行方） | ✅ exit 0 |
 | 9 | 老配置兼容 | 文档化「告警+静默跳过+回落 opencode」，不 panic（已由代码路径核实） | 人工（执行方） | ✅ 已核实代码路径并写入 issue-log |
 | 10 | 真实对话复测 | 出口 IP 恢复后，用真实客户端打 opencode 免费模型，观察 403 是否消失 | 端到端（用户） | ⬜ **未做**（出口被上游风控，见「跳过项」） |
-| 11 | 代码审查 | 审查结论 ✅ 或 ⚠️（问题已登记） | 独立角色 | ⬜ 进行中（只读子代理） |
+| 11 | 代码审查 | 审查结论 ✅ 或 ⚠️（问题已登记） | 独立角色 | ⚠️ 有条件通过 —— 审查提出 1 个 ❌（黄金向量测试自我循环）+ 多个 ⚠️，**已全部整改**，见下「独立审查与整改」 |
 | 12 | 红线 | `git ls-files` 无敏感文件 | 自动化（执行方） | ✅ 无敏感文件；`git diff main..HEAD` 无密钥字面量 |
 
-### 额外达成的强证据（计划外，价值最高）
+### 代码审查发现与整改（独立只读子代理，2026-10-13）
+
+| # | 级别 | 发现 | 整改 |
+|---|------|------|------|
+| R1 | ❌ | `TestEncodeIDPrefixMatchesOfficialCLI` 是**自我循环**：`realCLISessionMs` 本身由「反解该前缀」得到，而 48 位截断使 `encode(decode(P))==P` 对**任意** P 成立 → 该测试无法证伪任何自洽公式 | 删除该测试，改为 `TestOfficialIDSamplesMatchLogTimestamps`：时间取自官方 CLI **日志行的独立时间戳**（非公式反推），4 个样本实测偏差 0~8s |
+| R2 | ⚠️ | 升序 `msg_` 分支**无任何外部锚点**（只有自我循环的指纹/往返） | 新增的两个 `msg_` 真实样本（`133b6a43c001` / `13372d58c001`）+ 日志时间锚点已覆盖 |
+| R3 | ⚠️ | 计数器恒为 1（`opencode.go`），同毫秒内多个 request id 共享前缀，与官方「同毫秒自增」语义不符 | 新增 `idCounter`（同毫秒自增、跨毫秒归 1；会话/请求各一个，对应官方两个独立生成器）+ `TestIDCounterResetsPerMillisecond` |
+| R4 | ⚠️ | `free_tier_gate_test.go` 的 `validSessionID` 不是时间有效编码，且 `assertFreeTierIdentityHeaders` 只做正则 → 请求路径上的时间语义退化不会被发现 | 夹具换成官方真实会话串；新增 `assertIdentityFresh` 并接入 chat（`AutoInit`）与 responses 两条铸铁路径 |
+| R5 | ⚠️ | `upstream.go:5` 注释仍称「EnsureReady 立即收到取消」，但该钩子已随 `PoolVendor` 删除 | 改写该注释 |
+| R6 | ⚠️ | `opencode.go` 注释把 9router 说成「上游」（9router 是第三方网关，非 OpenCode 官方仓库）；「会话年龄无关」是借用未验证的断言 | 改为「9router（decolua/9router，第三方网关）」；年龄一句显式标注「本仓库未独立验证」 |
+| R7 | ⚠️ | 计划/日志把 48 位截断下的时间断言写成「恒以 ffe / 001 结尾」（只在 counter=1 时成立） | 全部限定为「counter=1 时」，并在代码注释里说明 counter=0xFFF 时为 `fff`/`000` |
+| R8 | ⚠️ | 「代码层 0 命中」字面不实（注释/路径中仍有 windsurf 字样） | 改为「无功能性引用」 |
+| R9 | ℹ️ | `docs/ACCEPTANCE-E2E.md` 的 C6 是在已删厂商上执行的 runbook | 该节标注**已作废** |
+| R10 | ℹ️ | 前缀编码的大段说明在 `e52cbbe` 后变成 detached 注释，`go doc` 不再呈现 | 已重新挂到 `encodeIDPrefix` 文档注释（首行以函数名开头） |
+
+审查同时确认：编码位运算与溢出边界正确、windsurf/`PoolVendor` 移除在代码层完整且行为安全、`TestRebuildVendorsPreservesNonCustom` 未变成空测试、无新增密钥、分支自身文件 gofmt 干净（其余文件的 gofmt 差异在 `main` 上同样存在，属 CRLF 检出所致）。
+
+### 额外达成的证据
 
 | 项 | 内容 | 证据 |
 |----|------|------|
-| 黄金向量 | `encodeIDPrefix(1791863795593, 1, true) == "ecc985076ffe"`，与官方 CLI 真实会话 `ses_ecc985076ffe3FWJqsz05vQbUW` **逐位一致**；该前缀反解为 `2026-10-13T03:56:35Z`（= 会话创建时刻） | `TestEncodeIDPrefixMatchesOfficialCLI` PASS；PowerShell 独立复算一致 |
-| 5 个真实样本交叉验证 | 对官方 CLI 日志/会话 API 里的 5 个真实标识符反解，秒级吻合：`msg_133b6a43c001…`→05:22:50（日志 05:22:50.268 **0s**）、`msg_13372d58c001…`→04:08:46（日志 04:08:47）、`ses_ecc8d2af1ffe…`→04:08:46（日志 04:08:47）、`ses_ecc4d1c39ffe…`→05:18:44（日志 05:18:52）、`ses_ecc985076ffe…`→03:56:35 | PowerShell 独立复算（低 48 位 795 天回绕，按 2026-10 选 k） |
+| 真实样本外部锚点（**主证据**） | 4 个官方 CLI 真实标识符前缀 × 其日志行独立时间戳，偏差 0~8 秒：`msg_133b6a43c001`（+0.22s）、`msg_13372d58c001`（+0.78s）、`ses_ecc8d2af1ffe`（+0.91s）、`ses_ecc4d1c39ffe`（+7.8s）；另 `ses_ecc985076ffe` 与 issue #4780 记录的创建时刻（03:56:35Z）分毫不差 | `TestOfficialIDSamplesMatchLogTimestamps` PASS；PowerShell 独立复算（低 48 位 795 天回绕，按 2026-10 选 k） |
+| 会话/请求计数器独立 | `ses_ecc8d2af1ffe`（04:08:46）与 `msg_13372d58c001`（04:08:46）同毫秒且**都是 counter=1** → 官方确为两个独立生成器 | 同上反解脚本 |
 | 官方 CLI 对照 | 本机 `opencode serve` 日志证明：12:08 它经我们的网关（`oc-local-40080`）携带**合法原生会话**仍 403 —— 即我们的网关**丢弃**了客户端会话，正是 PR #4787 场景 | `~/.local/share/opencode/log/opencode.log` 04:08:47Z / 05:22:51Z |
 
 ### 白名单（有意保留，非残留）
@@ -335,7 +355,7 @@
 | 风险 | 缓解 |
 |------|------|
 | 今天 403 的主因若是上游出口 IP 风控而非身份串 | 已在交付说明中前置声明；Task 7 后安排真实对话复测（验收 #10）。**不以「仍 403」否定 ID 修复** |
-| 时间戳用毫秒、上游用 BigInt 毫秒 | 严格按 issue #4780 描述 `~(BigInt(ts)*0x1000n+counter)` 实现，并用「前缀以 `ffe`/`001` 结尾」这一可观测指纹自证 |
+| 时间戳用毫秒、上游用 BigInt 毫秒 | 严格按 issue #4780 描述 `~(BigInt(ts)*0x1000n+counter)` 实现，并用「官方 CLI 真实标识符 + 其日志行独立时间戳」作外部锚点自证 |
 | 会话若每请求重建 → 触发 429 | 保持 `ocOnce` 每进程稳定语义，不引入每请求新会话 |
 | 删除 `PoolVendor` 破坏外部扩展 | 已核实仓库内零生产实现；`custom` 的 `PoolStatus` 返回类型不同，不受影响 |
 | 老配置含 `windsurf` | 已核实为告警+跳过+回落，不 panic；文档写明 |

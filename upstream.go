@@ -1,8 +1,8 @@
 // 上游调用适配层（P2-B3 切流后）。
 //
 // callOpenCodeAPI / callOpenCodeAPIStream 接收请求上下文（ctx），从 handler /
-// 网关续写一路透传到厂商 Chat/ChatStream——客户端断开时竞速候选、重试链、
-// EnsureReady 立即收到取消，不空跑预算。内部桥接到全局 OpenCode 厂商
+// 网关续写一路透传到厂商 Chat/ChatStream——客户端断开时竞速候选与重试链
+// 立即收到取消，不空跑预算。内部桥接到全局 OpenCode 厂商
 // （vendors/opencode，实现 contract.Vendor）。传输层经 rootTransport 复用
 // 既有 SOCKS5 池/健康/冷却逻辑。
 package main
