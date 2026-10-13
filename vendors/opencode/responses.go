@@ -274,7 +274,7 @@ func (v *Vendor) buildResponsesRequest(upstreamURL, modelID string, bodyMap map[
 	req.Header.Set("x-opencode-client", "cli")
 	req.Header.Set("x-opencode-project", v.ocProjectID)
 	req.Header.Set("x-opencode-session", v.ocSessionID)
-	req.Header.Set("x-opencode-request", "msg_"+canonicalID())
+	req.Header.Set("x-opencode-request", "msg_"+requestIDString())
 	if streaming {
 		req.Header.Set("Accept", "text/event-stream")
 	} else {

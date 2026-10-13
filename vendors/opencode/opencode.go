@@ -8,6 +8,8 @@ package opencode
 import (
 	"context"
 	"crypto/rand"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -155,7 +157,7 @@ func (v *Vendor) transport() contract.Transport { return v.tr }
 func (v *Vendor) sessionID() string {
 	v.ocOnce.Do(func() {
 		v.ocClientVer = v.fetchOCVersion()
-		v.ocSessionID = "ses_" + canonicalID()
+		v.ocSessionID = "ses_" + sessionIDString()
 		v.ocProjectID = randomHex(40)
 		slog.Info("opencode session initialized", "version", v.ocClientVer, "session_id", v.ocSessionID)
 	})
@@ -165,7 +167,7 @@ func (v *Vendor) sessionID() string {
 // refreshOCSession 强制刷新会话（供管理端/401 恢复调用）。
 func (v *Vendor) refreshOCSession() {
 	v.ocClientVer = v.fetchOCVersion()
-	v.ocSessionID = "ses_" + canonicalID()
+	v.ocSessionID = "ses_" + sessionIDString()
 	v.ocProjectID = randomHex(40)
 	slog.Info("opencode session refreshed", "version", v.ocClientVer, "session_id", v.ocSessionID)
 	v.ocOnce = sync.Once{}
@@ -425,10 +427,51 @@ func randomBase62(n int) string {
 	return string(b)
 }
 
-// canonicalID 返回官方客户端的身份串：12 位十六进制（时间戳段）+ 14 位 base62，共 26 字符。
-// 上游免费通道对 x-opencode-session 做严格格式校验（正则等价 ^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$，
-// 总长 30）：缺失、UUID 风格、长度不符都会 403 FreeTierError。x-opencode-request 用 "msg_" 前缀同格式。
-func canonicalID() string { return randomHex(12) + randomBase62(14) }
+// ---------------------------------------------------------------------------
+// 身份串前缀编码（2026-10-13 修复 403 FreeTierError）
+// ---------------------------------------------------------------------------
+
+// idTimeShift 是标识符时间戳的左移位数：低 12 位留给同毫秒内的自增计数器。
+const idTimeShift = 12
+
+// 上游 Zen 自 opencode 1.19.0 起不再只做正则校验：它把身份串的前 12 位十六进制**解码**为
+// 标识符时间戳，语义等价于官方 Identifier：
+//
+//	ses_（会话，降序）：~(BigInt(ms) * 0x1000n + counter)  取低 48 位
+//	msg_（请求，升序）： (BigInt(ms) * 0x1000n + counter)  取低 48 位
+//
+// 解码出的时间戳落在「当前时间」附近才被认定为 OpenCode 官方客户端；只满足正则但不含时间
+// 语义的前缀（历史实现是 crypto/rand 随机十六进制）被判为第三方客户端，回
+// 403 FreeTierError："can only be used from within OpenCode"。
+//
+// 可观测指纹（counter=1 时）：ses_ 前缀恒以 "ffe" 结尾、msg_ 前缀恒以 "001" 结尾。
+// 注意上游**不校验会话年龄**（合法编码的 30 天前会话仍放行），故会话保持每进程稳定即可，
+// 不可退化为每请求新建（免费档配额按会话记账，频繁新会话会打成 429）。
+//
+// 证据：上游 issue #4780 / PR #4786；本项目取证见
+// docs/ai-framework/plans/2026-10-13-opencode-403-and-windsurf-removal.md。
+//
+// encodeIDPrefix 把毫秒时间戳编码为 12 位小写十六进制前缀（低 48 位，大端）。
+// descending=true 取反（会话/降序语义），false 保持升序（请求/升序语义）。
+func encodeIDPrefix(ms int64, counter uint64, descending bool) string {
+	v := uint64(ms)<<idTimeShift + counter
+	if descending {
+		v = ^v
+	}
+	var b [8]byte
+	binary.BigEndian.PutUint64(b[:], v)
+	return hex.EncodeToString(b[2:8]) // 仅取低 48 位（6 字节）
+}
+
+// sessionIDString 返回会话身份串主体（不含 "ses_" 前缀）。
+func sessionIDString() string {
+	return encodeIDPrefix(time.Now().UnixMilli(), 1, true) + randomBase62(14)
+}
+
+// requestIDString 返回请求身份串主体（不含 "msg_" 前缀）。
+func requestIDString() string {
+	return encodeIDPrefix(time.Now().UnixMilli(), 1, false) + randomBase62(14)
+}
 
 // versionAtLeast 判断 x.y.z 版本串 a 是否 >= b（缺失段按 0，解析失败按 0）。
 func versionAtLeast(a, b string) bool {
