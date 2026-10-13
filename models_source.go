@@ -16,7 +16,6 @@ import (
 	// 聚合厂商注册：blank import 触发各厂商 init() 自注册（扩增即生效）。
 	// 新厂商加一行 blank import 即可，无需改装配逻辑。
 	_ "github.com/6Kmfi6HP/opencode2api/vendors/custom"
-	_ "github.com/6Kmfi6HP/opencode2api/vendors/windsurf"
 )
 
 // surfaceGoKey 对应 contract.Model.Meta["surface"] 的 go 目录取值（见 vendors/opencode）。
@@ -175,8 +174,6 @@ func vendorParams(t string) map[string]any {
 			opencode.ParamRateLimitBackoffBaseMS: int(rateLimitBackoffBaseMS.Load()),
 			opencode.ParamRateLimitBackoffCapMS:  int(rateLimitBackoffCapMS.Load()),
 		}
-	case "windsurf":
-		return map[string]any{}
 	case "custom":
 		// 自定义模型源：只需传输注入（出站经统一网关，直连或代理池由 via_proxy 决定）。
 		return map[string]any{
@@ -309,7 +306,7 @@ func visibleFreeModels(agg *aggregator.Aggregator) []visibleFreeModel {
 }
 
 // appendOtherFreeModels 把 opencode 之外其它厂商的免费模型并入展示列表。
-// 同名冲突时给后出现的厂商加前缀（如 "windsurf/swe-1-6-slow"），
+// 同名冲突时给后出现的厂商加前缀（如 "src1/gpt-4o"），
 // 保证上层 /v1/models 可区分同名模型来自哪个厂商。
 func appendOtherFreeModels(base []ModelInfo, agg *aggregator.Aggregator) []ModelInfo {
 	if agg == nil {
@@ -438,7 +435,7 @@ func refreshModelCatalogLocked() {
 
 // syncModelsFromAggregator 把聚合目录中 opencode 厂商的模型写入 modelsCache / goModelsCache
 // （按 surface 分流），保证单厂商配置下 /v1/models 与路由行为与基线一致。
-// 非 opencode 厂商（如 windsurf）的模型**不写入**缓存——它们由 appendOtherFreeModels
+// 非 opencode 厂商（如 custom）的模型**不写入**缓存——它们由 appendOtherFreeModels
 // 在 /v1/models 响应层单独并入，避免混入基础列表导致同名冲突加错前缀/重复展示。
 func syncModelsFromAggregator(agg *aggregator.Aggregator) {
 	catalog := agg.Catalog()

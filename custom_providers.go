@@ -66,7 +66,7 @@ func maybeRebuildVendors() {
 }
 
 // rebuildVendors 按 providersCfg 重建聚合器内的厂商集合（原聚合器实例不动，全局指针稳定）：
-// 非 custom 旧实例按 ID 复用（保住 opencode 会话缓存 / windsurf 账号池状态），
+// 非 custom 旧实例按 ID 复用（保住 opencode 会话缓存 / 各厂商内部状态），
 // custom 恒重建（无状态，参数可能已变），随后刷新模型目录。
 func rebuildVendors() {
 	if globalAgg == nil {
@@ -412,10 +412,9 @@ func applyCustomProvidersSave(m *manager.Manager, inputs []customProviderInput) 
 		}
 	}
 	if len(cfg.Providers) == 0 {
-		for _, t := range []string{"opencode", "windsurf"} {
-			enabled := true
-			kept = append(kept, ProviderCfg{ID: t, Type: t, Enabled: &enabled})
-		}
+		// 内建厂商仅剩 opencode（windsurf 已于 2026-10-13 移除）。
+		enabled := true
+		kept = append(kept, ProviderCfg{ID: "opencode", Type: "opencode", Enabled: &enabled})
 	}
 
 	seen := map[string]bool{}
@@ -439,7 +438,7 @@ func applyCustomProvidersSave(m *manager.Manager, inputs []customProviderInput) 
 		if !customIDPattern.MatchString(in.ID) {
 			return nil, fmt.Errorf("无效 id %q：需字母数字开头，可含 - _，≤32 字符", in.ID)
 		}
-		if in.ID == "opencode" || in.ID == "windsurf" {
+		if in.ID == "opencode" {
 			return nil, fmt.Errorf("id %q 与内建厂商冲突", in.ID)
 		}
 		if seen[in.ID] {

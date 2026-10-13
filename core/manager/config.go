@@ -102,7 +102,7 @@ type Config struct {
 	ProbeSocksPort   uint16 `json:"probe_socks_port,omitempty"`
 
 	// Providers 厂商注册表（透传主程序 AppConfig 格式）：实例子进程/网关子进程
-	// 生成的 opencode2api.json 需要带上，才能像核心一样注册多厂商（如 windsurf）。
+	// 生成的 opencode2api.json 需要带上，才能像核心一样注册多厂商（如 custom）。
 	Providers []map[string]any `json:"providers,omitempty"`
 	// Routing 模型→厂商路由（透传，供子进程按模型路由到正确厂商）。
 	Routing map[string]any `json:"routing,omitempty"`
@@ -198,7 +198,7 @@ func declaredJSONKeys(v any) map[string]bool {
 // SyncCustomProviders 把自定义模型源条目同步进本配置的 providers 透传
 // （后续生成的实例/网关子进程配置经 opencodecfg 继承这些源）。
 // 仅替换其中 type=custom 的条目，其余原样保留；providers 原本为空时先物化内建条目
-// （显式列表语义下防只写 custom 丢掉 opencode/windsurf）。
+// （显式列表语义下防只写 custom 丢掉 opencode）。
 // coreConfigPath 与本配置文件相同（同一物理文件）时跳过——核心配置已是唯一事实，避免互覆。
 func (m *Manager) SyncCustomProviders(coreConfigPath string, customs []map[string]any) error {
 	mp, err1 := filepath.Abs(m.configPath())
@@ -213,7 +213,7 @@ func (m *Manager) SyncCustomProviders(coreConfigPath string, customs []map[strin
 
 // mergeProviderEntries 把 custom 条目合并进既有 providers 列表：
 // 非 custom 原样保留、custom 全量替换；原列表为空且 customs 非空时物化内建条目
-// （显式列表语义下防只写 custom 丢掉 opencode/windsurf）。
+// （显式列表语义下防只写 custom 丢掉 opencode）。
 func mergeProviderEntries(existing, customs []map[string]any) []map[string]any {
 	kept := make([]map[string]any, 0, len(existing)+len(customs))
 	for _, p := range existing {
@@ -222,9 +222,8 @@ func mergeProviderEntries(existing, customs []map[string]any) []map[string]any {
 		}
 	}
 	if len(existing) == 0 && len(customs) > 0 {
-		for _, t := range []string{"opencode", "windsurf"} {
-			kept = append(kept, map[string]any{"id": t, "type": t, "enabled": true})
-		}
+		// 内建厂商仅剩 opencode（windsurf 已于 2026-10-13 移除）。
+		kept = append(kept, map[string]any{"id": "opencode", "type": "opencode", "enabled": true})
 	}
 	return append(kept, customs...)
 }
