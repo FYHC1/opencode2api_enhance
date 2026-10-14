@@ -103,3 +103,6 @@ docs/issue-log/*
 
 # AI 工具原地改写前的 .bak 备份（本地保留，不入库）
 *.bak
+
+# AI 排查临时目录（一次性诊断脚本与构建产物，不入库；正式工具请放 scripts/）
+.scratch/
