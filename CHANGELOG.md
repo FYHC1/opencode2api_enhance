@@ -1,5 +1,21 @@
 # Changelog
 
+## v1.7.5-beta.9（2026-10-14，测试预发布）
+
+> 修复打包版插件卡片球形图标（面板入口）点击恒定失败（宿主代开浏览器依赖 PATH 解析 `cmd`）。
+
+### 🐛 修复
+
+- **插件面板入口恒定失败 + 提示语误导（打包版）**：`open_url.go` 用 `exec.Command("cmd",
+  "/c", "start", …)` 调系统浏览器，有两个问题：① 按名字 exec 只查 PATH，宿主进程的 PATH
+  不保证含 `%SystemRoot%\system32`，本机实测直接 `exec: "cmd": executable file not found in
+  %PATH%` —— 插件卡片 🌐 点开必然失败；② URL 里的 `&` 被 cmd 当命令分隔符，
+  `gateway/plugin/key/models` 参数会被整段截断。现改为 `shell32!ShellExecuteW`（API 调用，
+  不做命令行拼接，也不依赖 PATH）；非 Windows 平台改为先 `LookPath` 再启动。
+  前端 `openPluginPanel` 同时不再吞掉 core 返回的 `error`——此前只弹一个 URL，用户无从
+  排查。回归测试 `core/manager/open_url_test.go` 覆盖：完整 URL 原样透传（含 `&`）、
+  底层错误可透出、非 http/非回环/换行/query 裸引号被拒、特殊字符编码、方法校验。
+
 ## v1.7.5-beta.8（2026-10-13，测试预发布）
 
 > 两项改动：① opencode 免费通道身份串前缀改为与官方客户端一致的时间戳编码；
