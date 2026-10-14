@@ -515,12 +515,16 @@ export default function CustomModelsPage({ toast }: { toast: (msg: string, ok?: 
     const panelUrl = `${target}/?${params.toString()}`
     // Tauri WebView 会静默拦截 window.open（跨源新窗口）——统一由 core 代开系统
     // 浏览器（同源 /api/admin/open-url）；失败时浏览器模式兜底 window.open。
+    // 两条路都走不通时，把 core 返回的真实原因带进提示：只丢一个 URL 给用户
+    // 排查过不去（曾经只显示 URL，真实错误是 PATH 缺 cmd.exe）。
     try {
       const r = await api.openUrl(panelUrl)
       if (!r.ok) throw new Error(r.error || 'open-url failed')
-    } catch {
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e)
       const w = window.open(panelUrl, '_blank', 'noopener')
-      if (!w) { toast(`无法自动打开面板，请手动访问：${panelUrl}`, false) }
+      if (!w) { toast(`无法自动打开面板（${reason}）。请手动访问：${panelUrl}`, false) }
+      else { toast(`已用浏览器直接打开面板，但宿主代开失败：${reason}`, false) }
     }
   }
 

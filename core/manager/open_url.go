@@ -16,8 +16,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os/exec"
-	"runtime"
 	"strings"
 )
 
@@ -51,21 +49,13 @@ func (m *Manager) OpenURLHandler() http.HandlerFunc {
 			return
 		}
 
-		var cmd *exec.Cmd
-		switch runtime.GOOS {
-		case "windows":
-			// start 的第一个引号参数是窗口标题占位，第二个才是目标
-			cmd = exec.Command("cmd", "/c", "start", "", target)
-		case "darwin":
-			cmd = exec.Command("open", target)
-		default:
-			cmd = exec.Command("xdg-open", target)
-		}
-		if err := cmd.Start(); err != nil {
+		if err := openExternalURL(target); err != nil {
 			writeJSON(w, map[string]any{"ok": false, "error": fmt.Sprintf("启动浏览器失败: %v", err)})
 			return
 		}
-		go func() { _ = cmd.Wait() }() // 回收子进程，避免僵尸
 		writeJSON(w, map[string]any{"ok": true, "opened": target})
 	}
 }
+
+// openExternalURL 把 URL 交给系统默认浏览器。抽成包级变量供测试替换。
+var openExternalURL = openWithShellExecute
