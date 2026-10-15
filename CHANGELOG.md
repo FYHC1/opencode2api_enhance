@@ -1,5 +1,29 @@
 # Changelog
 
+## v1.7.6（2026-10-15，正式发布）
+
+> 修复 opencode 免费档对话全部失败（403 FreeTierError）：按上游 2026-10-14 的新契约迁移到
+> `/inference/v1`，并复刻 v2 客户端的身份头与工具指纹。
+
+### 🐛 修复
+
+- **opencode 免费档恢复可用（403 FreeTierError）**：上游 2026-10-14 把 keyless 免费推理从
+  `/zen/v1/*` 迁到 `/inference/v1/*`——旧路径对免费档**任何**形态的请求一律回 403——同时收紧
+  身份与请求体契约。本版按新契约对齐四处：① 端点迁到 `/inference/v1/chat/completions` 与
+  `/inference/v1/responses`；② UA 改为官方 v2 形态 `opencode/<channel>/<version>/<client>`
+  （发布线 channel 取 `prod`，低于 2.0.0 的探测值一律回落 2.0.29 兜底）；③ 身份头补齐四个同值
+  会话头（`x-opencode-session` / `x-opencode-session-id` / `x-session-affinity` / `x-session-id`），
+  并停止发送已被上游拒绝的 `x-opencode-request`；④ 免费档 body 门禁工具改为 `shell/glob/grep/read`
+  并补上**真实参数 schema**（空 schema 的占位定义会被判为非官方客户端）与 `prompt_cache_key`。
+  带 key 的 zen / go 通道请求形态保持不变。
+
+### 📝 说明
+
+- 本地实测三条路径全部 200：chat 非流式、chat 流式、responses（`muse-spark-1.3-contributor-free`）。
+- 免费档 `tool_choice:"none"` 已被上游拒绝，纯聊天场景改为「不下发客户端工具、只留门禁工具」，
+  占位说明只并入**已有** system / instructions，不新增消息（避免改变请求结构）。
+- 残留：响应侧对注入工具调用的改名/过滤仍未做；完整取证见 `docs/issue-log/2026-10-15.md`。
+
 ## v1.7.5-beta.9（2026-10-14，测试预发布）
 
 > 修复打包版插件卡片球形图标（面板入口）点击恒定失败（宿主代开浏览器依赖 PATH 解析 `cmd`）。
