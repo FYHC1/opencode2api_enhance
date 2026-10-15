@@ -11,6 +11,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -32,19 +33,43 @@ import (
 // 免费模型全量 426）。历史排查见 docs/issue-log/2026-09-17.md。
 const minFreeTierVersion = "1.18.0"
 
+// minV2Version 是 v2 身份契约的版本线。上游 2026-10-14 把 keyless 免费推理迁到
+// /inference/v1 并收紧身份校验：UA 必须形如 opencode/<channel>/<version>/<client>
+// （官方 App.useragent），版本段低于 2.x 会被判为非官方客户端（403 FreeTierError）。
+// npm 上 opencode-ai 的稳定线仍停在 1.19.0，故探测值达不到该线时一律上报 versionDef。
+const minV2Version = "2.0.0"
+
+// freeTierUAChannel / freeTierUAClient 是 UA 的 channel 与 client 段。
+// 官方打包时用 OPENCODE_CHANNEL 注入 channel（发布流水线取 prod，beta 线取 beta），
+// client 段取 App name（CLI 为 cli）。实测 latest / prod 均可放行，这里取官方发布线的 prod。
+const (
+	freeTierUAChannel = "prod"
+	freeTierUAClient  = "cli"
+
+	// freeTierProject 是 x-opencode-project 的取值：官方 CLI 在无项目上下文时用 global。
+	freeTierProject = "global"
+)
+
 // 上游端点（OpenCode 专属）。
 const (
 	zenModelsURL = "https://opencode.ai/zen/v1/models"
 	goModelsURL  = "https://opencode.ai/zen/go/v1/models"
 	versionURL   = "https://registry.npmjs.org/opencode-ai/latest"
 
-	// versionDef 是版本探测失败（npm 经 SOCKS 不可达 / 超时 / 非 2xx）时的兜底上报版本。
-	// 探测走代理池出口，失败是常态：日志里 session 初始化版本在 1.18.32（探测成功）与
-	// 1.17.0（回落兜底）之间反复跳。兜底值若等于 minFreeTierVersion，上游每抬一次下限
-	// 就会在探测失败的窗口里集体 426。上游只做「版本 ≥ 下限」的单向比较（实测
-	// 1.18.0 / 1.18.35 / 1.99.0 均 200，1.17.0 才 426），故兜底取明显高于下限的值，
-	// 使探测失败不再是可用性单点。
-	versionDef = "1.99.0"
+	// 免费档（Bearer public / keyless）推理端点。上游 2026-10-14 起把 keyless 免费推理
+	// 从 /zen/v1/* 迁到 /inference/v1/*，旧路径对免费档**任何**形态的请求一律回
+	// 403 FreeTierError（实测：同 body 仅换端点 → 403；换到 /inference/v1 且身份契约完整 → 200）。
+	inferenceChatURL      = "https://opencode.ai/inference/v1/chat/completions"
+	inferenceResponsesURL = "https://opencode.ai/inference/v1/responses"
+
+	// 带 key 的 zen / go 通道端点（上游未下线，保持原样）。
+	zenChatURL   = "https://opencode.ai/zen/v1/chat/completions"
+	zenGoChatURL = "https://opencode.ai/zen/go/v1/chat/completions"
+
+	// versionDef 是版本探测失败（npm 经 SOCKS 不可达 / 超时 / 非 2xx）或探测值低于
+	// minV2Version 时的兜底上报版本。上游按「版本 ≥ 下限」单向放行，且免费档已进入
+	// v2 身份契约，故兜底取社区实测可用的 v2 版本（opencode/latest/2.0.29/cli）。
+	versionDef = "2.0.29"
 
 	// surfaceZen / surfaceGo 是 contract.Model.Meta 中 "surface" 键的取值，
 	// 用于保留 zen 目录与 go 目录的区分（路由/目录过滤需要）。
@@ -183,6 +208,40 @@ func (v *Vendor) SessionID() string {
 	return v.sessionID()
 }
 
+// freeTierUserAgent 组装免费档上报的 v2 客户端 UA：opencode/<channel>/<version>/<client>。
+// 上游只接受这一形态（旧版 "opencode/1.19.0" 或缺少 channel/client 段的串均 403）；
+// 探测值达不到 v2 线时回落 versionDef。
+func (v *Vendor) freeTierUserAgent() string {
+	ver := v.ocClientVer
+	if ver == "" || !versionAtLeast(ver, minV2Version) {
+		ver = versionDef
+	}
+	return fmt.Sprintf("opencode/%s/%s/%s", freeTierUAChannel, ver, freeTierUAClient)
+}
+
+// applyFreeTierIdentity 写免费档（keyless, Authorization: Bearer public）身份头。
+//
+// v2 契约（2026-10-14 上游收紧，见 docs/issue-log/2026-10-15.md）：
+//   - 四个会话头必须同值：x-opencode-session / x-opencode-session-id /
+//     x-session-affinity / x-session-id（缺任一或不同值 → 403）；
+//   - 旧的 x-opencode-request 已不再发送 —— 上游见到它就回 403（实测：同一请求带该头
+//     403、去掉即 200），官方 2.0.29 客户端也不再发这个头；
+//   - x-opencode-project 用官方 CLI 的默认值 global；
+//   - UA 必须是 v2 形态（见 freeTierUserAgent）。
+//
+// 头集合与官方 packages/core/src/session/model-request.ts 的 http.headers 逐头对齐；
+// 实测证明官方不发的 x-opencode-request-id 同样非必需（带与不带均 200），故不再多带非官方头。
+func (v *Vendor) applyFreeTierIdentity(req *http.Request) {
+	ses := v.sessionID()
+	req.Header.Set("User-Agent", v.freeTierUserAgent())
+	req.Header.Set("x-opencode-client", freeTierUAClient)
+	req.Header.Set("x-opencode-project", freeTierProject)
+	req.Header.Set("x-opencode-session", ses)
+	req.Header.Set("x-opencode-session-id", ses)
+	req.Header.Set("x-session-affinity", ses)
+	req.Header.Set("x-session-id", ses)
+}
+
 func (v *Vendor) fetchOCVersion() string {
 	// 配置显式指定时直接采用，跳过 npm 探测：探测走代理池出口本就不可靠，
 	// 而用户显式配置是确定值，不该被探测失败覆盖。
@@ -210,13 +269,13 @@ func (v *Vendor) fetchOCVersion() string {
 		Version string `json:"version"`
 	}
 	if json.Unmarshal(body, &info) == nil && info.Version != "" {
-		// 上游按版本号放行免费通道；库存元数据异常偏低时按最低可接受版本上报，
-		// 避免整体降级为 426/403。
-		if versionAtLeast(info.Version, minFreeTierVersion) {
+		// 免费档已进入 v2 身份契约：低于 minV2Version 的发布线（npm 稳定线 1.19.0）
+		// 会被上游判为非官方客户端，回落到 v2 兜底值而不是把它原样上报。
+		if versionAtLeast(info.Version, minV2Version) {
 			return info.Version
 		}
-		slog.Warn("opencode version below free-tier minimum, using floor",
-			"got", info.Version, "floor", minFreeTierVersion)
+		slog.Warn("opencode version below v2 identity line, using floor",
+			"got", info.Version, "floor", versionDef, "min", minV2Version)
 	}
 	return versionDef
 }

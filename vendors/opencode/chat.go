@@ -130,13 +130,23 @@ func (a authT) useGoEndpoint(v *Vendor, modelID string) bool {
 func (v *Vendor) buildRequest(modelID string, bodyMap map[string]any, a authT) (*http.Request, error) {
 	bodyMap["model"] = modelID
 	delete(bodyMap, "reasoning_effort")
+	free := a.mode == authPublic
+	if free {
+		// v2 门禁要求免费档 body 带 prompt_cache_key（上游用它做会话亲和缓存；缺省不影响鉴权，
+		// 但官方 CLI 恒带，故保持形态一致）。
+		bodyMap["prompt_cache_key"] = v.sessionID()
+	}
 	tryBody, err := json.Marshal(bodyMap)
 	if err != nil {
 		return nil, err
 	}
-	upstreamURL := "https://opencode.ai/zen/v1/chat/completions"
-	if a.useGoEndpoint(v, modelID) {
-		upstreamURL = "https://opencode.ai/zen/go/v1/chat/completions"
+	// keyless 免费档走 /inference/v1：/zen/v1 自 2026-10-14 起对免费档一律 403。
+	// 带 key 的 zen / go 通道仍走 /zen 路径（上游未下线）。
+	upstreamURL := zenChatURL
+	if free {
+		upstreamURL = inferenceChatURL
+	} else if a.useGoEndpoint(v, modelID) {
+		upstreamURL = zenGoChatURL
 	}
 	req, err := http.NewRequest("POST", upstreamURL, bytes.NewReader(tryBody))
 	if err != nil {
@@ -144,6 +154,11 @@ func (v *Vendor) buildRequest(modelID string, bodyMap map[string]any, a authT) (
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", a.authHeader())
+	if free {
+		v.applyFreeTierIdentity(req)
+		req.Header.Set("Accept", "text/event-stream")
+		return req, nil
+	}
 	req.Header.Set("User-Agent", fmt.Sprintf("opencode/%s", v.ocClientVer))
 	req.Header.Set("x-opencode-client", "cli")
 	req.Header.Set("x-opencode-project", v.ocProjectID)
@@ -202,10 +217,11 @@ func (v *Vendor) call(ctx context.Context, msg *contract.Message, streaming bool
 	// 命中时请求构造与 2xx 响应都在厂商内完成 Responses ↔ chat 翻译，下游契约不变。
 	respURL, useResponses := v.responsesEndpoint(modelID, a)
 
-	// 免费通道 body 级门禁（2026-09-18）：强制 stream:true + 补齐 bash/glob/grep/read 工具名。
+	// 免费通道 body 级门禁（2026-10-14 起为 v2 契约）：强制 stream:true + 补齐
+	// shell/glob/grep/read 的真实定义（空 schema 会被上游判为占位工具并 403）。
 	// 仅匿名 public 通道生效；付费通道（zen/go 带 key）请求形态保持不变。
 	if a.mode == authPublic {
-		ensureAgentGate(bodyMap, !useResponses)
+		ensureAgentGate(bodyMap, useResponses)
 	}
 
 	var lastBody []byte

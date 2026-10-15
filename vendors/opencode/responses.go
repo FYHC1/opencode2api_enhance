@@ -34,6 +34,10 @@ func (v *Vendor) responsesEndpoint(modelID string, a authT) (string, bool) {
 	if !isResponsesModelID(modelID) {
 		return "", false
 	}
+	if a.mode == authPublic {
+		// keyless 免费档：/zen/v1/responses 已被上游下线，与 chat 路径同因。
+		return inferenceResponsesURL, true
+	}
 	if a.useGoEndpoint(v, modelID) {
 		return zenGoResponsesURL, true
 	}
@@ -220,6 +224,10 @@ func (v *Vendor) buildResponsesRequest(upstreamURL, modelID string, bodyMap map[
 		"stream": streaming || a.mode == authPublic, // 免费通道 body 门禁强制流式
 		"input":  responsesInputFromMessages(bodyMap["messages"]),
 	}
+	if a.mode == authPublic {
+		// 与 chat 路径一致：免费档带 prompt_cache_key（会话亲和）。
+		rb["prompt_cache_key"] = v.sessionID()
+	}
 	for _, k := range []string{"temperature", "top_p"} {
 		if val, ok := bodyMap[k]; ok {
 			rb[k] = val
@@ -270,12 +278,16 @@ func (v *Vendor) buildResponsesRequest(upstreamURL, modelID string, bodyMap map[
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", a.authHeader())
-	req.Header.Set("User-Agent", fmt.Sprintf("opencode/%s", v.ocClientVer))
-	req.Header.Set("x-opencode-client", "cli")
-	req.Header.Set("x-opencode-project", v.ocProjectID)
-	req.Header.Set("x-opencode-session", v.ocSessionID)
-	req.Header.Set("x-opencode-request", "msg_"+requestIDString())
-	if streaming {
+	if a.mode == authPublic {
+		v.applyFreeTierIdentity(req)
+	} else {
+		req.Header.Set("User-Agent", fmt.Sprintf("opencode/%s", v.ocClientVer))
+		req.Header.Set("x-opencode-client", "cli")
+		req.Header.Set("x-opencode-project", v.ocProjectID)
+		req.Header.Set("x-opencode-session", v.ocSessionID)
+		req.Header.Set("x-opencode-request", "msg_"+requestIDString())
+	}
+	if streaming || a.mode == authPublic {
 		req.Header.Set("Accept", "text/event-stream")
 	} else {
 		req.Header.Set("Accept", "application/json")
