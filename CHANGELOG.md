@@ -1,5 +1,41 @@
 # Changelog
 
+## v1.7.6-beta（2026-10-15，测试预发布）
+
+> 修复「工具 schema 里名为 `title` 的属性被宿主当注解删掉」导致严格校验的上游 400：
+> 表现为同网关下 `qw2api/qwork-advanced` 恒 502、而 `qwork-auto` 正常。
+
+### 🐛 修复
+
+- **工具 schema 的属性名被误当注解删除（`qw2api/qwork-advanced` 恒 502 的真因）**：
+  `core/protocol/claude_convert.go` 的 `CleanJSONSchema`（Anthropic 入口转换工具声明时
+  剔掉 `$schema`/`title`/`examples` 等注解键）原按「**键名**等于这三个之一就丢弃」递归过滤，
+  无法区分「schema 关键字 `title`」与「调用方恰好把属性命名为 `title`」——于是
+  `properties.title` 被整段删掉，而兄弟节点 `required` 里的 `"title"` 原样保留，
+  一个自洽的 schema 被改造成「`required` 引用了不存在属性」的**非法 schema**。
+  严格校验的上游（实测 QwenWork `qwork-advanced` 后端）对此直接 400 拒掉整条请求，
+  宽松后端（同厂商 `qwork-auto`）容忍 —— 故表面现象是「换个模型就好」，极易误判为上游限流。
+  现改为区分「schema 关键字位置」与「**名字容器**位置」（`properties` / `patternProperties` /
+  `$defs` / `definitions` / `dependentSchemas` / `dependencies`）：名字容器内的键一律保留、
+  只清洗其值（值才是 schema），仅在关键字位置剔除注解键。注解 `title` 仍照旧剔除、
+  `additionalProperties`/`format` 等约束键仍保留、仍返回副本不改入参。
+  该函数同时服务 `vendors/custom/{proto_anthropic,proto_gemini,proto_responses}.go` 的出站声明，
+  三处一并受益。
+
+### 📝 说明
+
+- 触发条件很窄但很致命：客户端工具集里只要有**任意一个**工具把 `title` 声明为
+  `required` 属性（实测 ZCode 官方 browser-use 插件的 `mcp__node_repl__js`），
+  该模型下所有带工具的请求全部失败；24 个工具里只有它命中，故看起来像随机故障。
+- 同一网关的 `/v1/chat/completions` 路径**不做**这道清理（工具已是 OpenAI 形态、原样透传），
+  所以只有 `/v1/messages`（Anthropic 入口）会中招 —— 与线上日志「121 条 `/v1/messages` 全挂、
+  3 条 `/v1/chat/completions` 全好」逐条吻合。
+- 验证：新增回归用例（把源码退回旧实现即失败）；真机 A/B 同一请求旧版 502 → 新版 200；
+  完整真实载荷（24 工具 + 1397 字 system + 11504 字 user）新版 200 且正常返回 `tool_use`；
+  流式（`stream=true`）SSE 事件序列完整、无 error 帧。
+- 完整取证与遗留项见 `docs/issue-log/2026-10-15.md` 第 6、7 条；插件侧（另一仓库 qw2api-public）
+  `server/failover.go` 会用 `errNoOutput` 覆盖真实上游错误并继续换号重试，建议同步改进。
+
 ## v1.7.6（2026-10-15，正式发布）
 
 > 修复 opencode 免费档对话全部失败（403 FreeTierError）：按上游 2026-10-14 的新契约迁移到
