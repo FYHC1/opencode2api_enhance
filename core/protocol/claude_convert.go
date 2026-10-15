@@ -289,34 +289,65 @@ func ExtractClaudeSystemText(system any) string {
 	}
 }
 
+// schemaNameMapKeys 是「键是调用方自定义标识符、不是 JSON Schema 关键字」的容器键。
+//
+// 区分这两类位置是必须的：properties 的键是属性名，调用方完全可以把属性命名为
+// title。早期实现只按「键名 == title/$schema/examples 就丢弃」递归过滤，会把
+// properties.title 整个删掉，而兄弟节点 required 里的 "title" 原样留着——
+// 一个自洽的 schema 就这样被改造成「required 引用了不存在属性」的非法 schema。
+// 实测严格校验的上游（QwenWork qwork-advanced 后端）对这类 schema 直接 400 拒掉
+// 整条请求，而宽松后端（同厂商 qwork-auto）容忍，表现为「同一网关换个模型就好」。
+var schemaNameMapKeys = map[string]bool{
+	"properties":        true,
+	"patternProperties": true,
+	"$defs":             true,
+	"definitions":       true,
+	"dependentSchemas":  true,
+	"dependencies":      true, // draft-07 形态：键同样是属性名
+}
+
+// isSchemaAnnotationKey 判断键是否为「只作标注、上游不认」的 schema 关键字。
+// 仅在 schema 关键字位置生效；出现在 properties/$defs 等名字容器里的同名键是
+// 用户属性名，必须保留。
+func isSchemaAnnotationKey(k string) bool {
+	return k == "$schema" || k == "title" || k == "examples"
+}
+
 // CleanJSONSchema 递归去掉仅作标注的 JSON Schema 键（$schema/title/examples），
 // 保留 additionalProperties、format 等约束键；返回副本，不改动入参。
 func CleanJSONSchema(schema any) any {
-	m, ok := schema.(map[string]any)
-	if !ok {
-		return schema
-	}
-	clean := make(map[string]any, len(m))
-	for k, v := range m {
-		// Annotation-only keys are omitted for upstream compatibility. Constraint
-		// keys such as additionalProperties and format are preserved.
-		if k == "$schema" || k == "title" || k == "examples" {
-			continue
-		}
-		switch child := v.(type) {
-		case map[string]any:
-			clean[k] = CleanJSONSchema(child)
-		case []any:
-			copyArray := make([]any, len(child))
-			for i, elem := range child {
-				copyArray[i] = CleanJSONSchema(elem)
+	return cleanJSONSchema(schema, false)
+}
+
+// cleanJSONSchema 是 CleanJSONSchema 的实现体。nameMap 表示当前节点是「键即标识符」
+// 的名字容器（properties/$defs/...）：此时所有键一律保留，只清洗其值（值才是 schema）。
+func cleanJSONSchema(node any, nameMap bool) any {
+	switch v := node.(type) {
+	case map[string]any:
+		clean := make(map[string]any, len(v))
+		for k, child := range v {
+			if nameMap {
+				// 名字容器：键是属性/定义名，不参与关键字过滤。
+				clean[k] = cleanJSONSchema(child, false)
+				continue
 			}
-			clean[k] = copyArray
-		default:
-			clean[k] = v
+			// Annotation-only keys are omitted for upstream compatibility. Constraint
+			// keys such as additionalProperties and format are preserved.
+			if isSchemaAnnotationKey(k) {
+				continue
+			}
+			clean[k] = cleanJSONSchema(child, schemaNameMapKeys[k])
 		}
+		return clean
+	case []any:
+		copyArray := make([]any, len(v))
+		for i, elem := range v {
+			copyArray[i] = cleanJSONSchema(elem, false)
+		}
+		return copyArray
+	default:
+		return v
 	}
-	return clean
 }
 
 // ToFloat64 把数值类型归一为 float64。
