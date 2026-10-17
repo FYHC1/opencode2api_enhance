@@ -42,8 +42,20 @@ func (m *Manager) localProfilesPath() string {
 	return filepath.Join(m.paths.DataDir, "local_profiles.json")
 }
 
+// 本地文件源读写全程持 localProfileMu：load→merge→save 必须成对在同一临界区内
+// 完成（否则并发重载会基于旧快照互相覆盖，把对方刚登记的源抹掉）。
+// 对外只暴露 loadLocalProfiles / saveLocalProfiles（自带锁）；带 Locked 后缀的仅供
+// 已持锁的内部流程调用——与 subscribe.go 的 subscriptionCacheMu 模式一致。
+
 // loadLocalProfiles 读取本地文件源列表（不存在/损坏返回空）。
 func (m *Manager) loadLocalProfiles() []LocalProfileSource {
+	m.localProfileMu.Lock()
+	defer m.localProfileMu.Unlock()
+	return m.loadLocalProfilesLocked()
+}
+
+// loadLocalProfilesLocked 读取本地文件源列表（锁内调用）。
+func (m *Manager) loadLocalProfilesLocked() []LocalProfileSource {
 	data, err := os.ReadFile(m.localProfilesPath())
 	if err != nil {
 		return nil
@@ -57,6 +69,13 @@ func (m *Manager) loadLocalProfiles() []LocalProfileSource {
 
 // saveLocalProfiles 持久化本地文件源列表（原子写）。
 func (m *Manager) saveLocalProfiles(list []LocalProfileSource) error {
+	m.localProfileMu.Lock()
+	defer m.localProfileMu.Unlock()
+	return m.saveLocalProfilesLocked(list)
+}
+
+// saveLocalProfilesLocked 持久化本地文件源列表（锁内调用）。
+func (m *Manager) saveLocalProfilesLocked(list []LocalProfileSource) error {
 	data, err := json.MarshalIndent(list, "", "  ")
 	if err != nil {
 		return fmt.Errorf("序列化本地代理文件源失败: %v", err)
@@ -248,8 +267,11 @@ func (m *Manager) localProfileSourceByPath(path string) (LocalProfileSource, boo
 // upsertLocalProfileSource 写入/更新源记录（path 为键）。
 // replace=true 表示本次是成功导入（覆盖 NodeCount/LastImport 并清空 LastError）；
 // false 表示仅记录失败（保留已有成功信息，只更新 LastError）。
+// 整个 load→改→save 持 localProfileMu（并发重载时不会互相覆盖丢源）。
 func (m *Manager) upsertLocalProfileSource(src LocalProfileSource, replace bool) {
-	list := m.loadLocalProfiles()
+	m.localProfileMu.Lock()
+	defer m.localProfileMu.Unlock()
+	list := m.loadLocalProfilesLocked()
 	for i := range list {
 		if list[i].Path != src.Path {
 			continue
@@ -259,11 +281,11 @@ func (m *Manager) upsertLocalProfileSource(src LocalProfileSource, replace bool)
 		} else {
 			list[i].LastError = src.LastError
 		}
-		_ = m.saveLocalProfiles(list)
+		_ = m.saveLocalProfilesLocked(list)
 		return
 	}
 	list = append(list, src)
-	_ = m.saveLocalProfiles(list)
+	_ = m.saveLocalProfilesLocked(list)
 }
 
 // RemoveLocalProfile 移除本地文件源并清理其分组节点。
@@ -276,30 +298,15 @@ func (m *Manager) RemoveLocalProfile(path string) (removedNodes int, removed boo
 	if abs, absErr := filepath.Abs(path); absErr == nil {
 		path = abs
 	}
-	list := m.loadLocalProfiles()
-	kept := make([]LocalProfileSource, 0, len(list))
-	var group string
-	for _, s := range list {
-		if s.Path == path {
-			removed = true
-			group = s.Group
-			continue
-		}
-		kept = append(kept, s)
-	}
-	if !removed {
-		return 0, false, nil
-	}
-	if err := m.saveLocalProfiles(kept); err != nil {
+
+	// 锁内删源记录（load→filter→save 必须成对，防并发重载覆盖）；
+	// 清节点在锁外进行——走订阅缓存锁，两把锁不嵌套。
+	group, found, shared, err := m.removeLocalProfileSource(path)
+	if err != nil {
 		return 0, true, err
 	}
-	// 同一分组可能还被其他源/订阅共用：仅当没有其它源指向该分组时才清节点。
-	shared := false
-	for _, s := range kept {
-		if s.Group == group {
-			shared = true
-			break
-		}
+	if !found {
+		return 0, false, nil
 	}
 	if group != "" && !shared {
 		n, err := m.RemoveSubscriptionGroupNodes(group)
@@ -309,6 +316,39 @@ func (m *Manager) RemoveLocalProfile(path string) (removedNodes int, removed boo
 		removedNodes = n
 	}
 	return removedNodes, true, nil
+}
+
+// removeLocalProfileSource 在锁内删除源记录。
+// 返回：该源的分组名、源是否存在过、该分组是否仍被其它源引用。
+func (m *Manager) removeLocalProfileSource(path string) (group string, found, shared bool, err error) {
+	m.localProfileMu.Lock()
+	defer m.localProfileMu.Unlock()
+	list := m.loadLocalProfilesLocked()
+	kept := make([]LocalProfileSource, 0, len(list))
+	for _, s := range list {
+		if s.Path == path {
+			found = true
+			group = s.Group
+			continue
+		}
+		kept = append(kept, s)
+	}
+	if !found {
+		return "", false, false, nil
+	}
+	if err := m.saveLocalProfilesLocked(kept); err != nil {
+		return group, true, false, err
+	}
+	// 同一分组可能还被其他源/订阅共用：仅当没有其它源指向该分组时才清节点。
+	if group != "" {
+		for _, s := range kept {
+			if s.Group == group {
+				shared = true
+				break
+			}
+		}
+	}
+	return group, true, shared, nil
 }
 
 // 说明：本地文件源导入的节点直接写入订阅缓存（与订阅节点同源），
