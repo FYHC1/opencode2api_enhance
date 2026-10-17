@@ -1001,6 +1001,8 @@ func parseSocks(rest string, isV4 bool) (SubscribeNode, error) {
 	if u, p, ok := strings.Cut(userinfo, ":"); ok {
 		username, password = u, p
 	}
+	username = percentDecodeStrict(username)
+	password = percentDecodeStrict(password)
 	nname := name
 	if nname == "" {
 		nname = server
@@ -1037,8 +1039,8 @@ func parseHTTPProxy(rest string, tls bool) (SubscribeNode, error) {
 	if u, p, ok := strings.Cut(userinfo, ":"); ok {
 		username, password = u, p
 	}
-	username = percentDecode(username)
-	password = percentDecode(password)
+	username = percentDecodeStrict(username)
+	password = percentDecodeStrict(password)
 	nname := name
 	if nname == "" {
 		nname = server
@@ -1086,6 +1088,26 @@ func percentDecode(s string) string {
 		} else {
 			out = append(out, s[i])
 		}
+	}
+	return string(out)
+}
+
+// percentDecodeStrict 只解 %XX，**不**把 `+` 当空格。
+// userinfo（用户名/密码）里 `+` 是字面字符——`+`→空格 只是 query/form 编码的约定，
+// 用它解密码会把 `a+b` 悄悄改成 `a b`，导致认证失败且极难排查。
+func percentDecodeStrict(s string) string {
+	var out []byte
+	for i := 0; i < len(s); i++ {
+		if s[i] == '%' && i+2 < len(s) {
+			if h, ok := hexVal(s[i+1]); ok {
+				if l, ok := hexVal(s[i+2]); ok {
+					out = append(out, h*16+l)
+					i += 2
+					continue
+				}
+			}
+		}
+		out = append(out, s[i])
 	}
 	return string(out)
 }
