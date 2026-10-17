@@ -8,6 +8,7 @@ type ClashNode struct {
 	Port              uint16            `json:"port"`
 	NodeType          string            `json:"type"`
 	Password          string            `json:"password,omitempty"`
+	Username          string            `json:"username,omitempty"` // http/socks 代理用户名（clash 节点原生字段）
 	UUID              string            `json:"uuid,omitempty"`
 	Cipher            string            `json:"cipher,omitempty"`
 	SNI               string            `json:"sni,omitempty"`
