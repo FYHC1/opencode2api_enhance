@@ -2,6 +2,28 @@
 
 ## v1.7.7（未发布）
 
+### 🔧 构建工具
+
+- **`scripts/prepare-portable.ps1` 修 4 个缺陷**（此前无法在干净环境一条命令跑通）：
+  1. **MSVC 环境不初始化**：只调 `VsDevCmd.bat`，而部分 VS 安装（如 VS 18 BuildTools 仅装工具集、缺
+     `vcvars64.bat`/`vcvarsall.bat`）下它打印 banner、exit 0 却不设任何变量，于是 `cargo build` 直接
+     `linker \`link.exe\` not found`。现改为「先试 VsDevCmd → 失败则从磁盘探测 `VC\Tools\MSVC\<ver>`
+     （要求同时有 `link.exe` 与 `cl.exe`，避免误认 Go 自带的 `link.exe`）与 Windows SDK，自行拼
+     `PATH/INCLUDE/LIB`」，并在开头给出可操作报错而非深层报错。
+  2. **`WebView2Loader.dll` 复制顺序反了**：`tauri.conf.json` 把它列为 bundle resource，cargo build
+     时就要存在，但脚本第 3 步才复制 → `resource path ... doesn't exist`。现移到 cargo build 之前，
+     并保留 `-SkipRustBuild` 时回退到仓库内 `src-tauri/WebView2Loader.dll`。
+  3. **版本号与 commit 静默失真**：`-Version` 默认值硬编码 `"v1.3.0"`，与 `package.json` 的
+     `1.7.6-beta` 早已漂移（打出来的包标 1.3.0）；`try { git ... } catch` 又把错误吞成 `commit=unknown`。
+     现改为「`-Version` 留空即读 `package.json`」，git 取不到时 `Write-Warning` 显式提示，并补上
+     `main.branch` 注入。
+  4. **旧产物残留**：运行过打包产物后壳会在 `portable-out/bin/` 释放 core 与 sing-box，`Remove-Item`
+     失败只警告不中断，旧文件会混进新包。现清理失败即抛出，并提示占用进程 PID。
+- **新增 `scripts/fetch-singbox.ps1`**：`fetch-singbox.sh` 对所有平台都拼 `.tar.gz`，但 SagerNet 只为
+  Windows 发布 `.zip`（实测 `.tar.gz` 返回 404），在 Windows 上必失败。新脚本按 `.zip` 下载、带镜像兜底，
+  默认版本自动读取 CI 矩阵保持一致；`fetch-singbox.sh` 同步修正为按 target 选压缩格式。
+
+
 > 节点池补上「本地 Clash 配置文件」这条来源，并让订阅导入支持批量粘贴代理链接 + 自定义分组名。
 
 ### ✨ 新增
